@@ -2,11 +2,14 @@ package config
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -15,7 +18,8 @@ import (
 // database. It takes the Symfony dispatcher.yaml as is, apart from its
 // %env(VAR)% placeholders (write ${VAR}), and accepts a few more forms and
 // keys: app_id/position in steps, subject_check, plain-string title,
-// comma-separated lists, durations such as "1h", remember and remember_for.
+// comma-separated lists, durations such as "1h", remember and remember_for,
+// and the fields the Go model adds to apps and flows.
 type Seed struct {
 	Apps          []SeedApp    `yaml:"apps"`
 	Flows         []SeedFlow   `yaml:"flows"`
@@ -59,7 +63,21 @@ type SeedApp struct {
 	LogoutURL string         `yaml:"logout_url"`
 	Method    string         `yaml:"method"`
 	Options   map[string]any `yaml:"options"`
+	// AuthMode is how the emulated API identifies the app: network, by
+	// AllowedSources, or mtls, by ClientCertFingerprint. Empty until Load
+	// applies the default, network.
+	AuthMode string `yaml:"auth_mode"`
+	// AllowedSources empty falls back to
+	// security.emulated_api_authorized_hosts.
+	AllowedSources List `yaml:"allowed_sources"`
+	// ClientCertFingerprint is the SHA-256 of the app certificate, which Load
+	// turns into lowercase hex without colons.
+	ClientCertFingerprint string `yaml:"client_cert_fingerprint"`
 }
+
+// appKeys are the app fields of the Go model: in options, where the design
+// document once put two of them, they would pass unread.
+var appKeys = []string{"auth_mode", "allowed_sources", "client_cert_fingerprint"}
 
 type SeedFlow struct {
 	ID string `yaml:"id"`
@@ -69,6 +87,9 @@ type SeedFlow struct {
 	Title       Localized  `yaml:"title"`
 	Description Localized  `yaml:"description"`
 	IconURL     Localized  `yaml:"icon_url"`
+	// ACR is sent to Hydra at the final accept and matched against the
+	// acr_values of the client; empty sends none.
+	ACR string `yaml:"acr"`
 }
 
 // SeedStep accepts both spellings of the Symfony seed and admin API:
@@ -141,6 +162,11 @@ type SeedClient struct {
 // resolve applies the Symfony defaults of the entries: bootstrap writes an
 // app, a flow or a client whole, so they need no pointer semantics.
 func (s *Seed) resolve() {
+	for i := range s.Apps {
+		a := &s.Apps[i]
+		a.AuthMode = cmp.Or(a.AuthMode, "network")
+		a.ClientCertFingerprint = strings.ToLower(strings.ReplaceAll(a.ClientCertFingerprint, ":", ""))
+	}
 	for i := range s.Flows {
 		if s.Flows[i].Enabled == nil {
 			enabled := true
@@ -157,7 +183,8 @@ func (s *Seed) resolve() {
 // validate refuses what Symfony refused (missing or malformed ids, URLs,
 // method, title, description, secret) and what the Go schema forbids:
 // duplicate ids, a flow without steps, a step on an undeclared app, an app or
-// a position twice in a flow. Messages never quote a client secret.
+// a position twice in a flow, an identification field of the other auth_mode.
+// Messages never quote a client secret.
 func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	apps := map[string]bool{}
 	for i, a := range s.Apps {
@@ -176,6 +203,30 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 		if a.Method == "" {
 			fail(path+".method", "is required")
 		}
+		for _, k := range appKeys {
+			if _, ok := a.Options[k]; ok {
+				fail(path+".options."+k, "is a key of the app, not an option")
+			}
+		}
+		// The field of the other mode would pass unread.
+		switch a.AuthMode {
+		case "network":
+			if a.ClientCertFingerprint != "" {
+				fail(path+".client_cert_fingerprint", "only applies to auth_mode: mtls")
+			}
+		case "mtls":
+			if len(a.AllowedSources) > 0 {
+				fail(path+".allowed_sources", "only applies to auth_mode: network")
+			}
+			if b, err := hex.DecodeString(a.ClientCertFingerprint); err != nil || len(b) != sha256.Size {
+				fail(path+".client_cert_fingerprint", "must be the SHA-256 of the app certificate, in hex, for auth_mode: mtls")
+			}
+		default:
+			fail(path+".auth_mode", "%q is not network or mtls", a.AuthMode)
+		}
+		if _, err := a.AllowedSources.Prefixes(); err != nil {
+			fail(path+".allowed_sources", "%v", err)
+		}
 	}
 
 	flows := map[string]bool{}
@@ -190,6 +241,10 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 		}
 		if len(f.Steps) == 0 {
 			fail(path+".steps", "is empty")
+		}
+		if strings.ContainsFunc(f.ACR, unicode.IsSpace) {
+			// acr_values is a space-separated list: no value would match.
+			fail(path+".acr", "%q contains a space", f.ACR)
 		}
 		stepApps, positions := map[string]bool{}, map[int]bool{}
 		for j, step := range f.Steps {

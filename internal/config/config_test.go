@@ -209,7 +209,7 @@ func checkHydraDevSeed(t *testing.T, path string) {
 		t.Fatalf("apps = %v, flows = %v", appIDs, flowIDs)
 	}
 	sql := s.Apps[1]
-	if sql.LoginURL != "http://sql.hydra.test/login" || sql.ConsentURL != "http://sql.hydra.test/consent" || sql.Method != "pwd" {
+	if sql.LoginURL != "http://sql.hydra.test/login" || sql.ConsentURL != "http://sql.hydra.test/consent" || sql.Method != "pwd" || sql.AuthMode != "network" {
 		t.Errorf("hydra-sql app = %+v", sql)
 	}
 	twoFA := s.Flows[2]
@@ -368,6 +368,13 @@ admin:
 	}
 }
 
+// The SHA-256 of a certificate, as Load keeps it and as openssl x509
+// -fingerprint -sha256 writes it (uppercase in the tests).
+var (
+	fingerprint      = strings.Repeat("0a1b2c3d", 8)
+	colonFingerprint = regexp.MustCompile(`(..)`).ReplaceAllString(fingerprint, "$1:")[:3*32-1]
+)
+
 // A multi-line value, quoted or not, reaches a string key unchanged.
 const pem = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE: #not a comment\n  'single' \"double\"\n-----END PUBLIC KEY-----\n"
 
@@ -481,6 +488,7 @@ func TestEnvKeys(t *testing.T) {
 		"DISPATCHER_ADMIN_API_ENABLED",
 		"DISPATCHER_ADMIN_API_PRIVATE_KEY",
 		"DISPATCHER_ADMIN_API_PUBLIC_KEY",
+		"DISPATCHER_ADMIN_API_PUBLIC_KEYS_PREVIOUS",
 		"DISPATCHER_ADMIN_API_TOKEN_TTL",
 		"DISPATCHER_ADMIN_API_RATE_LIMIT_PER_MINUTE",
 		"DISPATCHER_ADMIN_SESSION_IDLE_TIMEOUT",
@@ -964,35 +972,91 @@ dispatcher:
       description: { fr: Flow F }
       steps:
 `
+	const app = `
+dispatcher:
+  apps:
+    - id: a
+      login_url: http://a/login
+      consent_url: http://a/consent
+      method: pwd
+`
+	// Network identification, the default, and mtls; acr goes to Hydra as is.
+	c, _, err := load(t, `
+dispatcher:
+  apps:
+    - { id: a, login_url: "http://a", consent_url: "http://a", method: m, allowed_sources: "10.1.0.0/16, 10.2.0.1" }
+    - { id: b, login_url: "http://b", consent_url: "http://b", method: m, auth_mode: mtls, client_cert_fingerprint: "`+strings.ToUpper(colonFingerprint)+`" }
+  flows:
+    - { id: f, title: T, description: D, acr: "urn:example:loa:2", steps: [{ id: a, order: 0 }, { id: b, order: 1 }] }
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, b := c.Seed.Apps[0], c.Seed.Apps[1]; a.AuthMode != "network" || !slices.Equal(a.AllowedSources, List{"10.1.0.0/16", "10.2.0.1"}) ||
+		b.AuthMode != "mtls" || b.ClientCertFingerprint != fingerprint || c.Seed.Flows[0].ACR != "urn:example:loa:2" {
+		t.Errorf("apps = %+v, flow acr = %q", c.Seed.Apps, c.Seed.Flows[0].ACR)
+	}
+
 	if c, _, err := load(t, apps+flow+"        - { id: a, order: 0 }\n        - { app_id: b, position: 1, subject_check: \"claim:email\" }\n", nil); err != nil ||
 		c.Seed.Flows[0].Steps[1].SubjectCheck != "claim:email" || c.Seed.Flows[0].Title[""] != "F" {
 		t.Errorf("valid seed: err = %v", err)
 	}
 	for name, tt := range map[string]struct{ content, want string }{
-		"missing app id":        {"dispatcher:\n  apps:\n    - { login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].id: is required"},
-		"app id with a slash":   {"dispatcher:\n  apps:\n    - { id: a/b, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].id: \"a/b\" is not an id"},
-		"flow id with a space":  {apps + "  flows:\n    - { id: \"f g\", title: T, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].id: \"f g\" is not an id"},
-		"long client id":        {"dispatcher:\n  oauth2_clients:\n    - { id: " + strings.Repeat("c", 129) + ", secret: s }\n", "dispatcher.oauth2_clients[0].id"},
-		"duplicate app":         {apps + "    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[2].id: \"a\" is declared twice"},
-		"relative login URL":    {"dispatcher:\n  apps:\n    - { id: a, login_url: /login, consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].login_url"},
-		"missing consent URL":   {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", method: m }\n", "dispatcher.apps[0].consent_url: is required"},
-		"relative logout URL":   {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", logout_url: /out, method: m }\n", "dispatcher.apps[0].logout_url"},
-		"missing method":        {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\" }\n", "dispatcher.apps[0].method: is required"},
-		"flow without steps":    {apps + flow + "        []\n", "dispatcher.flows[0].steps: is empty"},
-		"undeclared app":        {apps + flow + "        - { id: c, order: 0 }\n", "app \"c\" is not declared"},
-		"app twice":             {apps + flow + "        - { id: a, order: 0 }\n        - { id: a, order: 1 }\n", "app \"a\" is already a step"},
-		"position twice":        {apps + flow + "        - { id: a, order: 0 }\n        - { id: b, order: 0 }\n", "position 0 is already taken"},
-		"subject check":         {apps + flow + "        - { id: a, order: 0, subject_check: \"claim:\" }\n", "subject_check: \"claim:\" is not none, equal or claim:<name>"},
-		"missing title":         {apps + "  flows:\n    - { id: f, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].title: is required"},
-		"null description":      {apps + "  flows:\n    - { id: f, title: T, description: { fr: ~ }, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].description: is required"},
-		"duplicate flow":        {apps + "  flows:\n    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }] }\n    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[1].id: \"f\" is declared twice"},
-		"missing client secret": {"dispatcher:\n  oauth2_clients:\n    - { id: c }\n", "dispatcher.oauth2_clients[0].secret: is required"},
-		"duplicate client":      {"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s }\n    - { id: c, secret: t }\n", "dispatcher.oauth2_clients[1].id"},
-		"challenge TTL":         {"dispatcher:\n  challenge_ttl: 0\n", "dispatcher.challenge_ttl: must be positive"},
-		"no locale":             {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
+		"missing app id":           {"dispatcher:\n  apps:\n    - { login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].id: is required"},
+		"app id with a slash":      {"dispatcher:\n  apps:\n    - { id: a/b, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].id: \"a/b\" is not an id"},
+		"flow id with a space":     {apps + "  flows:\n    - { id: \"f g\", title: T, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].id: \"f g\" is not an id"},
+		"long client id":           {"dispatcher:\n  oauth2_clients:\n    - { id: " + strings.Repeat("c", 129) + ", secret: s }\n", "dispatcher.oauth2_clients[0].id"},
+		"duplicate app":            {apps + "    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[2].id: \"a\" is declared twice"},
+		"relative login URL":       {"dispatcher:\n  apps:\n    - { id: a, login_url: /login, consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].login_url"},
+		"missing consent URL":      {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", method: m }\n", "dispatcher.apps[0].consent_url: is required"},
+		"relative logout URL":      {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", logout_url: /out, method: m }\n", "dispatcher.apps[0].logout_url"},
+		"missing method":           {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\" }\n", "dispatcher.apps[0].method: is required"},
+		"flow without steps":       {apps + flow + "        []\n", "dispatcher.flows[0].steps: is empty"},
+		"undeclared app":           {apps + flow + "        - { id: c, order: 0 }\n", "app \"c\" is not declared"},
+		"app twice":                {apps + flow + "        - { id: a, order: 0 }\n        - { id: a, order: 1 }\n", "app \"a\" is already a step"},
+		"position twice":           {apps + flow + "        - { id: a, order: 0 }\n        - { id: b, order: 0 }\n", "position 0 is already taken"},
+		"subject check":            {apps + flow + "        - { id: a, order: 0, subject_check: \"claim:\" }\n", "subject_check: \"claim:\" is not none, equal or claim:<name>"},
+		"missing title":            {apps + "  flows:\n    - { id: f, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].title: is required"},
+		"null description":         {apps + "  flows:\n    - { id: f, title: T, description: { fr: ~ }, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].description: is required"},
+		"duplicate flow":           {apps + "  flows:\n    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }] }\n    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[1].id: \"f\" is declared twice"},
+		"missing client secret":    {"dispatcher:\n  oauth2_clients:\n    - { id: c }\n", "dispatcher.oauth2_clients[0].secret: is required"},
+		"duplicate client":         {"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s }\n    - { id: c, secret: t }\n", "dispatcher.oauth2_clients[1].id"},
+		"challenge TTL":            {"dispatcher:\n  challenge_ttl: 0\n", "dispatcher.challenge_ttl: must be positive"},
+		"acr with a space":         {apps + "  flows:\n    - { id: f, title: T, description: D, acr: \"loa 2\", steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].acr: \"loa 2\" contains a space"},
+		"auth mode":                {app + "      auth_mode: token\n", "dispatcher.apps[0].auth_mode: \"token\" is not network or mtls"},
+		"source":                   {app + "      allowed_sources: [10.1.0.0/16, pod-a]\n", "dispatcher.apps[0].allowed_sources: \"pod-a\" is neither"},
+		"fingerprint in network":   {app + "      client_cert_fingerprint: " + fingerprint + "\n", "dispatcher.apps[0].client_cert_fingerprint: only applies to auth_mode: mtls"},
+		"sources in mtls":          {app + "      auth_mode: mtls\n      client_cert_fingerprint: " + fingerprint + "\n      allowed_sources: [10.1.0.0/16]\n", "dispatcher.apps[0].allowed_sources: only applies to auth_mode: network"},
+		"mtls without fingerprint": {app + "      auth_mode: mtls\n", "dispatcher.apps[0].client_cert_fingerprint: must be the SHA-256"},
+		"short fingerprint":        {app + "      auth_mode: mtls\n      client_cert_fingerprint: abcd\n", "dispatcher.apps[0].client_cert_fingerprint: must be the SHA-256"},
+		"source in options":        {app + "      options: { allowed_sources: [10.1.0.0/16] }\n", "dispatcher.apps[0].options.allowed_sources: is a key of the app"},
+		"no locale":                {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
 	} {
 		if _, _, err := load(t, tt.content, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tt.want)
+		}
+	}
+}
+
+// Outside the seed, ~ has no meaning: yaml.v3 would keep some defaults and
+// empty other keys. A section left empty is null too.
+func TestNullOutsideSeed(t *testing.T) {
+	for content, want := range map[string]string{
+		"hydra:\n  timeout: ~\n":                             "line 2: hydra.timeout: is null",
+		"server:\n  listen:\n":                               "line 2: server.listen: is null",
+		"security:\n  emulated_api_authorized_hosts: null\n": "line 2: security.emulated_api_authorized_hosts: is null",
+		"ui:\n  csp_extra: { font-src: ~ }\n":                "line 2: ui.csp_extra.font-src: is null",
+		"server: &none ~\nhydra: *none\n":                    "line 2: hydra: is null",
+		"observability:\n  sentry:\n# all keys commented\n":  "line 2: observability.sentry: is null",
+	} {
+		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", content, err, want)
+		}
+	}
+	// In the seed, ~ resets a setting, and an empty seed is no seed.
+	for _, content := range []string{"dispatcher: ~\n", "dispatcher:\n  remember: ~\n", "server: { listen: \"~\" }\n"} {
+		if _, _, err := load(t, content, nil); err != nil {
+			t.Errorf("%q: %v", content, err)
 		}
 	}
 }

@@ -114,9 +114,12 @@ type Admin struct {
 		Enabled bool `yaml:"enabled"`
 	} `yaml:"ui"`
 	API struct {
-		Enabled            bool     `yaml:"enabled"`
-		PrivateKey         string   `yaml:"private_key"`
-		PublicKey          string   `yaml:"public_key"`
+		Enabled    bool   `yaml:"enabled"`
+		PrivateKey string `yaml:"private_key"`
+		PublicKey  string `yaml:"public_key"`
+		// PublicKeysPrevious verify the tokens signed before a rotation of
+		// PrivateKey, until they expire.
+		PublicKeysPrevious List     `yaml:"public_keys_previous"`
 		TokenTTL           Duration `yaml:"token_ttl"`
 		RateLimitPerMinute int      `yaml:"rate_limit_per_minute"`
 	} `yaml:"api"`

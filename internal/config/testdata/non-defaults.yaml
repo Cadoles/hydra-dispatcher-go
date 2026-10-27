@@ -46,6 +46,7 @@ admin:
     enabled: false
     private_key: "private"
     public_key: "public"
+    public_keys_previous: ["previous"]
     token_ttl: 600
     rate_limit_per_minute: 50
   session: { idle_timeout: 10m, max_age: 4h, reauth_window: 2m }

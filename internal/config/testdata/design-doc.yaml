@@ -42,6 +42,7 @@ admin:
     enabled: true
     private_key: "${OAUTH2_PRIVATE_KEY}"
     public_key: "${OAUTH2_PUBLIC_KEY}"
+    public_keys_previous: []      # vérification seule, pour la rotation (voir Rotation des clés)
     token_ttl: 900                # jetons ES256 de 15 min
     rate_limit_per_minute: 100
   session: { idle_timeout: 30m, max_age: 8h, reauth_window: 5m }

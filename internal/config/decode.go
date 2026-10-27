@@ -21,8 +21,9 @@ const (
 var unmarshalerType = reflect.TypeFor[yaml.Unmarshaler]()
 
 // decodeFile expands ${VAR} in every value, checks every key against the
-// schema (an unknown key is an error, so typos do not pass silently), then
-// decodes. It works on the parsed tree, so errors give the lines of the file.
+// schema (an unknown key is an error, so typos do not pass silently) and
+// refuses null outside the seed, then decodes. It works on the parsed tree,
+// so errors give the lines of the file.
 func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) error {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
@@ -90,6 +91,13 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 		t = t.Elem()
 	}
 	defer p.enter(n)()
+	// yaml.v3 would keep the default of a string, a number or a duration,
+	// empty a list, and leave an allowlist to copy the admin one. No
+	// expansion gives a null, so an alias is checked where it stands.
+	if deref(n).ShortTag() == nullTag && path != "" && !inSeed(path) {
+		p.fail(n, path, "is null: remove the key to keep its default, or write \"\" or [] for an empty value")
+		return
+	}
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, child := range n.Content {
@@ -300,6 +308,12 @@ func yamlFields(t reflect.Type) map[string]reflect.Type {
 		}
 	}
 	return fields
+}
+
+// inSeed reports a path of the dispatcher: block, where ~ has a meaning: it
+// resets a setting, and is no icon or no scope.
+func inSeed(path string) bool {
+	return path == "dispatcher" || strings.HasPrefix(path, "dispatcher.")
 }
 
 func isMerge(k *yaml.Node) bool {
