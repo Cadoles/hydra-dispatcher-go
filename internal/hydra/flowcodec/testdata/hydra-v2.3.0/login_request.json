@@ -1,0 +1,63 @@
+{
+  "challenge": "ZEo5ahtZ_V6TosdOBpa5QiO-4fR06DYdKm1Uzio8GQsibe4RBpXFeD6rny-t3pG4Jg0Pa0f0X0_PDk5WuwfM4dg83VgCczHdUbJPPncU2VakqZqGHRQSmHQbSm3MRpF8738s8HC70n1JHn5XWoZvcnRu7Oe9SY3YjOQXQL7aONbbb8K0Tg8OFXeToGTjBUbuz2iVGvcNxDKm-F-OXV9YYgc0Wvz4g0moYe7EvP8PYMgyWEiI-rl5zDo_67fT0MD0ecIUGgdF80RAsPW7Vwl3EKDA4468mMfE3rjBcSqdY2fgcZUrtdwB8qzmBItkr84QrkPY7ADL6erVK8O3RfVzlBWEBqW5ze3RW5XBdo1VJPshvsfoUG8-Jzeb_uv194CkJPP-lOGvrwlhZnb2u8dzGeOaO242GHcC65kRikeEQoUbNafk-T9sSl3swyWsfl2HrOaUuQNp_cu855f2OtsUqPdR5fH7cWOkyVeR9u83JYjm-sY1d2WGG2afKM-okfoBFRA-eLRsIyAAG505s7K_Kn23-uuUKbMeLupXaFnCQK8CEwbghgTtyRoXHMBNQOAfKjvfjSx7vmRu-LyqqlVG73hiRNFcJ1FpWmjBCBM0wk5XY3eob9OAIDwmUaA9zijc_tS70enTl0UwACl0aghN9i0Gtz8v1Apwl4vsqkiiH1d7i7P7kxZrJe1OBE9bkNFycZSChtFnJiaGYYg3Mz4ueeJtfhH_fmYZQ7km-OaXWy3SpHjJxdlw1HyeAy8xBAUidz8BmjGwiGz2lLUTf7nLUcNb-4EuiEyU4mVUgapg-YY_Csu_wb_uEetFvDJlau0jshCreb3zpVq19hEPRZWSA7izkBvm9OjMzeTfsn-bxPTFexDi1Lxce9emiKyYIoZRYR9KF2BLoh3WgXl8GBX30ZpUJDN8mE2AM008j0FPORlMZ8OLNnWuwKfNe3MGt6addg287tWFfuBV3QXdJq0c_YWLFrKDks766hTJJJbQgpaZw0ixwE8tQJLe9wzSKlP2guiHvpWA2ORyw4aqB-_EAG0do7_IyFylsbt4zujW1w3C0kBc9kMEXC5pW9UaGyKd9m76xMBjzNQloDx_m45HrS1Z3HnyQDuc_KY_TXdJOzbyCC4ngrJ8_RYYgqiPeQaj4uMwJ6JeCvyvfAGbouM_pkV0IR_YOxE-pTl3D0eP",
+  "requested_scope": [
+    "openid",
+    "profile",
+    "email"
+  ],
+  "requested_access_token_audience": [],
+  "skip": false,
+  "subject": "",
+  "oidc_context": {
+    "ui_locales": [
+      "fr",
+      "en"
+    ]
+  },
+  "client": {
+    "client_id": "b8af725c-99d8-4905-ac88-bbbca7e947ac",
+    "client_name": "OIDC Test Client",
+    "redirect_uris": [
+      "http://oidc.client.test/auth/callback"
+    ],
+    "grant_types": [
+      "authorization_code"
+    ],
+    "response_types": [
+      "code"
+    ],
+    "scope": "openid profile email",
+    "audience": [],
+    "owner": "",
+    "policy_uri": "",
+    "allowed_cors_origins": [],
+    "tos_uri": "",
+    "client_uri": "",
+    "logo_uri": "",
+    "contacts": [],
+    "client_secret_expires_at": 0,
+    "subject_type": "public",
+    "jwks": {},
+    "token_endpoint_auth_method": "client_secret_basic",
+    "request_object_signing_alg": "RS256",
+    "userinfo_signed_response_alg": "none",
+    "created_at": "2026-10-27T11:22:32Z",
+    "updated_at": "2026-10-27T11:22:32.366006Z",
+    "metadata": {},
+    "skip_consent": false,
+    "skip_logout_consent": false,
+    "authorization_code_grant_access_token_lifespan": null,
+    "authorization_code_grant_id_token_lifespan": null,
+    "authorization_code_grant_refresh_token_lifespan": null,
+    "client_credentials_grant_access_token_lifespan": null,
+    "implicit_grant_access_token_lifespan": null,
+    "implicit_grant_id_token_lifespan": null,
+    "jwt_bearer_grant_access_token_lifespan": null,
+    "refresh_token_grant_id_token_lifespan": null,
+    "refresh_token_grant_access_token_lifespan": null,
+    "refresh_token_grant_refresh_token_lifespan": null
+  },
+  "request_url": "http://127.0.0.1:14444/oauth2/auth?client_id=b8af725c-99d8-4905-ac88-bbbca7e947ac\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+  "session_id": "c565a3f1-3286-4ed6-9759-48fa5f719ad8"
+}
+

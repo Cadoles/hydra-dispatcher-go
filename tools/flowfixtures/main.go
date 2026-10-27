@@ -1,10 +1,25 @@
 // Command flowfixtures records golden fixtures for internal/hydra/flowcodec
-// from a running Hydra 2.2: a login challenge and a consent challenge, each
-// with the admin API response Hydra serves for it. It starts an authorization
-// request, accepts the login through the admin API with a known subject and
-// context, and stops at the consent challenge.
+// from a running Hydra 2.2 or later: a login challenge and a consent
+// challenge, each with the admin API response Hydra serves for it. It starts
+// an authorization request, accepts the login through the admin API with a
+// known subject and context, and stops at the consent challenge. Fixtures go
+// to <out>/hydra-<version>, named after the version Hydra reports.
 //
-//	go run ./tools/flowfixtures -client <client_id> -out internal/hydra/flowcodec/testdata/hydra-v2.2.0
+// Hydra's secrets.system must be the tests' devSecret and the client must
+// accept -redirect. Against hydra-dev (make up-hydra22):
+//
+//	go run ./tools/flowfixtures -client <client_id> -out internal/hydra/flowcodec/testdata
+//
+// Against a throwaway Hydra of another version:
+//
+//	docker run --rm -d --name hydra -p 4444:4444 -p 4445:4445 -e DSN=memory \
+//	  -e SECRETS_SYSTEM=youReallyNeedToChangeThis -e URLS_SELF_ISSUER=http://127.0.0.1:4444 \
+//	  -e URLS_LOGIN=http://login.test/login -e URLS_CONSENT=http://login.test/consent \
+//	  oryd/hydra:v2.3.0 serve all --dev
+//	docker exec hydra hydra create client --endpoint http://127.0.0.1:4445 --name "OIDC Test Client" \
+//	  --redirect-uri http://oidc.client.test/auth/callback --scope openid,profile,email
+//	go run ./tools/flowfixtures -public http://127.0.0.1:4444 -admin http://127.0.0.1:4445 \
+//	  -client <client_id> -out internal/hydra/flowcodec/testdata
 package main
 
 import (
@@ -20,6 +35,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -32,6 +48,9 @@ const (
 )
 
 var loginContext = map[string]any{"fixture": "flowfixtures", "step": 1}
+
+// release is a Hydra release version, safe as a directory name.
+var release = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 type fixtures struct {
 	public, admin *url.URL
@@ -51,14 +70,14 @@ func run() error {
 	admin := flag.String("admin", "http://admin.hydra.test", "Hydra admin URL")
 	client := flag.String("client", "", "OAuth2 client id registered in Hydra")
 	redirect := flag.String("redirect", "http://oidc.client.test/auth/callback", "redirect_uri registered for the client")
-	out := flag.String("out", "", "output directory")
+	out := flag.String("out", "", "testdata directory, which receives hydra-<version>")
 	flag.Parse()
 	if *client == "" || *out == "" {
 		flag.Usage()
 		return errors.New("-client and -out are required")
 	}
 
-	f := &fixtures{out: *out}
+	f := &fixtures{}
 	var err error
 	if f.public, err = url.Parse(*public); err != nil {
 		return err
@@ -73,6 +92,11 @@ func run() error {
 		// Each redirect is a step to inspect, not to follow.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	version, err := f.hydraVersion()
+	if err != nil {
+		return err
+	}
+	f.out = filepath.Join(*out, "hydra-"+version)
 	if err := os.MkdirAll(f.out, 0o755); err != nil {
 		return err
 	}
@@ -122,6 +146,22 @@ func run() error {
 	}
 	slog.Info("fixtures written", "dir", f.out)
 	return nil
+}
+
+// hydraVersion reads the release Hydra reports, which names the fixtures.
+func (f *fixtures) hydraVersion() (string, error) {
+	resp, err := f.http.Get(f.admin.JoinPath("/version").String())
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil || !release.MatchString(v.Version) {
+		return "", fmt.Errorf("GET /version: status %d, no release version (%q)", resp.StatusCode, v.Version)
+	}
+	return v.Version, nil
 }
 
 // challengeFrom requests u and reads the named challenge from the redirect.
