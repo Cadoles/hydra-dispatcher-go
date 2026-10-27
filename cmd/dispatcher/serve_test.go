@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -109,5 +110,22 @@ func TestLogHandler(t *testing.T) {
 	}
 	if line["version"] != version || line["instance"] == "" || line["log_type"] != "app" || line["msg"] != "server.started" {
 		t.Errorf("line = %v", line)
+	}
+}
+
+// A warning may explain the configuration error: it is logged before it.
+func TestServeConfigWarnings(t *testing.T) {
+	var logs bytes.Buffer
+	defaultLogger, flags, out := slog.Default(), log.Flags(), log.Writer()
+	t.Cleanup(func() {
+		slog.SetDefault(defaultLogger)
+		log.SetFlags(flags)
+		log.SetOutput(out)
+	})
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Setenv("DISPATCHER_SERVER_BASE_URL", "")
+	t.Setenv("DISPATCHER_SERVER_BASEURL", "http://typo")
+	if err := serve(context.Background(), nil); err == nil || !strings.Contains(logs.String(), "DISPATCHER_SERVER_BASEURL is ignored") {
+		t.Errorf("err = %v, logs = %q", err, logs.String())
 	}
 }

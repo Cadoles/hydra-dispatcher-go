@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -15,10 +16,17 @@ import (
 const (
 	strTag   = "!!str"
 	nullTag  = "!!null"
+	floatTag = "!!float"
 	mergeTag = "!!merge"
 )
 
-var unmarshalerType = reflect.TypeFor[yaml.Unmarshaler]()
+// quotedStyles make a scalar a string, whatever it holds.
+const quotedStyles = yaml.SingleQuotedStyle | yaml.DoubleQuotedStyle | yaml.LiteralStyle | yaml.FoldedStyle
+
+var (
+	unmarshalerType = reflect.TypeFor[yaml.Unmarshaler]()
+	ignoredType     = reflect.TypeFor[ignored]()
+)
 
 // decodeFile expands ${VAR} in every value, checks every key against the
 // schema (an unknown key is an error, so typos do not pass silently) and
@@ -90,6 +98,9 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+	if t == ignoredType {
+		return // never read
+	}
 	defer p.enter(n)()
 	// yaml.v3 would keep the default of a string, a number or a duration,
 	// empty a list, and leave an allowlist to copy the admin one. No
@@ -109,10 +120,11 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 		return
 	case yaml.ScalarNode:
 		p.scalar(n, path, t.Kind() == reflect.Interface)
+		p.typed(n, t, path)
 		return
 	}
 	switch {
-	case t.Kind() == reflect.Interface: // app options, ignored Symfony keys
+	case t.Kind() == reflect.Interface: // app options
 		p.values(n, path, true)
 	case reflect.PointerTo(t).Implements(unmarshalerType):
 		// List, Localized, SeedStep…: they check their own shape.
@@ -221,7 +233,7 @@ func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
 	if v == n.Value {
 		return
 	}
-	quoted := n.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0
+	quoted := n.Style&quotedStyles != 0
 	n.Value, n.Style = v, n.Style&yaml.TaggedStyle
 	if n.Style == 0 {
 		// The parser tagged the reference itself (!!str): let the value decide.
@@ -232,17 +244,47 @@ func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
 	}
 }
 
+// typed lets a boolean or a number key decide a quoted value, as it decides
+// an expanded one: "512" is a number for max_in_flight. It refuses a float
+// for an integer, which yaml.v3 would truncate: 1.9 replicas would be 1.
+func (p *prepare) typed(n *yaml.Node, t reflect.Type, path string) {
+	switch t.Kind() {
+	case reflect.Bool, reflect.Float32, reflect.Float64:
+	default:
+		if !isInteger(t) {
+			return
+		}
+	}
+	if n.Style&quotedStyles != 0 && n.Style&yaml.TaggedStyle == 0 {
+		n.Style, n.Tag = 0, ""
+		if n.ShortTag() == nullTag { // "" stays an error, not the default
+			n.Tag = strTag
+		}
+	}
+	if isInteger(t) && n.ShortTag() == floatTag {
+		p.fail(n, path, "%s is not an integer", n.Value)
+	}
+}
+
+var integerKinds = []reflect.Kind{
+	reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+	reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+}
+
+// isInteger reports the integer types yaml.v3 decodes itself, truncating a
+// float; Duration parses its own value.
+func isInteger(t reflect.Type) bool {
+	return slices.Contains(integerKinds, t.Kind()) && !reflect.PointerTo(t).Implements(unmarshalerType)
+}
+
 // nullSettings lists the seed settings the file sets to null (~).
 func nullSettings(doc *yaml.Node) []string {
 	seed := mappingValue(doc, "dispatcher")
-	if seed == nil || seed.Kind != yaml.MappingNode {
-		return nil
-	}
-	settings := yamlFields(reflect.TypeFor[SeedSettings]())
+	t := reflect.TypeFor[SeedSettings]()
 	var keys []string
-	for i := 0; i+1 < len(seed.Content); i += 2 {
-		k, v := seed.Content[i].Value, deref(seed.Content[i+1])
-		if _, ok := settings[k]; ok && v.ShortTag() == nullTag {
+	for i := range t.NumField() {
+		k, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		if v := mappingValue(seed, k); v != nil && v.ShortTag() == nullTag {
 			keys = append(keys, k)
 		}
 	}
@@ -268,6 +310,9 @@ func nullScopes(doc *yaml.Node, clients []SeedClient) {
 	}
 }
 
+// mappingValue returns the value of key in n, merged keys included: as when
+// decoding, a key of the mapping wins over a merged one, and an earlier
+// merged mapping over a later one.
 func mappingValue(n *yaml.Node, key string) *yaml.Node {
 	if n == nil {
 		return nil
@@ -278,12 +323,38 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 	if n.Kind != yaml.MappingNode {
 		return nil
 	}
+	var merge *yaml.Node
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		if n.Content[i].Value == key {
+		switch k := n.Content[i]; {
+		case isMerge(k):
+			merge = n.Content[i+1]
+		case k.Value == key:
 			return deref(n.Content[i+1])
 		}
 	}
+	if merge != nil {
+		for _, m := range mergedMappings(merge) {
+			if v := mappingValue(m, key); v != nil {
+				return v
+			}
+		}
+	}
 	return nil
+}
+
+// mergedMappings returns the mappings a << key merges: one, or a list.
+func mergedMappings(v *yaml.Node) []*yaml.Node {
+	items := []*yaml.Node{deref(v)}
+	if items[0].Kind == yaml.SequenceNode {
+		items = items[0].Content
+	}
+	var mappings []*yaml.Node
+	for _, m := range items {
+		if m = deref(m); m.Kind == yaml.MappingNode {
+			mappings = append(mappings, m)
+		}
+	}
+	return mappings
 }
 
 func deref(n *yaml.Node) *yaml.Node {

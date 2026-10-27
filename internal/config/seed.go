@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -32,11 +33,20 @@ type Seed struct {
 
 	// Symfony keys with no Go counterpart: accepted, then ignored with a
 	// warning.
-	HydraPublicURL       any `yaml:"hydra_public_url"`
-	SessionTTL           any `yaml:"session_ttl"`
-	CacheProviders       any `yaml:"cache_providers"`
-	AdminAuthorizedHosts any `yaml:"admin_authorized_hosts"`
-	OAuth2Issuer         any `yaml:"oauth2_issuer"`
+	HydraPublicURL       ignored `yaml:"hydra_public_url"`
+	SessionTTL           ignored `yaml:"session_ttl"`
+	CacheProviders       ignored `yaml:"cache_providers"`
+	AdminAuthorizedHosts ignored `yaml:"admin_authorized_hosts"`
+	OAuth2Issuer         ignored `yaml:"oauth2_issuer"`
+}
+
+// ignored records that a Symfony key is set. Its value is never read, so
+// neither expanded nor checked: cache_providers may keep its %env(REDIS_DSN)%.
+type ignored bool
+
+func (i *ignored) UnmarshalYAML(*yaml.Node) error {
+	*i = true
+	return nil
 }
 
 // SeedSettings are pointers: bootstrap --force only rewrites the settings the
@@ -109,10 +119,8 @@ func (s *SeedStep) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.MappingNode {
 		return fmt.Errorf("%sa step is a mapping", at(n))
 	}
-	for i := 0; i < len(n.Content); i += 2 {
-		if k := n.Content[i]; !isMerge(k) && !slices.Contains(stepKeys, k.Value) {
-			return fmt.Errorf("%sunknown step key %q, a step takes %s", at(k), k.Value, strings.Join(stepKeys, ", "))
-		}
+	if err := checkStepKeys(n); err != nil {
+		return err
 	}
 	var raw struct {
 		ID           string  `yaml:"id"`
@@ -148,6 +156,25 @@ func (s *SeedStep) UnmarshalYAML(n *yaml.Node) error {
 		return fmt.Errorf("%sstep order and position differ", at(n))
 	}
 	*s = SeedStep{AppID: cmp.Or(raw.AppID, raw.ID), Position: positions[0], SubjectCheck: raw.SubjectCheck}
+	return nil
+}
+
+// checkStepKeys refuses an unknown key in a step, merged ones included.
+func checkStepKeys(n *yaml.Node) error {
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k := n.Content[i]
+		if !isMerge(k) {
+			if !slices.Contains(stepKeys, k.Value) {
+				return fmt.Errorf("%sunknown step key %q, a step takes %s", at(k), k.Value, strings.Join(stepKeys, ", "))
+			}
+			continue
+		}
+		for _, m := range mergedMappings(n.Content[i+1]) {
+			if err := checkStepKeys(m); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -277,6 +304,10 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	if s.ChallengeTTL != nil && *s.ChallengeTTL <= 0 {
 		fail("dispatcher.challenge_ttl", "must be positive")
 	}
+	// The cookie would expire at once, while Hydra reads 0 as no expiry.
+	if s.RememberFor != nil && *s.RememberFor <= 0 {
+		fail("dispatcher.remember_for", "must be positive")
+	}
 	if s.SupportedLocales != nil && len(*s.SupportedLocales) == 0 {
 		fail("dispatcher.supported_locales", "is empty")
 	}
@@ -298,23 +329,30 @@ func uniqueID(fail func(path, format string, args ...any), path, id string, seen
 	seen[id] = true
 }
 
-// ignoredKeys lists the Symfony keys present in the seed, with the reason
-// they are ignored.
-func (s *Seed) ignoredKeys() []string {
+// warnings lists the Symfony keys present in the seed, with the reason they
+// are ignored, and the settings set to ~ that Symfony read otherwise.
+func (s *Seed) warnings() []string {
 	var warnings []string
 	for _, k := range []struct {
-		set    bool
+		set    ignored
 		name   string
 		reason string
 	}{
-		{s.HydraPublicURL != nil, "hydra_public_url", "never read by the Symfony app either"},
-		{s.SessionTTL != nil, "session_ttl", "a flow lasts challenge_ttl, the skip memory remember_for"},
-		{s.CacheProviders != nil, "cache_providers", "the flow state store is state.redis_dsn"},
-		{s.AdminAuthorizedHosts != nil, "admin_authorized_hosts", "use security.admin_authorized_hosts"},
-		{s.OAuth2Issuer != nil, "oauth2_issuer", "not supported yet"},
+		{s.HydraPublicURL, "hydra_public_url", "never read by the Symfony app either"},
+		{s.SessionTTL, "session_ttl", "a flow lasts challenge_ttl, the skip memory remember_for"},
+		{s.CacheProviders, "cache_providers", "the flow state store is state.redis_dsn"},
+		{s.AdminAuthorizedHosts, "admin_authorized_hosts", "use security.admin_authorized_hosts"},
+		{s.OAuth2Issuer, "oauth2_issuer", "not supported yet"},
 	} {
 		if k.set {
 			warnings = append(warnings, fmt.Sprintf("dispatcher.%s is ignored: %s", k.name, k.reason))
+		}
+	}
+	settings := yamlFields(reflect.TypeFor[SeedSettings]())
+	symfony := map[reflect.Type]string{reflect.TypeFor[*bool](): "true", reflect.TypeFor[*List](): "an empty list"}
+	for _, k := range s.NullSettings {
+		if read, ok := symfony[settings[k]]; ok {
+			warnings = append(warnings, fmt.Sprintf("dispatcher.%s: ~ resets it to its default, where Symfony read it as %s", k, read))
 		}
 	}
 	return warnings

@@ -130,6 +130,9 @@ func applyEnv(c *Config, lookupEnv func(string) (string, bool)) error {
 		if target.Kind() == reflect.String || node.ShortTag() == nullTag {
 			node.Tag = strTag
 		}
+		if isInteger(target.Type()) && node.ShortTag() == floatTag { // yaml.v3 would truncate it
+			return fmt.Errorf("%s (%s): %q is not a valid %s", k.name, k.path, v, target.Kind())
+		}
 		if err := node.Decode(target.Addr().Interface()); err != nil {
 			var typeErr *yaml.TypeError
 			if errors.As(err, &typeErr) { // its message gives a line 0

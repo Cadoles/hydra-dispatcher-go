@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -209,7 +210,8 @@ func checkHydraDevSeed(t *testing.T, path string) {
 		t.Fatalf("apps = %v, flows = %v", appIDs, flowIDs)
 	}
 	sql := s.Apps[1]
-	if sql.LoginURL != "http://sql.hydra.test/login" || sql.ConsentURL != "http://sql.hydra.test/consent" || sql.Method != "pwd" || sql.AuthMode != "network" {
+	if sql.LoginURL != "http://sql.hydra.test/login" || sql.ConsentURL != "http://sql.hydra.test/consent" || sql.LogoutURL != "http://sql.hydra.test/logout" ||
+		sql.Method != "pwd" || sql.AuthMode != "network" {
 		t.Errorf("hydra-sql app = %+v", sql)
 	}
 	twoFA := s.Flows[2]
@@ -270,16 +272,17 @@ func TestSymfonySeed(t *testing.T) {
 	if cl := s.OAuth2Clients[0]; cl.ID != "admin" || cl.Secret != "s3cret" || !slices.Equal(*cl.Scopes, List{"admin:flows"}) {
 		t.Errorf("client = %+v", cl)
 	}
-	// Scopes absent get the default; null ones are none, as in Symfony. The
-	// null entry the decoder drops does not shift the clients.
+	// Scopes absent get the default; null ones are none, as in Symfony, merged
+	// or not. The null entry the decoder drops does not shift the clients.
 	c, _, err = load(t, `
 dispatcher:
   oauth2_clients:
     - ~
     - { id: absent, secret: s }
-    - { id: nulled, secret: s, scopes: ~ }
+    - &nulled { id: nulled, secret: s, scopes: ~ }
     - { id: blank, secret: s, scopes: }
     - { id: empty, secret: s, scopes: [] }
+    - { <<: *nulled, id: merged }
 `, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -288,8 +291,24 @@ dispatcher:
 	for _, cl := range c.Seed.OAuth2Clients {
 		scopes = append(scopes, cl.ID+"="+strings.Join(*cl.Scopes, ","))
 	}
-	if !slices.Equal(scopes, []string{"absent=admin:flows", "nulled=", "blank=", "empty="}) {
+	if !slices.Equal(scopes, []string{"absent=admin:flows", "nulled=", "blank=", "empty=", "merged="}) {
 		t.Errorf("scopes = %q", scopes)
+	}
+	// The ignored keys are not read: %env()% or a bad ${} may stay.
+	_, ignoredWarnings, err := load(t, `
+dispatcher:
+  cache_providers:
+    - { type: redis, dsn: "%env(REDIS_DSN)%" }
+  oauth2_issuer: "%env(BASE_PATH)%"
+  session_ttl: "${TTL-86400}"
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"cache_providers", "oauth2_issuer", "session_ttl"} {
+		if !hasWarning(ignoredWarnings, "dispatcher."+key+" is ignored") {
+			t.Errorf("no warning for ignored dispatcher.%s in %q", key, ignoredWarnings)
+		}
 	}
 	// login_accept_webhook_url: ~ clears the webhook, as Symfony's --force did.
 	if !slices.Equal(s.NullSettings, []string{"login_accept_webhook_url", "consent_accept_webhook_url"}) || s.LoginAcceptWebhookURL != nil {
@@ -325,6 +344,7 @@ admin:
 		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE":   "0.1",
 		"DISPATCHER_HYDRA_SYSTEM_SECRETS":              "youReallyNeedToChangeThis,another-secret",
 		"DISPATCHER_HYDRA_VERSION":                     "2.3",
+		"DISPATCHER_SECRETS_ENCRYPTION_KEY":            hexKey3,
 		"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS":  hexKey2 + "," + base64Key2,
 		"DISPATCHER_ADMIN_API_PUBLIC_KEY":              pem,
 	})))
@@ -358,6 +378,8 @@ admin:
 	for name, value := range map[string]string{
 		"DISPATCHER_HYDRA_TIMEOUT":                   "soon",
 		"DISPATCHER_HYDRA_MAX_IN_FLIGHT":             "many",
+		"DISPATCHER_SERVER_REPLICAS_HINT":            "2.9", // not truncated to 2
+		"DISPATCHER_SECURITY_FAILURE_RATE_LIMIT_MAX": "1e3",
 		"DISPATCHER_ADMIN_UI_ENABLED":                "maybe",
 		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE": "half",
 	} {
@@ -432,6 +454,16 @@ func TestUnknownOverrides(t *testing.T) {
 	for _, name := range []string{"DISPATCHER_COOKIE_KEY", "DISPATCHER_UPSTREAM", "DISPATCHER_SERVER_BASE_URL", "DISPATCHER_STORE_PASSWORD"} {
 		if hasWarning(warnings, name) {
 			t.Errorf("warning for %s in %q", name, warnings)
+		}
+	}
+
+	// The warning comes with the error it explains, whichever step fails.
+	env := required(map[string]string{"DISPATCHER_SERVER_BASEURL": "http://typo"})
+	delete(env, "DISPATCHER_SERVER_BASE_URL")
+	for _, extra := range []map[string]string{nil, {"DISPATCHER_HYDRA_TIMEOUT": "soon"}} {
+		maps.Copy(env, extra)
+		if _, warnings, err := Load("", envOf(env)); err == nil || !hasWarning(warnings, "DISPATCHER_SERVER_BASEURL is ignored") {
+			t.Errorf("%v: warnings = %q, err = %v", extra, warnings, err)
 		}
 	}
 }
@@ -651,6 +683,39 @@ security:
 	}
 }
 
+// A boolean or a number key decides a quoted value, as it decides an
+// expanded one. A float is no integer, rather than one truncated.
+func TestTypedValues(t *testing.T) {
+	c, _, err := load(t, `
+hydra:
+  max_in_flight: "512"
+admin:
+  ui: { enabled: "false" }
+observability:
+  access_log_sample: '0.5'
+dispatcher:
+  remember: "false"
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Hydra.MaxInFlight != 512 || c.Admin.UI.Enabled || c.Observability.AccessLogSample != 0.5 || *c.Seed.Remember {
+		t.Errorf("max_in_flight = %d, admin.ui.enabled = %v, access_log_sample = %v, remember = %v",
+			c.Hydra.MaxInFlight, c.Admin.UI.Enabled, c.Observability.AccessLogSample, *c.Seed.Remember)
+	}
+	for content, want := range map[string]string{
+		"server:\n  replicas_hint: 1.9\n":                     "line 2: server.replicas_hint: 1.9 is not an integer",
+		"security:\n  failure_rate_limit: { max: \"2.5\" }\n": "line 2: security.failure_rate_limit.max: 2.5 is not an integer",
+		"hydra:\n  max_in_flight: \"${N:-1.5}\"\n":            "line 2: hydra.max_in_flight: 1.5 is not an integer",
+		"hydra:\n  max_in_flight: \"\"\n":                     "line 2: cannot unmarshal",
+		"admin:\n  ui: { enabled: \"~\" }\n":                  "line 2: cannot unmarshal",
+	} {
+		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", content, err, want)
+		}
+	}
+}
+
 func TestExpand(t *testing.T) {
 	env := lookupIn([]string{"SET=value", "EMPTY=", "SET=shadowed"})
 	for in, want := range map[string]string{
@@ -685,6 +750,8 @@ func TestUnknownKeys(t *testing.T) {
 		"nope: 1\n": "line 1: nope: unknown key",
 		"dispatcher:\n  apps:\n    - { id: a, nope: 1 }\n":                                     "line 3: dispatcher.apps[0].nope: unknown key",
 		"dispatcher:\n  flows:\n    - id: f\n      steps:\n        - { ap_id: a, order: 0 }\n": "line 5: unknown step key \"ap_id\"",
+		// A merged mapping is checked like the step it merges into.
+		"dispatcher:\n  flows:\n    - id: f\n      steps:\n        - { <<: [{ order: 0 }, { ap_id: b }], id: a }\n": "line 5: unknown step key \"ap_id\"",
 	} {
 		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", content, err, want)
@@ -855,6 +922,7 @@ func TestValidation(t *testing.T) {
 		{"pinning", map[string]string{"DISPATCHER_TLS_PINNED_SPKI_SHA256": "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}, "tls.pinned_spki_sha256: is not supported yet"},
 		{"shared key", map[string]string{"DISPATCHER_SECRETS_WEBHOOK_SIGNING_KEY": hexKey}, "secrets.webhook_signing_key: shares a key with secrets.cookie_key"},
 		{"shared previous key", map[string]string{"DISPATCHER_SECRETS_CHALLENGE_KEYS_PREVIOUS": hexKey}, "secrets.challenge_key: shares a key with secrets.cookie_key"},
+		{"previous key only", map[string]string{"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS": hexKey2}, "secrets.encryption_key: is required with secrets.encryption_keys_previous"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -880,13 +948,44 @@ func TestWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasWarning(warnings, "metrics_authorized_hosts contains 0.0.0.0/0") || !hasWarning(warnings, "metrics_authorized_hosts contains ::/0") {
+	if !hasWarning(warnings, "metrics_authorized_hosts covers 0.0.0.0/0") || !hasWarning(warnings, "metrics_authorized_hosts covers ::/0") {
 		t.Errorf("warnings = %q, want one per open network", warnings)
 	}
 
 	_, warnings, err = Load("", envOf(required(map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": "0.0.0.0/0"})))
-	if err != nil || !hasWarning(warnings, "server.trusted_proxies contains 0.0.0.0/0: X-Forwarded-For is trusted from every address") {
+	if err != nil || !hasWarning(warnings, "server.trusted_proxies covers 0.0.0.0/0: X-Forwarded-For is trusted from every address") {
 		t.Errorf("trusted proxies 0.0.0.0/0: warnings = %q, err = %v", warnings, err)
+	}
+
+	// Every address, however written; not most of them.
+	for hosts, want := range map[string][]string{
+		"0.0.0.0/1,128.0.0.0/1":                  {"0.0.0.0/0"},
+		"::ffff:0:0/96":                          {"0.0.0.0/0"},
+		"8000::/1,::/2,4000::/2,0.0.0.0/0":       {"0.0.0.0/0", "::/0"},
+		"0.0.0.0/1,128.0.0.0/2,192.0.0.0/3,::/1": nil,
+		"10.0.0.0/8,10.1.0.0/16,1.2.3.4":         nil,
+	} {
+		_, warnings, err := Load("", envOf(required(map[string]string{"DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": hosts})))
+		var got []string
+		for _, w := range warnings {
+			if rest, ok := strings.CutPrefix(w, "security.admin_authorized_hosts covers "); ok {
+				all, _, _ := strings.Cut(rest, ": ")
+				got = append(got, all)
+			}
+		}
+		if err != nil || !slices.Equal(got, want) {
+			t.Errorf("%s: open = %q, want %q (err = %v)", hosts, got, want, err)
+		}
+	}
+
+	// Without trusted proxies, clients behind a proxy have its address.
+	_, warnings, _ = Load("", envOf(required(map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": ""})))
+	if !hasWarning(warnings, "server.trusted_proxies is empty: behind a reverse proxy") {
+		t.Errorf("no trusted proxies: warnings = %q", warnings)
+	}
+	_, warnings, _ = Load("", envOf(required(map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": "", "DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": ""})))
+	if hasWarning(warnings, "server.trusted_proxies is empty") {
+		t.Errorf("no trusted proxies, no allowlist: warnings = %q", warnings)
 	}
 
 	// The in-memory store is only for a single instance.
@@ -917,6 +1016,9 @@ func TestNoSecretInErrors(t *testing.T) {
 		{"DISPATCHER_HYDRA_ADMIN_URL": "ftp://admin:hunter2@hydra:4445"},
 		{"DISPATCHER_HYDRA_ADMIN_URL": "http://admin:hunter2@[::1"},
 		{"DISPATCHER_HYDRA_ADMIN_URL": "http://hydra:4445/?token=hunter2#hunter2"},
+		// Without an authority, url.Parse leaves the password in the path.
+		{"DISPATCHER_HYDRA_ADMIN_URL": "https//admin:hunter2@hydra"},
+		{"DISPATCHER_HYDRA_ADMIN_URL": "http:/admin:hunter2@hydra"},
 		{"DISPATCHER_SECRETS_COOKIE_KEY": "hunter2"},
 		{"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS": hexKey + ",hunter2"},
 	} {
@@ -929,6 +1031,7 @@ func TestNoSecretInErrors(t *testing.T) {
 		"dispatcher:\n  oauth2_clients:\n    - { id: a, secret: \"hun${ter2\" }\n",
 		"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://u:hunter2@a\", consent_url: \"ftp://u:hunter2@a\", method: m }\n",
 		"dispatcher:\n  apps:\n    - { id: a, login_url: \"ftp://a/?k=hunter2#hunter2\", consent_url: \"http://a\", method: m }\n",
+		"dispatcher:\n  apps:\n    - { id: a, login_url: \"https//u:hunter2@a\", consent_url: \"http://a\", method: m }\n",
 	} {
 		_, _, err := load(t, content, nil)
 		if err == nil || strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "hun${ter2") {
@@ -952,6 +1055,10 @@ func TestCSPExtra(t *testing.T) {
 		"ui:\n  csp_extra: { script-src: [\"'strict-dynamic'\"] }\n":      "would allow inline or arbitrary scripts",
 		"ui:\n  csp_extra: { script-src: [\"'nonce-abc'\"] }\n":           "would allow inline or arbitrary scripts",
 		"ui:\n  csp_extra: { img-src: [\"https://a\\nb\"] }\n":            "is not a single source",
+		// Browsers match keywords whatever their case.
+		"ui:\n  csp_extra: { script-src: [\"'UNSAFE-INLINE'\"] }\n":  "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"'Strict-Dynamic'\"] }\n": "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"'NONCE-abc'\"] }\n":      "would allow inline or arbitrary scripts",
 	} {
 		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", content, err, want)
@@ -987,14 +1094,23 @@ dispatcher:
     - { id: a, login_url: "http://a", consent_url: "http://a", method: m, allowed_sources: "10.1.0.0/16, 10.2.0.1" }
     - { id: b, login_url: "http://b", consent_url: "http://b", method: m, auth_mode: mtls, client_cert_fingerprint: "`+strings.ToUpper(colonFingerprint)+`" }
   flows:
-    - { id: f, title: T, description: D, acr: "urn:example:loa:2", steps: [{ id: a, order: 0 }, { id: b, order: 1 }] }
+    - id: f
+      title: T
+      description: D
+      acr: "urn:example:loa:2"
+      enabled: false
+      icon_url: http://a/icon.svg
+      steps: [{ id: a, order: 0 }, { id: b, order: 1 }]
 `, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a, b := c.Seed.Apps[0], c.Seed.Apps[1]; a.AuthMode != "network" || !slices.Equal(a.AllowedSources, List{"10.1.0.0/16", "10.2.0.1"}) ||
-		b.AuthMode != "mtls" || b.ClientCertFingerprint != fingerprint || c.Seed.Flows[0].ACR != "urn:example:loa:2" {
-		t.Errorf("apps = %+v, flow acr = %q", c.Seed.Apps, c.Seed.Flows[0].ACR)
+		b.AuthMode != "mtls" || b.ClientCertFingerprint != fingerprint {
+		t.Errorf("apps = %+v", c.Seed.Apps)
+	}
+	if f := c.Seed.Flows[0]; f.ACR != "urn:example:loa:2" || *f.Enabled || f.IconURL[""] != "http://a/icon.svg" {
+		t.Errorf("flow = %+v", f)
 	}
 
 	if c, _, err := load(t, apps+flow+"        - { id: a, order: 0 }\n        - { app_id: b, position: 1, subject_check: \"claim:email\" }\n", nil); err != nil ||
@@ -1022,6 +1138,7 @@ dispatcher:
 		"missing client secret":    {"dispatcher:\n  oauth2_clients:\n    - { id: c }\n", "dispatcher.oauth2_clients[0].secret: is required"},
 		"duplicate client":         {"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s }\n    - { id: c, secret: t }\n", "dispatcher.oauth2_clients[1].id"},
 		"challenge TTL":            {"dispatcher:\n  challenge_ttl: 0\n", "dispatcher.challenge_ttl: must be positive"},
+		"remember for":             {"dispatcher:\n  remember_for: 0\n", "dispatcher.remember_for: must be positive"},
 		"acr with a space":         {apps + "  flows:\n    - { id: f, title: T, description: D, acr: \"loa 2\", steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].acr: \"loa 2\" contains a space"},
 		"auth mode":                {app + "      auth_mode: token\n", "dispatcher.apps[0].auth_mode: \"token\" is not network or mtls"},
 		"source":                   {app + "      allowed_sources: [10.1.0.0/16, pod-a]\n", "dispatcher.apps[0].allowed_sources: \"pod-a\" is neither"},
@@ -1064,22 +1181,38 @@ func TestNullOutsideSeed(t *testing.T) {
 // ~ sets a seed setting to null, which bootstrap --force resets; an empty
 // variable sets it to "".
 func TestNullSettings(t *testing.T) {
-	c, _, err := load(t, `
+	c, warnings, err := load(t, `
 dispatcher:
+  <<: { supported_locales: ~, consent_auto_accept: true }
   login_accept_webhook_url: ~
   consent_accept_webhook_url: "${UNSET}"
   remember:
   fallback_locale: &none ~
   default_locale: *none
+  consent_auto_accept: ~
   apps: ~
 `, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := c.Seed
-	if !slices.Equal(s.NullSettings, []string{"login_accept_webhook_url", "remember", "fallback_locale", "default_locale"}) ||
+	if !slices.Equal(s.NullSettings, []string{"consent_auto_accept", "remember", "login_accept_webhook_url", "supported_locales", "default_locale", "fallback_locale"}) ||
 		s.ConsentAcceptWebhookURL == nil || *s.ConsentAcceptWebhookURL != "" {
 		t.Errorf("null = %v, consent webhook = %v", s.NullSettings, s.ConsentAcceptWebhookURL)
+	}
+	// Where Symfony read ~ otherwise than as its default.
+	var symfony []string
+	for _, w := range warnings {
+		if strings.Contains(w, "where Symfony read it as") {
+			symfony = append(symfony, w)
+		}
+	}
+	if !slices.Equal(symfony, []string{
+		"dispatcher.consent_auto_accept: ~ resets it to its default, where Symfony read it as true",
+		"dispatcher.remember: ~ resets it to its default, where Symfony read it as true",
+		"dispatcher.supported_locales: ~ resets it to its default, where Symfony read it as an empty list",
+	}) {
+		t.Errorf("warnings = %q", symfony)
 	}
 }
 
@@ -1105,6 +1238,27 @@ func TestSystemSecretsFile(t *testing.T) {
 	if _, _, err := Load("", envOf(required(map[string]string{"DISPATCHER_HYDRA_SYSTEM_SECRETS_FILE": file + ".missing"}))); err == nil ||
 		!strings.Contains(err.Error(), "hydra.system_secrets_file") {
 		t.Errorf("missing file: err = %v", err)
+	}
+	// A secret not provisioned yet, rather than the fallback mode.
+	if err := os.WriteFile(file, []byte(" \n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Load("", envOf(required(map[string]string{"DISPATCHER_HYDRA_SYSTEM_SECRETS_FILE": file}))); err == nil ||
+		!strings.Contains(err.Error(), "hydra.system_secrets_file: holds no secret") {
+		t.Errorf("empty file: err = %v", err)
+	}
+}
+
+// An IPv4-mapped network is its IPv4 network: clients are matched by their
+// IPv4 address.
+func TestPrefixes(t *testing.T) {
+	ps, err := List{"10.0.0.1/8", "::ffff:10.0.0.0/104", "::ffff:192.168.1.1", "fe80::1%eth0", "::ffff:0:0/80"}.Prefixes()
+	var got []string
+	for _, p := range ps {
+		got = append(got, p.String())
+	}
+	if want := []string{"10.0.0.0/8", "10.0.0.0/8", "192.168.1.1/32", "fe80::1/128", "::/80"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("prefixes = %q, %v; want %q", got, err, want)
 	}
 }
 

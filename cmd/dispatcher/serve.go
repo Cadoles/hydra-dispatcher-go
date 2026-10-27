@@ -25,6 +25,10 @@ func serve(ctx context.Context, args []string) error {
 
 	cfg, warnings, err := config.Load(*configPath, os.Environ())
 	if err != nil {
+		// A warning may explain the error: a mistyped variable left a key unset.
+		for _, w := range warnings {
+			slog.Warn("config.warning", "detail", w)
+		}
 		return fmt.Errorf("configuration: %w", err)
 	}
 	logs := newLogHandler(os.Stdout, cfg.Observability)

@@ -77,10 +77,11 @@ func (c *Config) validate() (warnings []string, err error) {
 	}
 
 	admin := c.Security.AdminAuthorizedHosts
+	allowlists := false
 	for _, l := range []struct {
 		path  string
 		hosts List
-		open  string // what a /0 network means
+		open  string // what a list covering every address means
 	}{
 		{"server.trusted_proxies", c.Server.TrustedProxies, "X-Forwarded-For is trusted from every address, the allowlists can be bypassed"},
 		{"security.admin_authorized_hosts", admin, "open to every address"},
@@ -93,11 +94,18 @@ func (c *Config) validate() (warnings []string, err error) {
 		if err != nil && (l.path == "security.admin_authorized_hosts" || !slices.Equal(l.hosts, admin)) {
 			fail(l.path, "%v", err)
 		}
-		for _, p := range ps {
-			if p.Bits() == 0 {
-				warnings = append(warnings, fmt.Sprintf("%s contains %s: %s", l.path, p, l.open))
+		// However written: 0.0.0.0/0, or 0.0.0.0/1 and 128.0.0.0/1.
+		for _, all := range []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")} {
+			if covers(ps, all) {
+				warnings = append(warnings, fmt.Sprintf("%s covers %s: %s", l.path, all, l.open))
 			}
 		}
+		allowlists = allowlists || (l.path != "server.trusted_proxies" && len(l.hosts) > 0)
+	}
+	if len(c.Server.TrustedProxies) == 0 && allowlists {
+		// A forgotten ${TRUSTED_PROXIES}, say: the proxy's address is often
+		// in the private networks of the default allowlists.
+		warnings = append(warnings, "server.trusted_proxies is empty: behind a reverse proxy, every client has the proxy's address and passes the allowlists that contain it")
 	}
 	positive("security.failure_rate_limit.max", int64(c.Security.FailureRateLimit.Max))
 	positive("security.failure_rate_limit.per", int64(c.Security.FailureRateLimit.Per))
@@ -108,6 +116,9 @@ func (c *Config) validate() (warnings []string, err error) {
 	}
 	if c.Secrets.ChallengeKey == nil {
 		fail("secrets.challenge_key", "is required")
+	}
+	if c.Secrets.EncryptionKey == nil && len(c.Secrets.EncryptionKeysPrevious) > 0 {
+		fail("secrets.encryption_key", "is required with secrets.encryption_keys_previous: a previous key only decrypts what an active one encrypted")
 	}
 	c.Secrets.checkSharedKeys(fail)
 
@@ -196,7 +207,9 @@ var schemeSource = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:$`)
 // anyScript reports the script sources that name no script and no host:
 // inline scripts ('unsafe-…', a nonce fixed in the configuration), a whole
 // scheme (https:, data:, blob:), a wildcard, or whatever a script loads.
+// Browsers match keywords whatever their case.
 func anyScript(src string) bool {
+	src = strings.ToLower(src)
 	return strings.HasPrefix(src, "'unsafe-") || strings.HasPrefix(src, "'nonce-") ||
 		src == "'strict-dynamic'" || strings.Contains(src, "*") || schemeSource.MatchString(src)
 }
@@ -248,7 +261,12 @@ func absoluteURL(s string) (*url.URL, error) {
 	if err != nil {
 		return nil, errors.New("is not a valid URL") // url.Parse quotes it whole
 	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	switch {
+	case u.Host == "":
+		// Without an authority, as in https//user:password@host, the
+		// password stays in the path: no quote.
+		return nil, errors.New("is not an absolute http(s) URL")
+	case u.Scheme != "http" && u.Scheme != "https":
 		return nil, fmt.Errorf("%q is not an absolute http(s) URL", redacted(u))
 	}
 	return u, nil
@@ -263,19 +281,45 @@ func redacted(u *url.URL) string {
 }
 
 // Prefixes parses a list of CIDRs; a bare address stands for itself (/32 or
-// /128). Load has validated the allowlists and trusted proxies already.
+// /128). An IPv4-mapped IPv6 network (::ffff:10.0.0.0/104) is its IPv4
+// network, since clients are matched by their IPv4 address. Load has
+// validated the allowlists and trusted proxies already.
 func (l List) Prefixes() ([]netip.Prefix, error) {
 	ps := make([]netip.Prefix, 0, len(l))
 	for _, s := range l {
-		if p, err := netip.ParsePrefix(s); err == nil {
-			ps = append(ps, p.Masked())
-			continue
-		}
-		a, err := netip.ParseAddr(s)
+		p, err := netip.ParsePrefix(s)
 		if err != nil {
-			return nil, fmt.Errorf("%q is neither a CIDR nor an IP address", s)
+			a, err := netip.ParseAddr(s)
+			if err != nil {
+				return nil, fmt.Errorf("%q is neither a CIDR nor an IP address", s)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
 		}
-		ps = append(ps, netip.PrefixFrom(a, a.BitLen()))
+		if p.Addr().Is4In6() && p.Bits() >= 128-32 {
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-(128-32))
+		}
+		ps = append(ps, p.Masked())
 	}
 	return ps, nil
+}
+
+// covers reports whether ps hold every address of p.
+func covers(ps []netip.Prefix, p netip.Prefix) bool {
+	split := false
+	for _, q := range ps {
+		switch {
+		case q.Bits() <= p.Bits() && q.Contains(p.Addr()):
+			return true
+		case q.Bits() > p.Bits() && p.Contains(q.Addr()):
+			split = true // q holds a part of p: look at each half
+		}
+	}
+	if !split {
+		return false
+	}
+	bits := p.Bits() + 1
+	high := p.Addr().AsSlice()
+	high[p.Bits()/8] |= 0x80 >> (p.Bits() % 8)
+	h, _ := netip.AddrFromSlice(high)
+	return covers(ps, netip.PrefixFrom(p.Addr(), bits)) && covers(ps, netip.PrefixFrom(h, bits))
 }

@@ -240,7 +240,8 @@ func defaults() *Config {
 
 // Load reads the configuration file at path (none when path is empty),
 // applies the environment (os.Environ() outside tests) and validates the
-// result. Warnings report accepted but dubious settings.
+// result. Warnings report accepted but dubious settings; they come with an
+// error too, which a mistyped variable may explain.
 func Load(path string, environ []string) (*Config, []string, error) {
 	lookupEnv := lookupIn(environ)
 	c := defaults()
@@ -258,13 +259,14 @@ func Load(path string, environ []string) (*Config, []string, error) {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
+	warnings := unknownOverrides(environ, referenced)
 	if err := applyEnv(c, lookupEnv); err != nil {
-		return nil, nil, err
+		return nil, warnings, err
 	}
 	if err := c.resolve(); err != nil {
-		return nil, nil, err
+		return nil, warnings, err
 	}
-	warnings := append(unknownOverrides(environ, referenced), c.Seed.ignoredKeys()...)
+	warnings = append(warnings, c.Seed.warnings()...)
 	validationWarnings, err := c.validate()
 	return c, append(warnings, validationWarnings...), err
 }
@@ -294,6 +296,10 @@ func (c *Config) resolve() error {
 			if line = strings.TrimSpace(line); line != "" {
 				c.Hydra.SystemSecrets = append(c.Hydra.SystemSecrets, line)
 			}
+		}
+		if len(c.Hydra.SystemSecrets) == 0 {
+			// A secret not provisioned yet, rather than the fallback mode.
+			return errors.New("hydra.system_secrets_file: holds no secret; for the fallback mode, leave the key empty")
 		}
 	}
 	return nil
