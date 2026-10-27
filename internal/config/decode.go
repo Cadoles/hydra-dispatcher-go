@@ -32,19 +32,27 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 		}
 		return err
 	}
-	var next yaml.Node
-	if err := dec.Decode(&next); !errors.Is(err, io.EOF) {
+	for {
+		// An empty document, such as a trailing ---, holds nothing to lose.
+		var next yaml.Node
+		err := dec.Decode(&next)
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return err
 		}
-		line := next.Line
-		if len(next.Content) > 0 {
-			line = next.Content[0].Line
+		if len(next.Content) > 0 && next.Content[0].ShortTag() != nullTag {
+			return fmt.Errorf("line %d: a second YAML document would be ignored, remove it", next.Content[0].Line)
 		}
-		return fmt.Errorf("line %d: a second YAML document would be ignored, remove it", line)
 	}
 
-	p := prepare{lookupEnv: lookupEnv, done: map[*yaml.Node]bool{}}
+	p := prepare{
+		lookupEnv: lookupEnv,
+		done:      map[*yaml.Node]bool{},
+		walking:   map[*yaml.Node]bool{},
+		walked:    map[visit]bool{},
+	}
 	p.walk(&doc, reflect.TypeFor[Config](), "")
 	if err := errors.Join(p.errs...); err != nil {
 		return err
@@ -53,6 +61,7 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 		return err
 	}
 	c.Seed.NullSettings = nullSettings(&doc)
+	nullScopes(&doc, c.Seed.OAuth2Clients)
 	return nil
 }
 
@@ -60,7 +69,15 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 type prepare struct {
 	lookupEnv func(string) (string, bool)
 	done      map[*yaml.Node]bool // expanded once, even when aliased
+	walking   map[*yaml.Node]bool // anchored nodes being walked, to refuse a cycle
+	walked    map[visit]bool      // anchors walked through an alias
 	errs      []error
+}
+
+// visit is an anchor walked as a type; nil for values without a schema.
+type visit struct {
+	n *yaml.Node
+	t reflect.Type
 }
 
 func (p *prepare) fail(n *yaml.Node, path, format string, args ...any) {
@@ -72,6 +89,7 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
+	defer p.enter(n)()
 	switch n.Kind {
 	case yaml.DocumentNode:
 		for _, child := range n.Content {
@@ -79,7 +97,7 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 		}
 		return
 	case yaml.AliasNode:
-		p.walk(n.Alias, t, path)
+		p.alias(n, t, path, func() { p.walk(n.Alias, t, path) })
 		return
 	case yaml.ScalarNode:
 		p.scalar(n, path, t.Kind() == reflect.Interface)
@@ -131,11 +149,12 @@ func (p *prepare) mapping(n *yaml.Node, t reflect.Type, path string) {
 
 // values expands every scalar under n, without checking keys.
 func (p *prepare) values(n *yaml.Node, path string, keepQuoted bool) {
+	defer p.enter(n)()
 	switch n.Kind {
 	case yaml.ScalarNode:
 		p.scalar(n, path, keepQuoted)
 	case yaml.AliasNode:
-		p.values(n.Alias, path, keepQuoted)
+		p.alias(n, nil, path, func() { p.values(n.Alias, path, keepQuoted) })
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			p.values(n.Content[i+1], join(path, n.Content[i].Value), keepQuoted)
@@ -147,12 +166,36 @@ func (p *prepare) values(n *yaml.Node, path string, keepQuoted bool) {
 	}
 }
 
+// enter marks an anchored node as being walked, until the returned function
+// runs.
+func (p *prepare) enter(n *yaml.Node) (leave func()) {
+	if n.Anchor == "" || p.walking[n] {
+		return func() {}
+	}
+	p.walking[n] = true
+	return func() { delete(p.walking, n) }
+}
+
+// alias walks the anchor of n once per type: aliases cannot multiply the work
+// (yaml.v3 bounds them only when decoding), and an anchor that contains
+// itself is an error rather than an endless walk.
+func (p *prepare) alias(n *yaml.Node, t reflect.Type, path string, walk func()) {
+	switch v := (visit{n.Alias, t}); {
+	case p.walking[n.Alias]:
+		p.fail(n, path, "anchor %q contains itself", n.Value)
+	case !p.walked[v]:
+		p.walked[v] = true
+		walk()
+	}
+}
+
 // scalar expands ${VAR} in n. An expanded value loses its quoting and is
 // typed by what it became ("${TIMEOUT:-5s}" decodes as a duration,
-// "${UI:-false}" as a boolean), with two exceptions. It is never null: "" stays
-// an empty string, so an empty variable empties a list instead of restoring
-// its default. Under an any-typed key (app options), a quoted value stays a
-// string: "${CLIENT_ID}" holding 0123 must not become the number 83.
+// "${UI:-false}" as a boolean), with three exceptions. An explicit tag stays:
+// !!str ${CLIENT_ID} is a string. It is never null: "" stays an empty string,
+// so an empty variable empties a list instead of restoring its default. Under
+// an any-typed key (app options), a quoted value stays a string:
+// "${CLIENT_ID}" holding 0123 must not become the number 83.
 func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
 	if p.done[n] {
 		return
@@ -171,9 +214,13 @@ func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
 		return
 	}
 	quoted := n.Style&(yaml.SingleQuotedStyle|yaml.DoubleQuotedStyle|yaml.LiteralStyle|yaml.FoldedStyle) != 0
-	n.Value, n.Tag, n.Style = v, "", 0
-	if (keepQuoted && quoted) || n.ShortTag() == nullTag {
-		n.Tag = strTag
+	n.Value, n.Style = v, n.Style&yaml.TaggedStyle
+	if n.Style == 0 {
+		// The parser tagged the reference itself (!!str): let the value decide.
+		n.Tag = ""
+		if (keepQuoted && quoted) || n.ShortTag() == nullTag {
+			n.Tag = strTag
+		}
 	}
 }
 
@@ -194,7 +241,29 @@ func nullSettings(doc *yaml.Node) []string {
 	return keys
 }
 
+// nullScopes gives no scope to the clients whose scopes are null, as Symfony
+// does: only absent scopes get the default, admin:flows.
+func nullScopes(doc *yaml.Node, clients []SeedClient) {
+	seq := mappingValue(mappingValue(doc, "dispatcher"), "oauth2_clients")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return
+	}
+	i := 0
+	for _, item := range seq.Content {
+		if deref(item).ShortTag() == nullTag || i == len(clients) {
+			continue // the decoder drops a null entry
+		}
+		if s := mappingValue(item, "scopes"); s != nil && s.ShortTag() == nullTag {
+			clients[i].Scopes = &List{}
+		}
+		i++
+	}
+}
+
 func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	if n == nil {
+		return nil
+	}
 	if n = deref(n); n.Kind == yaml.DocumentNode && len(n.Content) == 1 {
 		n = deref(n.Content[0])
 	}

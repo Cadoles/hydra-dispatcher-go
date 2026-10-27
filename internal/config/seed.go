@@ -3,6 +3,7 @@ package config
 import (
 	"cmp"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -132,7 +133,8 @@ func (s *SeedStep) UnmarshalYAML(n *yaml.Node) error {
 type SeedClient struct {
 	ID     string `yaml:"id"`
 	Secret string `yaml:"secret"`
-	// Scopes is nil until Load applies the Symfony default, admin:flows.
+	// Scopes is nil until Load applies the Symfony default, admin:flows, to
+	// absent scopes; null ones are no scope, as in Symfony.
 	Scopes *List `yaml:"scopes"`
 }
 
@@ -152,10 +154,10 @@ func (s *Seed) resolve() {
 	}
 }
 
-// validate refuses what Symfony refused (missing ids, URLs, method, title,
-// description, secret) and what the Go schema forbids: duplicate ids, a flow
-// without steps, a step on an undeclared app, an app or a position twice in a
-// flow. Messages never quote a client secret.
+// validate refuses what Symfony refused (missing or malformed ids, URLs,
+// method, title, description, secret) and what the Go schema forbids:
+// duplicate ids, a flow without steps, a step on an undeclared app, an app or
+// a position twice in a flow. Messages never quote a client secret.
 func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	apps := map[string]bool{}
 	for i, a := range s.Apps {
@@ -215,9 +217,6 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 		if c.Secret == "" {
 			fail(path+".secret", "is required")
 		}
-		if slices.Contains(*c.Scopes, "") {
-			fail(path+".scopes", "contains an empty scope")
-		}
 	}
 
 	if s.ChallengeTTL != nil && *s.ChallengeTTL <= 0 {
@@ -228,10 +227,16 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	}
 }
 
+// resourceID is Symfony's ResourceId: an id is a path segment of the admin
+// API (/admin/v1/apps/{id}).
+var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
 func uniqueID(fail func(path, format string, args ...any), path, id string, seen map[string]bool) {
 	switch {
 	case id == "":
 		fail(path+".id", "is required")
+	case !resourceID.MatchString(id):
+		fail(path+".id", "%q is not an id: up to 128 letters, digits, '.', '_' or '-', starting with a letter or a digit", id)
 	case seen[id]:
 		fail(path+".id", "%q is declared twice", id)
 	}

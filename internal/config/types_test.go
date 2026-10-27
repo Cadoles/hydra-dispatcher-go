@@ -75,7 +75,7 @@ func TestListAndLocalized(t *testing.T) {
 		Explicit *List     `yaml:"explicit"`
 	}
 	err := yaml.Unmarshal([]byte(`
-seq: [a, b]
+seq: [a, " b ", "", "c,d"]
 comma: "a, b,,c "
 keys: "`+hexKey+`,`+base64Key+`"
 text: http://example.org/icon.svg
@@ -88,7 +88,9 @@ explicit: []
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(doc.Seq, "|") != "a|b" || strings.Join(doc.Comma, "|") != "a|b|c" || len(doc.Keys) != 2 ||
+	// Items are trimmed and empty ones dropped in both forms; a sequence item
+	// keeps its commas.
+	if strings.Join(doc.Seq, "|") != "a|b|c,d" || strings.Join(doc.Comma, "|") != "a|b|c" || len(doc.Keys) != 2 ||
 		doc.Text[""] != "http://example.org/icon.svg" || doc.PerLang["en"] != "Hello" ||
 		len(doc.Partial) != 1 || doc.Partial["fr"] != "Bonjour" || doc.Nulls != nil || doc.Blank != nil ||
 		doc.Explicit == nil || len(*doc.Explicit) != 0 {

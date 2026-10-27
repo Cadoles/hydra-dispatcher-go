@@ -241,12 +241,17 @@ func defaults() *Config {
 func Load(path string, environ []string) (*Config, []string, error) {
 	lookupEnv := lookupIn(environ)
 	c := defaults()
+	referenced := map[string]bool{}
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := decodeFile(data, c, lookupEnv); err != nil {
+		lookupRef := func(name string) (string, bool) {
+			referenced[name] = true
+			return lookupEnv(name)
+		}
+		if err := decodeFile(data, c, lookupRef); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
@@ -256,7 +261,7 @@ func Load(path string, environ []string) (*Config, []string, error) {
 	if err := c.resolve(); err != nil {
 		return nil, nil, err
 	}
-	warnings := append(unknownOverrides(environ), c.Seed.ignoredKeys()...)
+	warnings := append(unknownOverrides(environ, referenced), c.Seed.ignoredKeys()...)
 	validationWarnings, err := c.validate()
 	return c, append(warnings, validationWarnings...), err
 }

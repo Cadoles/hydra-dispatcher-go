@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,9 +13,13 @@ import (
 	"time"
 )
 
+// A key serves one use only: tests that set several take distinct ones.
 var (
-	hexKey    = strings.Repeat("ab", 32)
-	base64Key = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	hexKey     = strings.Repeat("ab", 32)
+	hexKey2    = strings.Repeat("cd", 32)
+	hexKey3    = strings.Repeat("ef", 32)
+	base64Key  = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	base64Key2 = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("m", 32)))
 )
 
 // envOf turns a map into an os.Environ() list.
@@ -68,8 +73,8 @@ func TestDesignDocExample(t *testing.T) {
 		"HYDRA_SYSTEM_SECRETS":      "youReallyNeedToChangeThis,an-older-system-secret",
 		"DISPATCHER_COOKIE_KEY":     hexKey,
 		"DISPATCHER_ENCRYPTION_KEY": base64Key,
-		"DISPATCHER_CHALLENGE_KEY":  hexKey,
-		"DISPATCHER_WEBHOOK_KEY":    hexKey,
+		"DISPATCHER_CHALLENGE_KEY":  hexKey2,
+		"DISPATCHER_WEBHOOK_KEY":    hexKey3,
 		"DATABASE_URL":              "postgres://lasql:lasql@postgres:5432/dispatcher",
 	}))
 	if err != nil {
@@ -117,15 +122,72 @@ func TestEveryKeyIsRead(t *testing.T) {
 		t.Fatalf("%d keys, want %d", len(got), len(defaultKeys))
 	}
 	for i, k := range got {
-		if k.path == "store.backend" { // postgres is its only value
+		// postgres is the only store; pinning is refused until implemented.
+		if k.path == "store.backend" || k.path == "tls.pinned_spki_sha256" {
 			continue
 		}
 		if reflect.DeepEqual(k.field.Interface(), defaultKeys[i].field.Interface()) {
 			t.Errorf("%s = %v, its default: the file value is not read", k.path, k.field.Interface())
 		}
 	}
+	// Unread, these lists would copy the admin one, which differs from their
+	// nil default too: check their values.
+	if !slices.Equal(*c.Security.EmulatedAPIAuthorizedHosts, List{"10.3.0.0/16"}) || !slices.Equal(*c.Security.MetricsAuthorizedHosts, List{"10.4.0.0/16"}) {
+		t.Errorf("emulated = %v, metrics = %v", *c.Security.EmulatedAPIAuthorizedHosts, *c.Security.MetricsAuthorizedHosts)
+	}
 	if !slices.Equal(c.UI.CSPExtra["font-src"], List{"https://fonts.gstatic.com"}) {
 		t.Errorf("ui.csp_extra = %v", c.UI.CSPExtra)
+	}
+}
+
+// Every seed setting, each with its own value, so that two swapped tags show.
+func TestSeedSettings(t *testing.T) {
+	c, _, err := load(t, `
+dispatcher:
+  app_auto_select: true
+  consent_auto_accept: false
+  aggregate_amr_from_login_request: true
+  challenge_ttl: 1800
+  remember: false
+  remember_for: 7d
+  login_accept_webhook_url: http://hooks/login
+  consent_accept_webhook_url: http://hooks/consent
+  supported_locales: [en, de]
+  default_locale: en
+  fallback_locale: de
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := c.Seed.SeedSettings
+	v := reflect.ValueOf(s)
+	for i := range v.NumField() {
+		if v.Field(i).IsNil() {
+			t.Errorf("%s is not read", v.Type().Field(i).Name)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	for _, check := range []struct {
+		name      string
+		got, want any
+	}{
+		{"app_auto_select", *s.AppAutoSelect, true},
+		{"consent_auto_accept", *s.ConsentAutoAccept, false},
+		{"aggregate_amr_from_login_request", *s.AggregateAMRFromLoginRequest, true},
+		{"challenge_ttl", s.ChallengeTTL.Std(), 30 * time.Minute},
+		{"remember", *s.Remember, false},
+		{"remember_for", s.RememberFor.Std(), 7 * 24 * time.Hour},
+		{"login_accept_webhook_url", *s.LoginAcceptWebhookURL, "http://hooks/login"},
+		{"consent_accept_webhook_url", *s.ConsentAcceptWebhookURL, "http://hooks/consent"},
+		{"supported_locales", *s.SupportedLocales, List{"en", "de"}},
+		{"default_locale", *s.DefaultLocale, "en"},
+		{"fallback_locale", *s.FallbackLocale, "de"},
+	} {
+		if !reflect.DeepEqual(check.got, check.want) {
+			t.Errorf("%s = %#v, want %#v", check.name, check.got, check.want)
+		}
 	}
 }
 
@@ -208,6 +270,27 @@ func TestSymfonySeed(t *testing.T) {
 	if cl := s.OAuth2Clients[0]; cl.ID != "admin" || cl.Secret != "s3cret" || !slices.Equal(*cl.Scopes, List{"admin:flows"}) {
 		t.Errorf("client = %+v", cl)
 	}
+	// Scopes absent get the default; null ones are none, as in Symfony. The
+	// null entry the decoder drops does not shift the clients.
+	c, _, err = load(t, `
+dispatcher:
+  oauth2_clients:
+    - ~
+    - { id: absent, secret: s }
+    - { id: nulled, secret: s, scopes: ~ }
+    - { id: blank, secret: s, scopes: }
+    - { id: empty, secret: s, scopes: [] }
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var scopes []string
+	for _, cl := range c.Seed.OAuth2Clients {
+		scopes = append(scopes, cl.ID+"="+strings.Join(*cl.Scopes, ","))
+	}
+	if !slices.Equal(scopes, []string{"absent=admin:flows", "nulled=", "blank=", "empty="}) {
+		t.Errorf("scopes = %q", scopes)
+	}
 	// login_accept_webhook_url: ~ clears the webhook, as Symfony's --force did.
 	if !slices.Equal(s.NullSettings, []string{"login_accept_webhook_url", "consent_accept_webhook_url"}) || s.LoginAcceptWebhookURL != nil {
 		t.Errorf("null settings = %v", s.NullSettings)
@@ -242,7 +325,8 @@ admin:
 		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE":   "0.1",
 		"DISPATCHER_HYDRA_SYSTEM_SECRETS":              "youReallyNeedToChangeThis,another-secret",
 		"DISPATCHER_HYDRA_VERSION":                     "2.3",
-		"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS":  hexKey + "," + base64Key,
+		"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS":  hexKey2 + "," + base64Key2,
+		"DISPATCHER_ADMIN_API_PUBLIC_KEY":              pem,
 	})))
 	if err != nil {
 		t.Fatal(err)
@@ -264,17 +348,28 @@ admin:
 		{"hydra.system_secrets", c.Hydra.SystemSecrets, List{"youReallyNeedToChangeThis", "another-secret"}},
 		{"hydra.version", c.Hydra.Version, "2.3"},
 		{"secrets.encryption_keys_previous", len(c.Secrets.EncryptionKeysPrevious), 2},
+		{"admin.api.public_key", c.Admin.API.PublicKey, pem},
 	} {
 		if !reflect.DeepEqual(check.got, check.want) {
 			t.Errorf("%s = %#v, want %#v", check.name, check.got, check.want)
 		}
 	}
 
-	if _, _, err := Load(path, envOf(required(map[string]string{"DISPATCHER_HYDRA_TIMEOUT": "soon"}))); err == nil ||
-		!strings.Contains(err.Error(), "DISPATCHER_HYDRA_TIMEOUT") || strings.Contains(err.Error(), "line 0") {
-		t.Errorf("invalid override: err = %v, want it to name the variable, without a line", err)
+	for name, value := range map[string]string{
+		"DISPATCHER_HYDRA_TIMEOUT":                   "soon",
+		"DISPATCHER_HYDRA_MAX_IN_FLIGHT":             "many",
+		"DISPATCHER_ADMIN_UI_ENABLED":                "maybe",
+		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE": "half",
+	} {
+		if _, _, err := Load(path, envOf(required(map[string]string{name: value}))); err == nil ||
+			!strings.Contains(err.Error(), name+" (") || strings.Contains(err.Error(), "line 0") {
+			t.Errorf("invalid %s: err = %v, want it to name the variable, without a line", name, err)
+		}
 	}
 }
+
+// A multi-line value, quoted or not, reaches a string key unchanged.
+const pem = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE: #not a comment\n  'single' \"double\"\n-----END PUBLIC KEY-----\n"
 
 // An empty variable empties a string, a list or a key, even over a value of
 // the file; it is an error elsewhere. "~" and "null" are text, not null.
@@ -308,14 +403,16 @@ observability:
 }
 
 // A DISPATCHER_<SECTION>_* variable that names no key is a typo: warned
-// about. Other DISPATCHER_* names are free for ${VAR} references.
+// about, unless the file references it. Other DISPATCHER_* names are free for
+// ${VAR} references.
 func TestUnknownOverrides(t *testing.T) {
-	_, warnings, err := load(t, "", map[string]string{
+	_, warnings, err := load(t, "store:\n  dsn: \"postgres://u:${DISPATCHER_STORE_PASSWORD}@db/d\"\n", map[string]string{
 		"DISPATCHER_SERVER_BASEURL":      "http://typo",
 		"DISPATCHER_UI_CSP_EXTRA":        "font-src",
 		"DISPATCHER_DISPATCHER_REMEMBER": "true",
 		"DISPATCHER_COOKIE_KEY":          hexKey,
 		"DISPATCHER_UPSTREAM":            "dispatcher:80",
+		"DISPATCHER_STORE_PASSWORD":      "pw",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +422,7 @@ func TestUnknownOverrides(t *testing.T) {
 			t.Errorf("no warning for %s in %q", name, warnings)
 		}
 	}
-	for _, name := range []string{"DISPATCHER_COOKIE_KEY", "DISPATCHER_UPSTREAM", "DISPATCHER_SERVER_BASE_URL"} {
+	for _, name := range []string{"DISPATCHER_COOKIE_KEY", "DISPATCHER_UPSTREAM", "DISPATCHER_SERVER_BASE_URL", "DISPATCHER_STORE_PASSWORD"} {
 		if hasWarning(warnings, name) {
 			t.Errorf("warning for %s in %q", name, warnings)
 		}
@@ -440,6 +537,8 @@ admin:
   ui: { enabled: "${ADMIN_UI:-false}" }
   api:
     token_ttl: ${TTL:-900}
+    private_key: "${PEM}"
+    public_key: ${PEM}
 observability:
   sentry: { environment: "${SENTRY_ENV:-123}", release: "$${NOT_EXPANDED}" }
 dispatcher:
@@ -452,6 +551,7 @@ dispatcher:
         literal: "0123"
         quoted: "${CLIENT_ID}"
         plain: ${CLIENT_ID}
+        tagged: !!str ${CLIENT_ID}
         flag: ${FLAG}
         empty: "${UNSET}"
   oauth2_clients:
@@ -468,6 +568,7 @@ dispatcher:
 		"CLIENT_ID":           "0123",
 		"FLAG":                "true",
 		"TILDE":               "~",
+		"PEM":                 pem,
 	})))
 	if err != nil {
 		t.Fatal(err)
@@ -486,12 +587,16 @@ dispatcher:
 		{"hydra.version", c.Hydra.Version, "2.3"},
 		{"admin.ui.enabled", c.Admin.UI.Enabled, false},
 		{"admin.api.token_ttl", c.Admin.API.TokenTTL.Std(), 900 * time.Second},
+		{"admin.api.private_key", c.Admin.API.PrivateKey, pem},
+		{"admin.api.public_key", c.Admin.API.PublicKey, pem},
 		{"observability.sentry.environment", c.Observability.Sentry.Environment, "123"},
 		{"observability.sentry.release", c.Observability.Sentry.Release, "${NOT_EXPANDED}"},
 		// Options keep their YAML types: quoted text stays text.
 		{"options.literal", options["literal"], "0123"},
 		{"options.quoted", options["quoted"], "0123"},
 		{"options.plain", options["plain"], 83},
+		// An explicit tag survives the expansion.
+		{"options.tagged", options["tagged"], "0123"},
 		{"options.flag", options["flag"], true},
 		{"options.empty", options["empty"], ""},
 		{"dispatcher.oauth2_clients[0].secret", c.Seed.OAuth2Clients[0].Secret, "s3cr3t: with colon"},
@@ -504,23 +609,25 @@ dispatcher:
 }
 
 // An empty variable gives an empty value, never the default of the key: an
-// allowlist without address, as with DISPATCHER_* variables.
+// allowlist without address, as with DISPATCHER_* variables. In a sequence,
+// it gives no item.
 func TestEmptyExpansion(t *testing.T) {
 	c, _, err := load(t, `
 server:
   trusted_proxies: ${UNSET}
   cookie_path: "${COOKIE_PATH:-/}"
 security:
-  admin_authorized_hosts: ["10.9.0.0/16"]
+  admin_authorized_hosts: ["10.9.0.0/16", "${UNSET}"]
   metrics_authorized_hosts: "${METRICS}"
-  emulated_api_authorized_hosts: ${UNSET}
+  emulated_api_authorized_hosts: ["${UNSET}"]
 `, map[string]string{"METRICS": ""})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Server.TrustedProxies) != 0 || len(*c.Security.MetricsAuthorizedHosts) != 0 || len(*c.Security.EmulatedAPIAuthorizedHosts) != 0 || c.Server.CookiePath != "/" {
-		t.Errorf("trusted = %v, metrics = %v, emulated = %v, cookie_path = %q",
-			c.Server.TrustedProxies, *c.Security.MetricsAuthorizedHosts, *c.Security.EmulatedAPIAuthorizedHosts, c.Server.CookiePath)
+	if len(c.Server.TrustedProxies) != 0 || len(*c.Security.MetricsAuthorizedHosts) != 0 || len(*c.Security.EmulatedAPIAuthorizedHosts) != 0 ||
+		!slices.Equal(c.Security.AdminAuthorizedHosts, List{"10.9.0.0/16"}) || c.Server.CookiePath != "/" {
+		t.Errorf("trusted = %v, metrics = %v, emulated = %v, admin = %v, cookie_path = %q", c.Server.TrustedProxies,
+			*c.Security.MetricsAuthorizedHosts, *c.Security.EmulatedAPIAuthorizedHosts, c.Security.AdminAuthorizedHosts, c.Server.CookiePath)
 	}
 	for _, content := range []string{
 		"hydra:\n  timeout: \"${UNSET}\"\n",
@@ -626,6 +733,25 @@ dispatcher:
 	if _, _, err := load(t, "x: &x { nope: 1 }\n", nil); err == nil {
 		t.Error("unknown top-level key holding an anchor: want an error")
 	}
+	// An anchor that contains itself is an error, not an endless walk.
+	for content, want := range map[string]string{
+		"server:\n  trusted_proxies: &a [*a]\n":                          "line 2: server.trusted_proxies[0]: anchor \"a\" contains itself",
+		"dispatcher:\n  apps:\n    - { id: a, options: &o { x: *o } }\n": "line 3: dispatcher.apps[0].options.x: anchor \"o\" contains itself",
+		"dispatcher:\n  flows: &f [{ id: f, steps: *f }]\n":              "contains itself",
+	} {
+		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", content, err, want)
+		}
+	}
+	// Ten levels of ten aliases: 10^10 values unfolded, walked once each.
+	var bomb strings.Builder
+	bomb.WriteString("dispatcher:\n  apps:\n    - id: a\n      options:\n        l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n")
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(&bomb, "        l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d, ", i-1), 10), ", "))
+	}
+	if _, _, err := load(t, bomb.String(), nil); err == nil || !strings.Contains(err.Error(), "excessive aliasing") {
+		t.Errorf("alias bomb: err = %v", err)
+	}
 	// options take any key, an app does not.
 	if _, _, err := load(t, `
 dispatcher:
@@ -672,7 +798,9 @@ dispatcher:
 }
 
 func TestDocuments(t *testing.T) {
-	for _, content := range []string{"", "# nothing but a comment\n", "---\n", "---\nserver: { listen: \":1\" }\n"} {
+	for _, content := range []string{"", "# nothing but a comment\n", "---\n", "---\nserver: { listen: \":1\" }\n",
+		// An empty second document holds nothing to lose.
+		"server: { listen: \":1\" }\n---\n", "server: { listen: \":1\" }\n---\n# end\n---\n~\n"} {
 		if _, _, err := load(t, content, nil); err != nil {
 			t.Errorf("%q: %v", content, err)
 		}
@@ -711,6 +839,14 @@ func TestValidation(t *testing.T) {
 		{"logout propagation", map[string]string{"DISPATCHER_LOGOUT_PROPAGATE_WITHOUT_RECORD": "some"}, "logout.propagate_without_record"},
 		{"missing CA file", map[string]string{"DISPATCHER_TLS_CA_FILE": "/nonexistent/ca.pem"}, "tls.ca_file"},
 		{"overflowing duration", map[string]string{"DISPATCHER_ADMIN_CLIENT_SECRET_MAX_AGE": "10000000000"}, "too long"},
+		{"NaN ratio", map[string]string{"DISPATCHER_OBSERVABILITY_TRACING_SAMPLER_RATIO": ".nan"}, "observability.tracing.sampler_ratio"},
+		{"no block", map[string]string{"DISPATCHER_SECURITY_FAILURE_RATE_LIMIT_BLOCK": "0"}, "security.failure_rate_limit.block"},
+		{"negative replicas", map[string]string{"DISPATCHER_SERVER_REPLICAS_HINT": "-1"}, "server.replicas_hint"},
+		{"negative pool", map[string]string{"DISPATCHER_STATE_REDIS_POOL_SIZE": "-1"}, "state.redis_pool_size"},
+		{"audit file without path", map[string]string{"DISPATCHER_OBSERVABILITY_AUDIT_OUTPUT": "file:"}, "observability.audit.output"},
+		{"pinning", map[string]string{"DISPATCHER_TLS_PINNED_SPKI_SHA256": "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="}, "tls.pinned_spki_sha256: is not supported yet"},
+		{"shared key", map[string]string{"DISPATCHER_SECRETS_WEBHOOK_SIGNING_KEY": hexKey}, "secrets.webhook_signing_key: shares a key with secrets.cookie_key"},
+		{"shared previous key", map[string]string{"DISPATCHER_SECRETS_CHALLENGE_KEYS_PREVIOUS": hexKey}, "secrets.challenge_key: shares a key with secrets.cookie_key"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -718,6 +854,16 @@ func TestValidation(t *testing.T) {
 				t.Errorf("err = %v, want it to name %s", err, tt.want)
 			}
 		})
+	}
+
+	// A key may stay in its own keyring, as during a rotation.
+	if _, _, err := Load("", envOf(required(map[string]string{"DISPATCHER_SECRETS_COOKIE_KEYS_PREVIOUS": hexKey}))); err != nil {
+		t.Errorf("active key also previous: %v", err)
+	}
+	// The lists copying the admin one do not repeat its errors.
+	_, _, err = Load("", envOf(required(map[string]string{"DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": "nowhere"})))
+	if err == nil || strings.Count(err.Error(), "nowhere") != 1 {
+		t.Errorf("invalid admin list: err = %v, want one error", err)
 	}
 }
 
@@ -762,6 +908,7 @@ func TestNoSecretInErrors(t *testing.T) {
 		{"DISPATCHER_SERVER_BASE_URL": "https://user:hunter2@dispatcher.example/?q=1"},
 		{"DISPATCHER_HYDRA_ADMIN_URL": "ftp://admin:hunter2@hydra:4445"},
 		{"DISPATCHER_HYDRA_ADMIN_URL": "http://admin:hunter2@[::1"},
+		{"DISPATCHER_HYDRA_ADMIN_URL": "http://hydra:4445/?token=hunter2#hunter2"},
 		{"DISPATCHER_SECRETS_COOKIE_KEY": "hunter2"},
 		{"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS": hexKey + ",hunter2"},
 	} {
@@ -773,6 +920,7 @@ func TestNoSecretInErrors(t *testing.T) {
 	for _, content := range []string{
 		"dispatcher:\n  oauth2_clients:\n    - { id: a, secret: \"hun${ter2\" }\n",
 		"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://u:hunter2@a\", consent_url: \"ftp://u:hunter2@a\", method: m }\n",
+		"dispatcher:\n  apps:\n    - { id: a, login_url: \"ftp://a/?k=hunter2#hunter2\", consent_url: \"http://a\", method: m }\n",
 	} {
 		_, _, err := load(t, content, nil)
 		if err == nil || strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "hun${ter2") {
@@ -786,11 +934,16 @@ func TestCSPExtra(t *testing.T) {
 		t.Errorf("valid csp_extra: err = %v", err)
 	}
 	for content, want := range map[string]string{
-		"ui:\n  csp_extra: { default-src: [\"*\"] }\n":                   "ui.csp_extra.default-src: is not one of",
-		"ui:\n  csp_extra: { img-src: [\"https://a; script-src *\"] }\n": "is not a single source",
-		"ui:\n  csp_extra: { script-src: [\"'unsafe-inline'\"] }\n":      "would allow inline or arbitrary scripts",
-		"ui:\n  csp_extra: { script-src: [\"*\"] }\n":                    "would allow inline or arbitrary scripts",
-		"ui:\n  csp_extra: { font-src: [\"\"] }\n":                       "is not a single source",
+		"ui:\n  csp_extra: { default-src: [\"*\"] }\n":                    "ui.csp_extra.default-src: is not one of",
+		"ui:\n  csp_extra: { img-src: [\"https://a; script-src *\"] }\n":  "is not a single source",
+		"ui:\n  csp_extra: { script-src: [\"'unsafe-inline'\"] }\n":       "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"*\"] }\n":                     "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"https:\"] }\n":                "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"blob:\"] }\n":                 "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"https://*.example.org\"] }\n": "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"'strict-dynamic'\"] }\n":      "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { script-src: [\"'nonce-abc'\"] }\n":           "would allow inline or arbitrary scripts",
+		"ui:\n  csp_extra: { img-src: [\"https://a\\nb\"] }\n":            "is not a single source",
 	} {
 		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", content, err, want)
@@ -817,6 +970,9 @@ dispatcher:
 	}
 	for name, tt := range map[string]struct{ content, want string }{
 		"missing app id":        {"dispatcher:\n  apps:\n    - { login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].id: is required"},
+		"app id with a slash":   {"dispatcher:\n  apps:\n    - { id: a/b, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].id: \"a/b\" is not an id"},
+		"flow id with a space":  {apps + "  flows:\n    - { id: \"f g\", title: T, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].id: \"f g\" is not an id"},
+		"long client id":        {"dispatcher:\n  oauth2_clients:\n    - { id: " + strings.Repeat("c", 129) + ", secret: s }\n", "dispatcher.oauth2_clients[0].id"},
 		"duplicate app":         {apps + "    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n", "dispatcher.apps[2].id: \"a\" is declared twice"},
 		"relative login URL":    {"dispatcher:\n  apps:\n    - { id: a, login_url: /login, consent_url: \"http://a\", method: m }\n", "dispatcher.apps[0].login_url"},
 		"missing consent URL":   {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", method: m }\n", "dispatcher.apps[0].consent_url: is required"},
@@ -831,7 +987,6 @@ dispatcher:
 		"null description":      {apps + "  flows:\n    - { id: f, title: T, description: { fr: ~ }, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].description: is required"},
 		"duplicate flow":        {apps + "  flows:\n    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }] }\n    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[1].id: \"f\" is declared twice"},
 		"missing client secret": {"dispatcher:\n  oauth2_clients:\n    - { id: c }\n", "dispatcher.oauth2_clients[0].secret: is required"},
-		"empty scope":           {"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s, scopes: [\"admin:flows\", \"\"] }\n", "dispatcher.oauth2_clients[0].scopes: contains an empty scope"},
 		"duplicate client":      {"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s }\n    - { id: c, secret: t }\n", "dispatcher.oauth2_clients[1].id"},
 		"challenge TTL":         {"dispatcher:\n  challenge_ttl: 0\n", "dispatcher.challenge_ttl: must be positive"},
 		"no locale":             {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},

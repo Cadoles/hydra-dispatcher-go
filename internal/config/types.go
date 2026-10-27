@@ -62,7 +62,10 @@ func times(n int64, unit time.Duration, s string) (time.Duration, error) {
 }
 
 // List accepts a YAML sequence or a comma-separated string, the form lists
-// take in environment variables ("10.0.0.0/8,172.16.0.0/12").
+// take in environment variables ("10.0.0.0/8,172.16.0.0/12"). Either way,
+// items are trimmed and empty ones dropped: ["${EXTRA_HOSTS}"] with the
+// variable empty is no address, as "${EXTRA_HOSTS}" is. A sequence item is
+// never split, so it may hold a comma.
 type List []string
 
 func (l *List) UnmarshalYAML(n *yaml.Node) error {
@@ -74,16 +77,16 @@ func (l *List) UnmarshalYAML(n *yaml.Node) error {
 		if err := n.Decode(&items); err != nil {
 			return err
 		}
-		*l = append(List{}, items...)
+		*l = compact(items)
 		return nil
 	}
-	*l = splitList(n.Value)
+	*l = compact(strings.Split(n.Value, ","))
 	return nil
 }
 
-func splitList(s string) List {
+func compact(items []string) List {
 	l := List{}
-	for _, item := range strings.Split(s, ",") {
+	for _, item := range items {
 		if item = strings.TrimSpace(item); item != "" {
 			l = append(l, item)
 		}

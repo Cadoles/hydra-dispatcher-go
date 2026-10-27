@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -130,6 +131,10 @@ func applyEnv(c *Config, lookupEnv func(string) (string, bool)) error {
 			node.Tag = strTag
 		}
 		if err := node.Decode(target.Addr().Interface()); err != nil {
+			var typeErr *yaml.TypeError
+			if errors.As(err, &typeErr) { // its message gives a line 0
+				return fmt.Errorf("%s (%s): %q is not a valid %s", k.name, k.path, v, target.Kind())
+			}
 			return fmt.Errorf("%s (%s): %w", k.name, k.path, err)
 		}
 	}
@@ -137,10 +142,11 @@ func applyEnv(c *Config, lookupEnv func(string) (string, bool)) error {
 }
 
 // unknownOverrides warns about the DISPATCHER_<SECTION>_* variables that
-// reach no key, typos mostly. Other DISPATCHER_* names stay free for ${VAR}
-// references, like DISPATCHER_COOKIE_KEY in the design document's example.
-func unknownOverrides(environ []string) []string {
-	known := map[string]bool{}
+// reach no key, typos mostly, unless the file references them. Other
+// DISPATCHER_* names stay free for ${VAR} references, like
+// DISPATCHER_COOKIE_KEY in the design document's example.
+func unknownOverrides(environ []string, referenced map[string]bool) []string {
+	known := maps.Clone(referenced)
 	for _, k := range envKeys(&Config{}) {
 		known[k.name] = true
 	}
