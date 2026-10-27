@@ -60,9 +60,11 @@ The full stack (Hydra, login apps, Postgres, Redis) runs from the sibling
 
 ## Fixture tools
 
-- `tools/recorder`: recording reverse proxy. `make capture` in `hydra-dev` puts
-  it in front of the dispatcher and between the dispatcher and Hydra; captured
-  exchanges are sorted per scenario under `testdata/protocol/`.
+- `tools/recorder`: recording reverse proxy. `make capture` in `hydra-dev`
+  builds it from `tools/recorder/Dockerfile` and puts it in front of the
+  dispatcher and between the dispatcher and Hydra; captured exchanges land in
+  `testdata/capture/` (gitignored) and are sorted per scenario under
+  `testdata/protocol/`.
 - `tools/flowfixtures`: records Hydra 2.2 login and consent challenges with the
   matching admin API responses, for `internal/hydra/flowcodec`. Run it against
   `make up-hydra22`:
