@@ -1,0 +1,72 @@
+# Snapshot of hydra-dev files/apps/dispatcher/dispatcher.yaml (Symfony seed
+# format). TestHydraDevSeed also reads the live file when hydra-dev is a sibling.
+# Full dispatcher configuration — ALL providers are loaded (no launcher /
+# per-selection merge anymore). Mounted directly into the dispatcher container
+# by compose.main.yaml. Add a provider by adding its app + flow entries here and
+# its compose service.
+dispatcher:
+  apps:
+    - id: hydra-oidc
+      login_url: http://oidc.hydra.test/login
+      consent_url: http://oidc.hydra.test/consent
+      logout_url: http://oidc.hydra.test/logout
+      method: oidc
+    - id: hydra-sql
+      login_url: http://sql.hydra.test/login
+      consent_url: http://sql.hydra.test/consent
+      logout_url: http://sql.hydra.test/logout
+      method: pwd
+    - id: hydra-2fa
+      login_url: http://2fa.hydra.test/login
+      consent_url: http://2fa.hydra.test/consent
+      logout_url: http://2fa.hydra.test/logout
+      method: otp
+
+  flows:
+    - id: hydra-oidc
+      steps:
+        - id: hydra-oidc
+          order: 0
+      title:
+        fr: Hydra OIDC
+        en: Hydra OIDC
+      description:
+        fr: Authentification via un fournisseur OIDC externe
+        en: Authentication via an external OIDC provider
+      icon_url: ~
+    - id: hydra-sql
+      steps:
+        - id: hydra-sql
+          order: 0
+      title:
+        fr: Hydra SQL
+        en: Hydra SQL
+      description:
+        fr: Authentification via SQL
+        en: SQL Authentication
+      icon_url: ~
+    - id: hydra-sql-2fa
+      steps:
+        - id: hydra-sql
+          order: 0
+        - id: hydra-2fa
+          order: 1
+      title:
+        fr: Hydra SQL 2FA
+        en: Hydra SQL 2FA
+      description:
+        fr: Authentification via SQL double facteur
+        en: SQL Authentication second factor
+      icon_url: ~
+
+  app_auto_select: false
+  consent_auto_accept: false
+  hydra_public_url: http://public.hydra.test
+  cache_providers:
+    - type: redis
+      dsn: redis://redis:6379
+  oauth2_clients:
+    - id: test
+      secret: test
+  session_ttl: 86400
+  aggregate_amr_from_login_request: false

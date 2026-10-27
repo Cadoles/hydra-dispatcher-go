@@ -9,7 +9,10 @@ tool (
 	honnef.co/go/tools/cmd/staticcheck
 )
 
-require golang.org/x/crypto v0.58.0
+require (
+	golang.org/x/crypto v0.58.0
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect

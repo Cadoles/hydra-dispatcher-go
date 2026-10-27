@@ -11,10 +11,28 @@ Go rewrite of the Symfony `hydra-dispatcher`. Work in progress: phase 0
 ## Commands
 
 ```
-dispatcher serve         run the HTTP server on :8080
-dispatcher healthcheck   probe /health of a local server (container HEALTHCHECK)
-dispatcher version       print the version
+dispatcher serve [-config dispatcher.yaml]   run the HTTP server
+dispatcher healthcheck [-url ...]            probe /health of a local server (container HEALTHCHECK)
+dispatcher version                           print the version
 ```
+
+## Configuration
+
+One YAML file (`internal/config`, example in
+`internal/config/testdata/design-doc.yaml`) describes the infrastructure; its
+`dispatcher:` block is the seed bootstrap writes to the database, in the
+Symfony `dispatcher.yaml` format. Without `-config`, the defaults and the
+environment are used.
+
+- Every value accepts `${VAR}` and `${VAR:-default}`.
+- `DISPATCHER_<SECTION>_<KEY>` overrides any infrastructure key, e.g.
+  `DISPATCHER_SERVER_BASE_URL`, `DISPATCHER_ADMIN_API_TOKEN_TTL=15m`,
+  `DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS=10.0.0.0/8,127.0.0.1`. The seed
+  and `ui.csp_extra` are not reachable this way.
+- Durations take `5s`, `30m`, `365d` or seconds (`900`); lists a YAML sequence
+  or a comma-separated string; keys 32 bytes in hex or base64.
+- Unknown keys are errors. Required: `server.base_url`, `hydra.admin_url`,
+  `store.dsn`, `secrets.cookie_key`, `secrets.challenge_key`.
 
 ## Development
 

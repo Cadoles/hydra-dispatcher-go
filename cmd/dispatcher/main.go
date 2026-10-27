@@ -16,13 +16,15 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 )
 
 // version is injected at build time: -ldflags "-X main.version=v1.2.3".
 var version = "dev"
 
-// listenAddr is fixed until the configuration file (server.listen) lands.
-const listenAddr = ":8080"
+// defaultHealthURL matches the default server.listen.
+const defaultHealthURL = "http://127.0.0.1:8080/health"
 
 // errUsage reports a command line error; usage has already been printed.
 var errUsage = errors.New("usage error")
@@ -94,15 +96,23 @@ func parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
 
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	configPath := fs.String("config", "", "configuration file (default: DISPATCHER_* variables only)")
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	cfg, warnings, err := config.Load(*configPath, os.LookupEnv)
+	if err != nil {
+		return fmt.Errorf("configuration: %w", err)
+	}
+	logger := newLogger(cfg.Observability)
 	slog.SetDefault(logger)
+	for _, w := range warnings {
+		logger.Warn("config.warning", "detail", w)
+	}
 
 	srv := &http.Server{
-		Addr:              listenAddr,
+		Addr:              cfg.Server.Listen,
 		Handler:           routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -134,6 +144,16 @@ func serve(ctx context.Context, args []string) error {
 	return nil
 }
 
+func newLogger(o config.Observability) *slog.Logger {
+	var level slog.Level
+	_ = level.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
+	opts := &slog.HandlerOptions{Level: level}
+	if o.LogFormat == "text" {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+}
+
 func routes() http.Handler {
 	mux := http.NewServeMux()
 	// Liveness only: answers as soon as the process serves, whatever the
@@ -148,7 +168,7 @@ func routes() http.Handler {
 // healthcheck lets a distroless image (no shell, no curl) run a HEALTHCHECK.
 func healthcheck(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
-	url := fs.String("url", "http://127.0.0.1"+listenAddr+"/health", "health endpoint to probe")
+	url := fs.String("url", defaultHealthURL, "health endpoint to probe")
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}

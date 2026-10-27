@@ -1,0 +1,87 @@
+# Example configuration of "Conception Dispatcher Go.md" v1.1.0, section
+# "Configuration et deploiement", copied verbatim: it must keep loading.
+server:
+  listen: ":8080"
+  base_url: "http://dispatcher.hydra.test"
+  trusted_proxies: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+  cookie_path: "/"
+hydra:
+  admin_url: "http://hydra:4445"
+  timeout: 5s
+  system_secrets: "${HYDRA_SYSTEM_SECRETS}"   # optionnel : secrets.system d'Hydra, séparés par des virgules (ou system_secrets_file) ; vide = repli
+  login_consent_ttl: 30m        # = ttl.login_consent_request d'Hydra
+security:
+  admin_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]   # /admin et /admin/v1
+  emulated_api_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]   # login apps
+  failure_rate_limit: { max: 20, per: 1m, block: 5m }
+  metrics_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+secrets:
+  cookie_key: "${DISPATCHER_COOKIE_KEY}"          # 32 octets : cookies remember et admin
+  encryption_key: "${DISPATCHER_ENCRYPTION_KEY}"   # 32 octets : secrets en base, clé active
+  encryption_keys_previous: []                     # déchiffrement seul, pour la rotation
+  challenge_key: "${DISPATCHER_CHALLENGE_KEY}"     # 32 octets : HMAC des challenges d'étape
+  webhook_signing_key: "${DISPATCHER_WEBHOOK_KEY}" # HMAC des requêtes webhook
+tls:
+  min_version: "1.2"             # suites conformes au guide TLS de l'ANSSI
+  ca_file: ""                    # CA dédiée pour Hydra, IdP admin et webhooks
+  pinned_spki_sha256: []         # épinglage optionnel
+  hsts_include_subdomains: false
+state:
+  redis_dsn: "${REDIS_DSN}"     # renseigné = Redis (voie privilégiée) ; vide = mémoire, instance unique
+remember:
+  backend: cookie               # cookie | postgres
+store:
+  backend: postgres             # postgres, seul backend supporté
+  dsn: "${DATABASE_URL}"
+admin:
+  ui: { enabled: true }
+  api:
+    enabled: true
+    private_key: "${OAUTH2_PRIVATE_KEY}"
+    public_key: "${OAUTH2_PUBLIC_KEY}"
+    token_ttl: 900                # jetons ES256 de 15 min
+    rate_limit_per_minute: 100
+  session: { idle_timeout: 30m, max_age: 8h, reauth_window: 5m }
+  hydra_clients: { enabled: true }
+  client_secret_max_age: 365d
+ui:
+  theme_dir: ""                 # vide = thème embarqué
+  reload: false                 # true en développement de thème
+  remember_last_flow: true      # présélection du dernier flow
+  csp_extra: {}                 # ex. font-src: ["https://fonts.gstatic.com"]
+  default_locale: fr
+  supported_locales: [fr, en]
+observability:
+  log_level: info
+  log_format: json              # json | text (développement)
+  access_log_sample: 1.0        # part des requêtes réussies journalisées
+  log_ip: truncated             # truncated | full | none (journaux applicatif et d'accès)
+  debug_max_duration: 1h        # durée maximale d'un passage temporaire en debug
+  sentry:
+    dsn: "${SENTRY_DSN}"          # vide = désactivé
+    environment: "${SENTRY_ENVIRONMENT}"
+    sample_rate: 1.0             # part des erreurs envoyées
+    traces_sample_rate: 0        # tracing de performance
+    max_events_per_minute: 60
+  metrics:
+    listen: ""                   # vide = /metrics sur le port principal ; ex. ":9090"
+    max_label_values: 200
+  audit:
+    output: stdout               # stdout | file:<chemin> | syslog
+    pseudonymize_subject: true
+  tracing:                       # les variables OTEL_* priment
+    enabled: false
+    endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    protocol: grpc               # grpc | http/protobuf
+    sampler_ratio: 0.01
+dispatcher:                      # graine, format inchangé ; session_ttl et cache_providers ignorés avec avertissement
+  apps: []
+  flows: []
+  oauth2_clients: []
+  app_auto_select: false
+  consent_auto_accept: false
+  challenge_ttl: 3600
+  remember: true
+  remember_for: 2629800
+logout:
+  propagate_without_record: all  # all | none : apps à déconnecter sans cookie de mémoire
