@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,6 +18,7 @@ var update = flag.Bool("update", false, "rewrite the golden files of testdata/em
 
 const (
 	hydra22   = "flowcodec/testdata/hydra-v2.2.0/"
+	hydra23   = "flowcodec/testdata/hydra-v2.3.0/"
 	symfony21 = "../../testdata/protocol/symfony-hydra-2.1/"
 )
 
@@ -76,16 +78,41 @@ func diff(want, got any, path string) []string {
 	return []string{path + ": " + string(w) + " -> " + string(g)}
 }
 
-func keys(t *testing.T, data []byte) []string {
-	t.Helper()
-	var m map[string]any
-	decode(t, data, &m)
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
+// missing lists the members of want absent from got, or of another JSON
+// type, through nested objects.
+func missing(want, got any, path string) []string {
+	wm, ok := want.(map[string]any)
+	if !ok {
+		return nil
 	}
-	slices.Sort(ks)
-	return ks
+	gm, _ := got.(map[string]any)
+	var out []string
+	for k, w := range wm {
+		g, ok := gm[k]
+		switch {
+		case !ok:
+			out = append(out, path+"."+k+": missing")
+		case w != nil && reflect.TypeOf(w) != reflect.TypeOf(g):
+			out = append(out, fmt.Sprintf("%s.%s: %T served as %T", path, k, w, g))
+		default:
+			out = append(out, missing(w, g, path+"."+k)...)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// servesSymfonyFields checks the login apps keep every field the Symfony
+// dispatcher served them, with its JSON type, client and oidc_context
+// included.
+func servesSymfonyFields(t *testing.T, symfonyExchange string, served []byte) {
+	t.Helper()
+	var want, got any
+	decode(t, body(t, symfonyExchange), &want)
+	decode(t, served, &got)
+	for _, m := range missing(want, got, "") {
+		t.Errorf("field served by Symfony: %s", m)
+	}
 }
 
 // withoutNulls drops null members: the SDK omits null optional fields
@@ -111,8 +138,8 @@ func withoutNulls(v any) any {
 	return v
 }
 
-// The SDK models must carry every value of Hydra's answers, for both
-// supported versions: whatever the emulated API re-serves comes through them.
+// The SDK models must carry every value of Hydra's answers, for every
+// supported version: whatever the emulated API re-serves comes through them.
 func TestModelsRoundTrip(t *testing.T) {
 	for _, tt := range []struct {
 		path  string
@@ -120,6 +147,8 @@ func TestModelsRoundTrip(t *testing.T) {
 	}{
 		{hydra22 + "login_request.json", func() any { return &ory.OAuth2LoginRequest{} }},
 		{hydra22 + "consent_request.json", func() any { return &ory.OAuth2ConsentRequest{} }},
+		{hydra23 + "login_request.json", func() any { return &ory.OAuth2LoginRequest{} }},
+		{hydra23 + "consent_request.json", func() any { return &ory.OAuth2ConsentRequest{} }},
 		{symfony21 + "14-sql-2fa-consent-skipped/0032-hydra-GET-admin_oauth2_auth_requests_login.json", func() any { return &ory.OAuth2LoginRequest{} }},
 		{symfony21 + "14-sql-2fa-consent-skipped/0069-hydra-GET-admin_oauth2_auth_requests_consent.json", func() any { return &ory.OAuth2ConsentRequest{} }},
 		{symfony21 + "13-logout/0029-hydra-GET-admin_oauth2_auth_requests_logout.json", func() any { return &ory.OAuth2LogoutRequest{} }},
@@ -171,62 +200,81 @@ func TestLoginRequestForApp(t *testing.T) {
 	var r ory.OAuth2LoginRequest
 	decode(t, body(t, hydra22+"login_request.json"), &r)
 	r.RequestedAccessTokenAudience = nil // as a decrypted flow has it
+	// A Hydra skip the dispatcher ignores: no app may see it.
+	r.Skip, r.Subject = true, "hydra-subject"
+	hydraChallenge := r.Challenge
 
-	first := golden(t, "login_request_first_step.json", LoginRequestForApp(r, Extensions{RestartURL: "http://dispatcher.hydra.test/?login_challenge=L"}))
+	first := golden(t, "login_request_first_step.json", LoginRequestForApp(r,
+		Step{Challenge: "step-login-challenge-1"},
+		Extensions{RestartURL: "http://dispatcher.hydra.test/?login_challenge=L"}))
 	var doc map[string]any
 	decode(t, first, &doc)
-	if !reflect.DeepEqual(doc["x_dispatcher_claims"], map[string]any{}) ||
+	if doc["challenge"] != "step-login-challenge-1" || doc["subject"] != "" || doc["skip"] != false ||
+		!reflect.DeepEqual(doc["x_dispatcher_claims"], map[string]any{}) ||
 		!reflect.DeepEqual(doc["requested_access_token_audience"], []any{}) ||
 		doc["x_dispatcher_restart_url"] != "http://dispatcher.hydra.test/?login_challenge=L" {
 		t.Errorf("first step = %s", first)
 	}
 
-	second := golden(t, "login_request_second_step.json", LoginRequestForApp(r, Extensions{
-		Claims: map[string]any{"email": "test2@test.com", "firstname": "Isabelle", "lastname": "Durand"},
-	}))
+	second := golden(t, "login_request_second_step.json", LoginRequestForApp(r,
+		Step{Challenge: "step-login-challenge-2", Subject: "test2@test.com"},
+		Extensions{Claims: map[string]any{"email": "test2@test.com", "firstname": "Isabelle", "lastname": "Durand"}}))
 	doc = nil
 	decode(t, second, &doc)
+	if doc["challenge"] != "step-login-challenge-2" || doc["subject"] != "test2@test.com" || doc["skip"] != false {
+		t.Errorf("second step = %s", second)
+	}
 	if _, ok := doc["x_dispatcher_restart_url"]; ok {
 		t.Error("x_dispatcher_restart_url served though empty")
 	}
-	if r.AdditionalProperties != nil && r.AdditionalProperties["x_dispatcher_claims"] != nil {
+	if r.Challenge != hydraChallenge || !r.Skip || r.Subject != "hydra-subject" ||
+		r.AdditionalProperties != nil && r.AdditionalProperties["x_dispatcher_claims"] != nil {
 		t.Error("LoginRequestForApp changed its argument")
 	}
 
-	// The login apps keep every field the Symfony dispatcher served them.
-	symfony := body(t, symfony21+"14-sql-2fa-consent-skipped/0051-front-GET-oauth2_auth_requests_login.json")
-	for _, k := range keys(t, symfony) {
-		if !slices.Contains(keys(t, second), k) {
-			t.Errorf("field %q served by Symfony is missing", k)
-		}
-	}
+	servesSymfonyFields(t, symfony21+"14-sql-2fa-consent-skipped/0051-front-GET-oauth2_auth_requests_login.json", second)
 }
 
 func TestConsentRequestForApp(t *testing.T) {
 	var r ory.OAuth2ConsentRequest
 	decode(t, body(t, hydra22+"consent_request.json"), &r)
-	got := golden(t, "consent_request.json", ConsentRequestForApp(r, Extensions{
+	r.Skip = ory.PtrBool(true)
+	step := Step{Challenge: "step-consent-challenge-2", LoginChallenge: "step-login-challenge-2", Subject: "test2@test.com"}
+	got := golden(t, "consent_request.json", ConsentRequestForApp(r, step, Extensions{
 		Claims: map[string]any{"email": "test2@test.com"},
 	}))
-
-	symfony := body(t, symfony21+"14-sql-2fa-consent-skipped/0061-front-GET-oauth2_auth_requests_consent.json")
-	for _, k := range keys(t, symfony) {
-		if !slices.Contains(keys(t, got), k) {
-			t.Errorf("field %q served by Symfony is missing", k)
-		}
+	var doc map[string]any
+	decode(t, got, &doc)
+	if doc["challenge"] != step.Challenge || doc["login_challenge"] != step.LoginChallenge ||
+		doc["subject"] != step.Subject || doc["skip"] != false {
+		t.Errorf("consent request = %s", got)
 	}
+	servesSymfonyFields(t, symfony21+"14-sql-2fa-consent-skipped/0061-front-GET-oauth2_auth_requests_consent.json", got)
 
-	for _, empty := range []any{nil, []any{}} {
-		r.Context, r.Amr = empty, nil
-		out, err := json.Marshal(ConsentRequestForApp(r, Extensions{}))
+	var nilRaw json.RawMessage
+	for _, tt := range []struct {
+		context any
+		want    any
+	}{
+		{nil, map[string]any{}},
+		{[]any{}, map[string]any{}},
+		{map[string]any(nil), map[string]any{}},
+		{nilRaw, map[string]any{}}, // flowcodec's flow without context
+		{json.RawMessage(" null "), map[string]any{}},
+		{json.RawMessage("[]"), map[string]any{}},
+		{json.RawMessage(`{"step":1}`), map[string]any{"step": 1.0}},
+		{[]any{"a"}, []any{"a"}}, // any JSON is a context for Hydra
+	} {
+		r.Context, r.Amr = tt.context, nil
+		out, err := json.Marshal(ConsentRequestForApp(r, step, Extensions{}))
 		if err != nil {
 			t.Fatal(err)
 		}
-		var doc map[string]any
+		doc = nil
 		decode(t, out, &doc)
-		if !reflect.DeepEqual(doc["context"], map[string]any{}) || !reflect.DeepEqual(doc["amr"], []any{}) ||
+		if !reflect.DeepEqual(doc["context"], tt.want) || !reflect.DeepEqual(doc["amr"], []any{}) ||
 			!reflect.DeepEqual(doc["x_dispatcher_claims"], map[string]any{}) {
-			t.Errorf("context %v: served %s", empty, out)
+			t.Errorf("context %#v: served %s", tt.context, out)
 		}
 	}
 }

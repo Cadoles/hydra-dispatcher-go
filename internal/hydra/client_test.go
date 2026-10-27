@@ -2,15 +2,19 @@ package hydra
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,7 +79,7 @@ func TestLoginFlowCalls(t *testing.T) {
 	}}
 	srv := httptest.NewServer(fake)
 	defer srv.Close()
-	c := newTestClient(t, srv.URL, 4, time.Second)
+	c := newTestClient(t, srv.URL+"/", 4, time.Second) // the SDK must not call //admin/...
 	ctx := httpx.WithTraceID(context.Background(), "4bf92f3577b34da6a3ce929d0e0e4736")
 
 	lr, err := c.LoginRequest(ctx, "L+/=")
@@ -125,7 +129,21 @@ func TestLoginFlowCalls(t *testing.T) {
 	}
 }
 
+// cutBody answers status with a body shorter than announced, then hangs up.
+func cutBody(status int) func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		conn, buf, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			panic(err)
+		}
+		defer conn.Close()
+		_, _ = fmt.Fprintf(buf, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{\"redirect_to\":", status, http.StatusText(status))
+		_ = buf.Flush()
+	}
+}
+
 func TestErrors(t *testing.T) {
+	const challenge = "SENTINEL-CHALLENGE"
 	tests := []struct {
 		name         string
 		handler      func(http.ResponseWriter, *http.Request)
@@ -137,58 +155,149 @@ func TestErrors(t *testing.T) {
 		{"unknown challenge", reply(404, `{"error":"Not Found","error_description":"Unable to locate the resource"}`), false, 404, ""},
 		{"server error", reply(500, `{"error":"boom"}`), true, 0, ""},
 		{"unexpected 200", reply(200, `{"unexpected":true}`), true, 0, ""},
+		{"empty 200", reply(200, ""), true, 0, ""},
+		{"null 200", reply(200, "null"), true, 0, ""},
+		{"oversized 200", reply(200, `{"challenge":"`+strings.Repeat("a", maxBody)+`"}`), true, 0, ""},
+		// Hydra's public port, or a proxy: a broken setup, not an unknown challenge.
+		{"404 page", http.NotFound, true, 0, ""},
+		{"4xx cut short", cutBody(410), true, 0, ""},
+		{"redirect", http.RedirectHandler("/elsewhere", http.StatusTemporaryRedirect).ServeHTTP, true, 0, ""},
 		{"too slow", func(w http.ResponseWriter, _ *http.Request) { time.Sleep(200 * time.Millisecond) }, true, 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(tt.handler))
 			defer srv.Close()
-			_, err := newTestClient(t, srv.URL, 4, 50*time.Millisecond).LoginRequest(context.Background(), "L")
+			c := newTestClient(t, srv.URL, 4, 50*time.Millisecond)
+			_, getErr := c.LoginRequest(context.Background(), challenge)
+			_, acceptErr := c.AcceptLogin(context.Background(), challenge, ory.AcceptOAuth2LoginRequest{Subject: "alice"})
 
-			if got := errors.Is(err, ErrUnavailable); got != tt.wantUnavail {
-				t.Fatalf("err = %v, ErrUnavailable %v, want %v", err, got, tt.wantUnavail)
-			}
-			if tt.wantStatus == 0 {
-				return
-			}
-			var reqErr *RequestError
-			if !errors.As(err, &reqErr) || reqErr.Status != tt.wantStatus || reqErr.RedirectTo() != tt.wantRedirect || len(reqErr.Body) == 0 {
-				t.Errorf("err = %#v, want a RequestError %d redirecting to %q with Hydra's body", err, tt.wantStatus, tt.wantRedirect)
+			for _, err := range []error{getErr, acceptErr} {
+				if got := errors.Is(err, ErrUnavailable); got != tt.wantUnavail {
+					t.Fatalf("err = %v, ErrUnavailable %v, want %v", err, got, tt.wantUnavail)
+				}
+				if strings.Contains(err.Error(), challenge) {
+					t.Errorf("the challenge is in the error: %v", err)
+				}
+				if tt.wantStatus == 0 {
+					continue
+				}
+				var reqErr *RequestError
+				if !errors.As(err, &reqErr) || reqErr.Status != tt.wantStatus || reqErr.RedirectTo() != tt.wantRedirect || len(reqErr.Body) == 0 {
+					t.Errorf("err = %#v, want a RequestError %d redirecting to %q with Hydra's body", err, tt.wantStatus, tt.wantRedirect)
+				}
 			}
 		})
 	}
 
 	srv := httptest.NewServer(http.NotFoundHandler())
 	srv.Close() // refused connections
-	if _, err := newTestClient(t, srv.URL, 4, time.Second).LoginRequest(context.Background(), "L"); !errors.Is(err, ErrUnavailable) {
-		t.Errorf("connection refused: err = %v, want ErrUnavailable", err)
+	_, err := newTestClient(t, srv.URL, 4, time.Second).LoginRequest(context.Background(), challenge)
+	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), challenge) {
+		t.Errorf("connection refused: err = %v, want ErrUnavailable without the challenge", err)
 	}
 }
 
-// Past hydra.max_in_flight, calls fail at once rather than queue.
+// Past hydra.max_in_flight, calls fail at once rather than queue; /ready is
+// not one of them.
 func TestInFlightCap(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		entered <- struct{}{}
-		<-release
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health/ready" {
+			entered <- struct{}{}
+			<-release
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 	c := newTestClient(t, srv.URL, 1, 5*time.Second)
 
 	done := make(chan error, 1)
-	go func() { done <- c.Ready(context.Background()) }()
+	go func() { done <- c.RejectLogout(context.Background(), "U") }()
 	<-entered
-	if err := c.Ready(context.Background()); !errors.Is(err, ErrOverloaded) {
+	if err := c.RejectLogout(context.Background(), "U"); !errors.Is(err, ErrOverloaded) {
 		t.Errorf("second call = %v, want ErrOverloaded", err)
+	}
+	if err := c.Ready(context.Background()); err != nil {
+		t.Errorf("Ready with the cap full = %v, want ok: load is not Hydra down", err)
 	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Errorf("first call = %v", err)
 	}
+
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = call(c, "panics", func() (struct{}, *http.Response, error) { panic("boom") })
+	}()
 	go func() { <-entered }()
-	if err := c.Ready(context.Background()); err != nil {
-		t.Errorf("call after release = %v, want the slot back", err)
+	if err := c.RejectLogout(context.Background(), "U"); err != nil {
+		t.Errorf("call after release and panic = %v, want the slot back", err)
+	}
+}
+
+// Every call the cap lets through gets its connection: a lower limit in the
+// transport would queue calls out of the cap's sight.
+func TestConnectionsFollowTheCap(t *testing.T) {
+	const n = 300 // above the 256 connections per host the transport used to allow
+	var arrived atomic.Int32
+	var queued atomic.Bool
+	all := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if arrived.Add(1) == n {
+			close(all)
+		}
+		select {
+		case <-all:
+		case <-time.After(2 * time.Second):
+			queued.Store(true)
+		}
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, n, 10*time.Second)
+
+	var wg sync.WaitGroup
+	for range n {
+		wg.Go(func() {
+			if err := c.RejectLogout(context.Background(), "U"); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if queued.Load() {
+		t.Errorf("the %d calls did not reach Hydra together", n)
+	}
+}
+
+// Probes share one call and its answer for readyTTL.
+func TestReady(t *testing.T) {
+	var calls, status atomic.Int32
+	status.Store(http.StatusServiceUnavailable)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		reply(int(status.Load()), `{"status":"ok"}`)(w, r)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, 1, time.Second)
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			if err := c.Ready(context.Background()); !errors.Is(err, ErrUnavailable) {
+				t.Errorf("Ready = %v, want ErrUnavailable", err)
+			}
+		})
+	}
+	wg.Wait()
+	if n := calls.Load(); n != 1 {
+		t.Errorf("%d calls to Hydra for 20 probes, want 1", n)
+	}
+
+	status.Store(http.StatusOK)
+	c.readyAt = time.Now().Add(-readyTTL)
+	if err := c.Ready(context.Background()); err != nil || calls.Load() != 2 {
+		t.Errorf("Ready after readyTTL = %v after %d calls, want ok after 2", err, calls.Load())
 	}
 }
 
@@ -219,5 +328,35 @@ func TestTLSWithDedicatedCA(t *testing.T) {
 	}
 	if _, err := New(config.Hydra{AdminURL: srv.URL, MaxInFlight: 1}, config.TLS{CAFile: empty}); err == nil {
 		t.Error("CA file without certificate: want an error")
+	}
+}
+
+// In TLS 1.2, only ECDHE with an AEAD, as the ANSSI TLS guide recommends.
+func TestTLS12Suites(t *testing.T) {
+	for _, tt := range []struct {
+		suite uint16
+		ok    bool
+	}{
+		{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, true},
+		{tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256, true},
+		{tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA, false}, // enabled by Go's defaults
+	} {
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		srv.TLS = &tls.Config{MaxVersion: tls.VersionTLS12, CipherSuites: []uint16{tt.suite}}
+		srv.StartTLS()
+		ca := filepath.Join(t.TempDir(), "ca.pem")
+		if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.2", CAFile: ca})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Ready(context.Background()); (err == nil) != tt.ok {
+			t.Errorf("%s: Ready = %v, want ok %v", tls.CipherSuiteName(tt.suite), err, tt.ok)
+		}
+		srv.Close()
 	}
 }

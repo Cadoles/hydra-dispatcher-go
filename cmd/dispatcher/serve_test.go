@@ -42,11 +42,14 @@ func TestHandler(t *testing.T) {
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	h, err := newHandler(testConfig(t, hydra.URL), logger, logger)
-	if err != nil {
-		t.Fatal(err)
+	newServer := func() *httptest.Server {
+		h, err := newHandler(testConfig(t, hydra.URL), logger, logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return httptest.NewServer(h)
 	}
-	srv := httptest.NewServer(h)
+	srv := newServer()
 
 	if err := healthcheck(context.Background(), []string{"-url", srv.URL + "/health"}); err != nil {
 		t.Errorf("healthcheck: %v", err)
@@ -60,7 +63,9 @@ func TestHandler(t *testing.T) {
 		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, "unavailable"},
 	} {
 		hydraStatus = tt.hydraStatus
-		resp, err := http.Get(srv.URL + "/ready")
+		// One instance per case: the Hydra client reuses its readiness for a second.
+		probed := newServer()
+		resp, err := http.Get(probed.URL + "/ready")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -69,6 +74,7 @@ func TestHandler(t *testing.T) {
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		_ = resp.Body.Close()
+		probed.Close()
 		if resp.StatusCode != tt.want || body.Checks["hydra"] != tt.hydraState {
 			t.Errorf("Hydra %d: /ready = %d %v, want %d with hydra %s", tt.hydraStatus, resp.StatusCode, body.Checks, tt.want, tt.hydraState)
 		}
