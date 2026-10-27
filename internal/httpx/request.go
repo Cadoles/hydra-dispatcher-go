@@ -1,0 +1,42 @@
+// Package httpx holds what every HTTP surface of the dispatcher shares: the
+// server and its timeouts, the middleware chain (real client IP, trace id,
+// access log, panic recovery), the readiness endpoint, and the slog handler
+// that stamps each log line with the request's trace id.
+package httpx
+
+import (
+	"context"
+	"net/netip"
+)
+
+type infoKey struct{}
+
+// requestInfo is shared by the middlewares of a request through a pointer in
+// the context, so values set deeper (the matched route) reach the outer ones.
+// Each field is written once, before the handlers that read it run.
+type requestInfo struct {
+	traceID  string
+	clientIP netip.Addr
+	route    string
+}
+
+func infoFrom(ctx context.Context) *requestInfo {
+	inf, _ := ctx.Value(infoKey{}).(*requestInfo)
+	return inf
+}
+
+// TraceID returns the trace id of the request ctx belongs to, or "".
+func TraceID(ctx context.Context) string {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.traceID
+	}
+	return ""
+}
+
+// ClientIP returns the real client address of the request ctx belongs to.
+func ClientIP(ctx context.Context) netip.Addr {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.clientIP
+	}
+	return netip.Addr{}
+}

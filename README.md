@@ -16,6 +16,10 @@ dispatcher healthcheck [-url ...]            probe /health of a local server (co
 dispatcher version                           print the version
 ```
 
+`serve` exposes `/health` (liveness) and `/ready` (Hydra reachable, within
+2 s; 503 otherwise, details in the log). Logs are JSON lines on stdout,
+`log_type` `app` or `access`, with the request's `trace_id`.
+
 ## Configuration
 
 One YAML file (`internal/config`, example in

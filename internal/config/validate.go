@@ -39,7 +39,7 @@ func (c *Config) validate() (warnings []string, err error) {
 	if err := httpURL(c.Server.BaseURL); err != nil {
 		fail("server.base_url", "%v", err)
 	}
-	if _, err := prefixes(c.Server.TrustedProxies); err != nil {
+	if _, err := c.Server.TrustedProxies.Prefixes(); err != nil {
 		fail("server.trusted_proxies", "%v", err)
 	}
 	if c.Server.ReplicasHint > 1 && c.State.RedisDSN == "" {
@@ -67,7 +67,7 @@ func (c *Config) validate() (warnings []string, err error) {
 		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts},
 		{"security.metrics_authorized_hosts", *c.Security.MetricsAuthorizedHosts},
 	} {
-		ps, err := prefixes(l.hosts)
+		ps, err := l.hosts.Prefixes()
 		if err != nil {
 			fail(l.path, "%v", err)
 		}
@@ -147,8 +147,9 @@ func httpURL(s string) error {
 	return nil
 }
 
-// prefixes parses CIDRs; a bare address stands for itself (/32 or /128).
-func prefixes(l List) ([]netip.Prefix, error) {
+// Prefixes parses a list of CIDRs; a bare address stands for itself (/32 or
+// /128). Load has validated the allowlists and trusted proxies already.
+func (l List) Prefixes() ([]netip.Prefix, error) {
 	ps := make([]netip.Prefix, 0, len(l))
 	for _, s := range l {
 		if p, err := netip.ParsePrefix(s); err == nil {

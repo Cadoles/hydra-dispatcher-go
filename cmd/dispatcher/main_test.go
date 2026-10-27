@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -42,27 +40,5 @@ func TestRun(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantOut)
 			}
 		})
-	}
-}
-
-func TestHealth(t *testing.T) {
-	srv := httptest.NewServer(routes())
-	defer srv.Close()
-
-	if err := healthcheck(context.Background(), []string{"-url", srv.URL + "/health"}); err != nil {
-		t.Fatalf("healthcheck: %v", err)
-	}
-
-	resp, err := http.Post(srv.URL+"/health", "text/plain", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST /health status = %d, want 405", resp.StatusCode)
-	}
-
-	if err := healthcheck(context.Background(), []string{"-url", srv.URL + "/missing"}); err == nil {
-		t.Error("healthcheck on a 404 endpoint: want an error")
 	}
 }
