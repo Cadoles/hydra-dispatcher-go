@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Format
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: Vet
+        run: go vet ./...
+
+      # Tool versions are pinned by the tool directive in go.mod.
+      - name: Staticcheck
+        run: go tool staticcheck ./...
+
+      - name: Govulncheck
+        run: go tool govulncheck ./...
+
+      - name: Test
+        run: go test -race ./...
