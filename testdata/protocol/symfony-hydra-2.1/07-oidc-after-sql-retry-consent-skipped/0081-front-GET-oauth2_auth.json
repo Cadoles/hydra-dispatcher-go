@@ -1,0 +1,94 @@
+{
+  "seq": 81,
+  "leg": "front",
+  "time": "2026-10-26T15:27:54.78273783Z",
+  "duration_ms": 130,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth?login_challenge=9a2afbe7c9b94cd18de9b7bf6ea6017d",
+    "headers": {
+      "Accept": [
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+      ],
+      "Accept-Encoding": [
+        "gzip, deflate"
+      ],
+      "Accept-Language": [
+        "fr-FR,fr;q=0.9,en;q=0.8,en-US;q=0.7,en-GB;q=0.6"
+      ],
+      "Cache-Control": [
+        "max-age=0"
+      ],
+      "Cookie": [
+        "main_deauth_profile_token=668de4; dispatcher=64ad46a3dc529eaf08e05f6c938aa84a; dispatcher_flow_csrf=6ec761edc098557ac2bb4cd066ab770215f7d0728e0d738e09571f2448754e3c; sf_redirect=%7B%22token%22%3A%22c31e0a%22%2C%22route%22%3A%22dispatcher_index%22%2C%22method%22%3A%22POST%22%2C%22controller%22%3A%7B%22class%22%3A%22App%5C%5CController%5C%5CDispatcherController%22%2C%22method%22%3A%22index%22%2C%22file%22%3A%22%5C%2Fapp%5C%2Fsrc%5C%2FController%5C%2FDispatcherController.php%22%2C%22line%22%3A54%7D%2C%22status_code%22%3A302%2C%22status_text%22%3A%22Found%22%7D"
+      ],
+      "Referer": [
+        "http://dispatcher.hydra.test/?login_challenge=9a2afbe7c9b94cd18de9b7bf6ea6017d"
+      ],
+      "Upgrade-Insecure-Requests": [
+        "1"
+      ],
+      "User-Agent": [
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:27:54 GMT"
+      ],
+      "Expires": [
+        "Mon, 26 Oct 2026 15:27:54 GMT"
+      ],
+      "Location": [
+        "http://sql.hydra.test/login?login_challenge=01a178d347e67f038a261c0f13cc544e"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "sf_redirect=%7B%22token%22%3A%22258b45%22%2C%22route%22%3A%22dispatcher_auth%22%2C%22method%22%3A%22GET%22%2C%22controller%22%3A%7B%22class%22%3A%22App%5C%5CController%5C%5CDispatcherController%22%2C%22method%22%3A%22dispatcherAuth%22%2C%22file%22%3A%22%5C%2Fapp%5C%2Fsrc%5C%2FController%5C%2FDispatcherController.php%22%2C%22line%22%3A219%7D%2C%22status_code%22%3A302%2C%22status_text%22%3A%22Found%22%7D; path=/; httponly; samesite=lax"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Debug-Token": [
+        "258b45"
+      ],
+      "X-Debug-Token-Link": [
+        "http://dispatcher.hydra.test/_profiler/258b45"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Robots-Tag": [
+        "noindex"
+      ],
+      "X-Trace-Id": [
+        "01a178d3-47b2-75d2-b7c5-e4cdc0a4206d"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='http://sql.hydra.test/login?login_challenge=01a178d347e67f038a261c0f13cc544e'\" />\n\n        <title>Redirecting to http://sql.hydra.test/login?login_challenge=01a178d347e67f038a261c0f13cc544e</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"http://sql.hydra.test/login?login_challenge=01a178d347e67f038a261c0f13cc544e\">http://sql.hydra.test/login?login_challenge=01a178d347e67f038a261c0f13cc544e</a>.\n    </body>\n</html>"
+  }
+}

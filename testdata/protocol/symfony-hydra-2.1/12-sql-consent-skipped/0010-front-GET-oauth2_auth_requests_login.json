@@ -1,0 +1,123 @@
+{
+  "seq": 10,
+  "leg": "front",
+  "time": "2026-10-26T15:37:58.705013178Z",
+  "duration_ms": 98,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/login?login_challenge=01a178dc7e70772b9d8e4529a714f9c3",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "User-Agent": [
+        "OpenAPI-Generator/1.0.0/go"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "172.20.0.12"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:37:58 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "main_deauth_profile_token=d3fe52; path=/; httponly; samesite=lax",
+        "main_auth_profile_token=deleted; expires=Sun, 26 Oct 2025 15:37:57 GMT; Max-Age=0; path=/; httponly"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Debug-Token": [
+        "d3fe52"
+      ],
+      "X-Debug-Token-Link": [
+        "http://dispatcher.hydra.test/_profiler/d3fe52"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Robots-Tag": [
+        "noindex"
+      ],
+      "X-Trace-Id": [
+        "01a178dc-7ec3-7ccc-826f-36e6e7268884"
+      ]
+    },
+    "body": {
+      "challenge": "01a178dc7e70772b9d8e4529a714f9c3",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": false,
+      "subject": null,
+      "oidc_context": {},
+      "client": {
+        "allowed_cors_origins": [],
+        "audience": [],
+        "client_id": "da4e4867-af3c-4d18-ae67-ebe7ce2f79c4",
+        "client_name": "OIDC Test Client",
+        "client_secret_expires_at": 0,
+        "client_uri": "",
+        "contacts": [],
+        "created_at": "2026-10-26T14:57:13+00:00",
+        "grant_types": [
+          "authorization_code",
+          "refresh_token"
+        ],
+        "jwks": {},
+        "logo_uri": "",
+        "metadata": {},
+        "owner": "",
+        "policy_uri": "",
+        "post_logout_redirect_uris": [
+          "http:\/\/oidc.client.test\/"
+        ],
+        "redirect_uris": [
+          "http:\/\/oidc.client.test\/auth\/callback"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid email profile offline_access",
+        "skip_consent": false,
+        "subject_type": "public",
+        "token_endpoint_auth_method": "client_secret_basic",
+        "tos_uri": "",
+        "updated_at": "2026-10-26T14:57:13+00:00",
+        "userinfo_signed_response_alg": "none"
+      },
+      "request_url": "http:\/\/public.hydra.test\/oauth2\/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4\u0026nonce=PYSEDMThT3JvetijZwReiw\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=zg6h5g50gosCIP8ICCiwBQ",
+      "session_id": "a6dc21ff-a9ea-4e57-827b-ae8e416d125c",
+      "x_dispatcher_claims": []
+    }
+  }
+}

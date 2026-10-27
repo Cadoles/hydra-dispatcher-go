@@ -1,0 +1,94 @@
+{
+  "seq": 63,
+  "leg": "front",
+  "time": "2026-10-26T15:39:05.100078197Z",
+  "duration_ms": 321,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/consent/accept?consent_challenge=01a178dd5e35746b96dda31d0de303b0",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "200"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "172.20.0.11"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": {
+      "grant_scope": [
+        "email",
+        "openid",
+        "profile",
+        "email"
+      ],
+      "grant_access_token_audience": [],
+      "remember": false,
+      "remember_for": 0,
+      "session": {
+        "access_token": null,
+        "id_token": {
+          "email": null,
+          "email_verified": true
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:39:05 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "main_deauth_profile_token=8c35cb; path=/; httponly; samesite=lax",
+        "main_auth_profile_token=deleted; expires=Sun, 26 Oct 2025 15:39:04 GMT; Max-Age=0; path=/; httponly"
+      ],
+      "X-Debug-Token": [
+        "8c35cb"
+      ],
+      "X-Debug-Token-Link": [
+        "http://dispatcher.hydra.test/_profiler/8c35cb"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Robots-Tag": [
+        "noindex"
+      ],
+      "X-Trace-Id": [
+        "01a178dd-821f-7dcb-a984-a86ce6a461cc"
+      ]
+    },
+    "body": {
+      "redirect_to": "http:\/\/dispatcher.hydra.test\/oauth2\/auth?login_challenge=0c34aaee066148adbc0251024fee9bb4"
+    }
+  }
+}

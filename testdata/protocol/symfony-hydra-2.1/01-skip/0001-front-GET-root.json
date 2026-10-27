@@ -1,0 +1,91 @@
+{
+  "seq": 1,
+  "leg": "front",
+  "time": "2026-10-26T15:18:05.730503118Z",
+  "duration_ms": 206,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/?login_challenge=5ebb4207eee940b0abf3f8798c785251",
+    "headers": {
+      "Accept": [
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
+      ],
+      "Accept-Encoding": [
+        "gzip, deflate"
+      ],
+      "Accept-Language": [
+        "fr-FR,fr;q=0.9,en;q=0.8,en-US;q=0.7,en-GB;q=0.6"
+      ],
+      "Cookie": [
+        "main_deauth_profile_token=668de4; dispatcher_flow_csrf=73b614492422f84601e46d4e9fa4aa52672d0f885cf90981ef477f8016d62341; dispatcher=2a85368f5bf746532cb3e4053898cc2d; sf_redirect=%7B%22token%22%3A%220324be%22%2C%22route%22%3A%22dispatcher_consent%22%2C%22method%22%3A%22POST%22%2C%22controller%22%3A%7B%22class%22%3A%22App%5C%5CController%5C%5CConsentController%22%2C%22method%22%3A%22consent%22%2C%22file%22%3A%22%5C%2Fapp%5C%2Fsrc%5C%2FController%5C%2FConsentController.php%22%2C%22line%22%3A44%7D%2C%22status_code%22%3A302%2C%22status_text%22%3A%22Found%22%7D"
+      ],
+      "Referer": [
+        "http://oidc.client.test/"
+      ],
+      "Upgrade-Insecure-Requests": [
+        "1"
+      ],
+      "User-Agent": [
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:18:05 GMT"
+      ],
+      "Expires": [
+        "Mon, 26 Oct 2026 15:18:05 GMT"
+      ],
+      "Location": [
+        "http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4&login_verifier=b0c9da7ceafb4d8cb14263c646126a67&nonce=c-PtCIIsdgGBk-IC3W5vfg&redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&response_type=code&scope=openid+profile+email&state=HvfbCZ2kNnfIojng5aJaCw"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "sf_redirect=%7B%22token%22%3A%2288cd4b%22%2C%22route%22%3A%22dispatcher_index%22%2C%22method%22%3A%22GET%22%2C%22controller%22%3A%7B%22class%22%3A%22App%5C%5CController%5C%5CDispatcherController%22%2C%22method%22%3A%22index%22%2C%22file%22%3A%22%5C%2Fapp%5C%2Fsrc%5C%2FController%5C%2FDispatcherController.php%22%2C%22line%22%3A54%7D%2C%22status_code%22%3A302%2C%22status_text%22%3A%22Found%22%7D; path=/; httponly; samesite=lax"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Debug-Token": [
+        "88cd4b"
+      ],
+      "X-Debug-Token-Link": [
+        "http://dispatcher.hydra.test/_profiler/88cd4b"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Robots-Tag": [
+        "noindex"
+      ],
+      "X-Trace-Id": [
+        "01a178ca-4abf-7b30-b896-959d5c60a880"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4&amp;login_verifier=b0c9da7ceafb4d8cb14263c646126a67&amp;nonce=c-PtCIIsdgGBk-IC3W5vfg&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=HvfbCZ2kNnfIojng5aJaCw'\" />\n\n        <title>Redirecting to http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4&amp;login_verifier=b0c9da7ceafb4d8cb14263c646126a67&amp;nonce=c-PtCIIsdgGBk-IC3W5vfg&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=HvfbCZ2kNnfIojng5aJaCw</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4&amp;login_verifier=b0c9da7ceafb4d8cb14263c646126a67&amp;nonce=c-PtCIIsdgGBk-IC3W5vfg&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=HvfbCZ2kNnfIojng5aJaCw\">http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4&amp;login_verifier=b0c9da7ceafb4d8cb14263c646126a67&amp;nonce=c-PtCIIsdgGBk-IC3W5vfg&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=HvfbCZ2kNnfIojng5aJaCw</a>.\n    </body>\n</html>"
+  }
+}

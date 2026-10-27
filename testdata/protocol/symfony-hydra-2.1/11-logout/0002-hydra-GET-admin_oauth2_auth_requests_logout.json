@@ -1,0 +1,56 @@
+{
+  "seq": 2,
+  "leg": "hydra",
+  "time": "2026-10-26T15:37:41.485999363Z",
+  "duration_ms": 1,
+  "request": {
+    "method": "GET",
+    "host": "recorder:8081",
+    "uri": "/admin/oauth2/auth/requests/logout?logout_challenge=027a0192-a9c6-4caf-ad26-61ec09b8dedd",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Baggage": [
+        "sentry-trace_id=b52dc5dbc8f84345b88dd6d13403ed56,sentry-transaction=GET%20get_app_logout,sentry-release=1.0.0%2Bno-version-set,sentry-environment=,sentry-sampled=false,sentry-sample_rand=0.066377"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Sentry-Trace": [
+        "b52dc5dbc8f84345b88dd6d13403ed56-1bf84e784e6e41ae-0"
+      ],
+      "User-Agent": [
+        "OpenAPI-Generator/1.0.0/PHP"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "private, no-cache, no-store, must-revalidate"
+      ],
+      "Content-Length": [
+        "200"
+      ],
+      "Content-Type": [
+        "application/json; charset=utf-8"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:37:41 GMT"
+      ]
+    },
+    "body": {
+      "challenge": "027a0192-a9c6-4caf-ad26-61ec09b8dedd",
+      "subject": "test2@test.com",
+      "sid": "125651eb-5580-4593-8cf4-1cca7147a78b",
+      "request_url": "/oauth2/sessions/logout",
+      "rp_initiated": false,
+      "client": null
+    }
+  }
+}

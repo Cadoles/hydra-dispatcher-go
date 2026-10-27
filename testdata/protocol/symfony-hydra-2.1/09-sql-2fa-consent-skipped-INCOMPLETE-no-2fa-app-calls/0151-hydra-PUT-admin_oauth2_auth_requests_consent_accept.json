@@ -1,0 +1,73 @@
+{
+  "seq": 151,
+  "leg": "hydra",
+  "time": "2026-10-26T15:29:23.880329256Z",
+  "duration_ms": 4,
+  "request": {
+    "method": "PUT",
+    "host": "recorder:8081",
+    "uri": "/admin/oauth2/auth/requests/consent/accept?consent_challenge=e933a156d0d043419c3599f628fc04f2",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Baggage": [
+        "sentry-trace_id=e5b6404237f84740b3509887219ca930,sentry-transaction=GET%20dispatcher_consent,sentry-release=1.0.0%2Bno-version-set,sentry-environment=,sentry-sampled=false,sentry-sample_rand=0.7275"
+      ],
+      "Content-Length": [
+        "237"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Sentry-Trace": [
+        "e5b6404237f84740b3509887219ca930-708ee74c890549e5-0"
+      ],
+      "User-Agent": [
+        "OpenAPI-Generator/1.0.0/PHP"
+      ]
+    },
+    "body": {
+      "grant_access_token_audience": [],
+      "grant_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "remember": true,
+      "remember_for": 2629800,
+      "session": {
+        "access_token": {},
+        "id_token": {
+          "email": null,
+          "firstname": "Isabelle",
+          "lastname": "Durand",
+          "email_verified": true
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "private, no-cache, no-store, must-revalidate"
+      ],
+      "Content-Length": [
+        "347"
+      ],
+      "Content-Type": [
+        "application/json; charset=utf-8"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:29:23 GMT"
+      ]
+    },
+    "body": {
+      "redirect_to": "http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4\u0026consent_verifier=2afb1f11226c4ce4ba02fb3854aa65ed\u0026nonce=6lE_CetBWC6egkwwdcoI4w\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=nl-fHX71riPGRMx3GH4nFA"
+    }
+  }
+}

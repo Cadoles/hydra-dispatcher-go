@@ -1,0 +1,96 @@
+{
+  "seq": 95,
+  "leg": "front",
+  "time": "2026-10-26T15:28:40.028536491Z",
+  "duration_ms": 200,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/login/accept?login_challenge=01a178d3ee6374499165bb0015ff93b4",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "252"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "OpenAPI-Generator/1.0.0/go"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "172.20.0.14"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": {
+      "amr": [
+        "oidc"
+      ],
+      "context": {
+        "client_id": "hydra-oidc",
+        "email": "alice@example.com",
+        "email_verified": true,
+        "family_name": "Anderson",
+        "given_name": "Alice",
+        "locale": "fr",
+        "name": "Alice Anderson",
+        "preferred_username": "alice"
+      },
+      "remember": false,
+      "subject": "alice"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:28:40 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "main_deauth_profile_token=14e258; path=/; httponly; samesite=lax",
+        "main_auth_profile_token=deleted; expires=Sun, 26 Oct 2025 15:28:39 GMT; Max-Age=0; path=/; httponly"
+      ],
+      "X-Debug-Token": [
+        "14e258"
+      ],
+      "X-Debug-Token-Link": [
+        "http://dispatcher.hydra.test/_profiler/14e258"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Robots-Tag": [
+        "noindex"
+      ],
+      "X-Trace-Id": [
+        "01a178d3-f874-7300-ac63-7a28f9c536a5"
+      ]
+    },
+    "body": {
+      "redirect_to": "http:\/\/dispatcher.hydra.test\/oauth2\/auth?login_challenge=9a2afbe7c9b94cd18de9b7bf6ea6017d"
+    }
+  }
+}

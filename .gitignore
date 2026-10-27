@@ -13,3 +13,5 @@
 
 # Recorder inbox (hydra-dev make capture); sorted fixtures go to testdata/protocol/
 /testdata/capture/
+# Captures set aside while sorting (stale config, manual probes); kept locally only
+/testdata/protocol/**/_discarded/

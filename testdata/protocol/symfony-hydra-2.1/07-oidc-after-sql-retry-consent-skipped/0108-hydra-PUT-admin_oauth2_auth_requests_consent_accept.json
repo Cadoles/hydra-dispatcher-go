@@ -1,0 +1,68 @@
+{
+  "seq": 108,
+  "leg": "hydra",
+  "time": "2026-10-26T15:28:40.818198375Z",
+  "duration_ms": 3,
+  "request": {
+    "method": "PUT",
+    "host": "recorder:8081",
+    "uri": "/admin/oauth2/auth/requests/consent/accept?consent_challenge=623e2277caa940c398f371029dcb77d7",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Baggage": [
+        "sentry-trace_id=0aed10c6e96248098429d25241b4bf9a,sentry-transaction=GET%20dispatcher_consent,sentry-release=1.0.0%2Bno-version-set,sentry-environment=,sentry-sampled=false,sentry-sample_rand=0.682659"
+      ],
+      "Content-Length": [
+        "160"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Sentry-Trace": [
+        "0aed10c6e96248098429d25241b4bf9a-e9f0363a186f4088-0"
+      ],
+      "User-Agent": [
+        "OpenAPI-Generator/1.0.0/PHP"
+      ]
+    },
+    "body": {
+      "grant_access_token_audience": [],
+      "grant_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "remember": true,
+      "remember_for": 2629800,
+      "session": {
+        "access_token": {},
+        "id_token": {}
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "private, no-cache, no-store, must-revalidate"
+      ],
+      "Content-Length": [
+        "347"
+      ],
+      "Content-Type": [
+        "application/json; charset=utf-8"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:28:40 GMT"
+      ]
+    },
+    "body": {
+      "redirect_to": "http://public.hydra.test/oauth2/auth?client_id=da4e4867-af3c-4d18-ae67-ebe7ce2f79c4\u0026consent_verifier=ac082b7cdb3340c186ca68df358a38f4\u0026nonce=CdF8qAOdoAdGeklzersMUg\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=ay6sysbG6sqFXZfwqDTH1A"
+    }
+  }
+}

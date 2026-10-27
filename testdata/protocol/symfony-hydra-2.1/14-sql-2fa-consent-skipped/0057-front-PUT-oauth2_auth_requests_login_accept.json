@@ -1,0 +1,85 @@
+{
+  "seq": 57,
+  "leg": "front",
+  "time": "2026-10-26T15:39:04.650796363Z",
+  "duration_ms": 198,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/login/accept?login_challenge=01a178dd5e3573d396dda31d0dba056c",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "115"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "172.20.0.11"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": {
+      "subject": "test2@test.com",
+      "remember": false,
+      "remember_for": 2592000,
+      "acr": "",
+      "context": {
+        "email": "test2@test.com"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Mon, 26 Oct 2026 15:39:04 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "main_deauth_profile_token=3c6531; path=/; httponly; samesite=lax",
+        "main_auth_profile_token=deleted; expires=Sun, 26 Oct 2025 15:39:03 GMT; Max-Age=0; path=/; httponly"
+      ],
+      "X-Debug-Token": [
+        "3c6531"
+      ],
+      "X-Debug-Token-Link": [
+        "http://dispatcher.hydra.test/_profiler/3c6531"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Robots-Tag": [
+        "noindex"
+      ],
+      "X-Trace-Id": [
+        "01a178dd-805f-717a-8d86-6043f1f19050"
+      ]
+    },
+    "body": {
+      "redirect_to": "http:\/\/dispatcher.hydra.test\/oauth2\/auth?login_challenge=0c34aaee066148adbc0251024fee9bb4"
+    }
+  }
+}
