@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -11,38 +12,59 @@ import (
 
 const envPrefix = "DISPATCHER_"
 
-var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+var envRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+
+// errEnvRef does not quote the value: it may hold a secret.
+var errEnvRef = errors.New("unsupported ${...}: write ${VAR} or ${VAR:-default}, and $${ for a literal ${")
 
 // expand replaces ${VAR} by its value (empty when unset) and ${VAR:-default}
-// by its value, or by default when unset or empty, as a shell does.
-func expand(s string, lookupEnv func(string) (string, bool)) string {
-	return envRef.ReplaceAllStringFunc(s, func(ref string) string {
-		m := envRef.FindStringSubmatch(ref)
+// by its value, or by default when unset or empty, as a shell does. $${ is a
+// literal ${. Any other ${ is an error rather than left as is: ${VAR-default}
+// or a nested ${A:-${B}} would otherwise pass unexpanded.
+func expand(s string, lookupEnv func(string) (string, bool)) (string, error) {
+	if !strings.Contains(s, "${") {
+		return s, nil
+	}
+	var b strings.Builder
+	for {
+		i := strings.Index(s, "${")
+		if i < 0 {
+			b.WriteString(s)
+			return b.String(), nil
+		}
+		if i > 0 && s[i-1] == '$' {
+			b.WriteString(s[:i-1] + "${")
+			s = s[i+2:]
+			continue
+		}
+		b.WriteString(s[:i])
+		m := envRef.FindStringSubmatch(s[i:])
+		if m == nil || strings.Contains(m[3], "${") {
+			return "", errEnvRef
+		}
 		v, _ := lookupEnv(m[1])
 		if v == "" && m[2] != "" {
-			return m[3]
+			v = m[3]
 		}
-		return v
-	})
+		b.WriteString(v)
+		s = s[i+len(m[0]):]
+	}
 }
 
-// expandNode expands every scalar value (keys are left alone). An expanded
-// value loses its quoting and tag, so it is typed by what it became:
-// "${TIMEOUT:-5s}" decodes as a duration, "${UI:-false}" as a boolean.
-func expandNode(n *yaml.Node, lookupEnv func(string) (string, bool)) {
-	switch n.Kind {
-	case yaml.ScalarNode:
-		if v := expand(n.Value, lookupEnv); v != n.Value {
-			n.Value, n.Tag, n.Style = v, "", 0
+// lookupIn looks a variable up in an os.Environ() list; the first entry of a
+// name wins, as with os.Getenv.
+func lookupIn(environ []string) func(string) (string, bool) {
+	vars := make(map[string]string, len(environ))
+	for _, kv := range environ {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			if _, dup := vars[k]; !dup {
+				vars[k] = v
+			}
 		}
-	case yaml.MappingNode:
-		for i := 1; i < len(n.Content); i += 2 {
-			expandNode(n.Content[i], lookupEnv)
-		}
-	default:
-		for _, child := range n.Content {
-			expandNode(child, lookupEnv)
-		}
+	}
+	return func(k string) (string, bool) {
+		v, ok := vars[k]
+		return v, ok
 	}
 }
 
@@ -85,7 +107,8 @@ func envKeys(c *Config) []envKey {
 
 // applyEnv overrides keys from DISPATCHER_<SECTION>_<KEY> variables. A value
 // is decoded like a YAML scalar, so it takes the same forms as in the file:
-// "30m", "365d", "a,b,c", "true".
+// "30m", "365d", "a,b,c", "true". It is never null: "" empties a string, a
+// list or a key, and is an error for a boolean, a number or a duration.
 func applyEnv(c *Config, lookupEnv func(string) (string, bool)) error {
 	for _, k := range envKeys(c) {
 		v, ok := lookupEnv(k.name)
@@ -99,10 +122,47 @@ func applyEnv(c *Config, lookupEnv func(string) (string, bool)) error {
 			target.Set(reflect.New(target.Type().Elem()))
 			target = target.Elem()
 		}
+		if v == "" && target.Kind() != reflect.String && target.Kind() != reflect.Slice {
+			return fmt.Errorf("%s (%s): is empty", k.name, k.path)
+		}
 		node := &yaml.Node{Kind: yaml.ScalarNode, Value: v}
+		if target.Kind() == reflect.String || node.ShortTag() == nullTag {
+			node.Tag = strTag
+		}
 		if err := node.Decode(target.Addr().Interface()); err != nil {
 			return fmt.Errorf("%s (%s): %w", k.name, k.path, err)
 		}
 	}
 	return nil
+}
+
+// unknownOverrides warns about the DISPATCHER_<SECTION>_* variables that
+// reach no key, typos mostly. Other DISPATCHER_* names stay free for ${VAR}
+// references, like DISPATCHER_COOKIE_KEY in the design document's example.
+func unknownOverrides(environ []string) []string {
+	known := map[string]bool{}
+	for _, k := range envKeys(&Config{}) {
+		known[k.name] = true
+	}
+	var sections []string
+	t := reflect.TypeFor[Config]()
+	for i := 0; i < t.NumField(); i++ {
+		tag, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
+		sections = append(sections, envPrefix+strings.ToUpper(tag)+"_")
+	}
+	var warnings []string
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if known[name] {
+			continue
+		}
+		known[name] = true // once per name
+		for _, s := range sections {
+			if strings.HasPrefix(name, s) {
+				warnings = append(warnings, name+" is ignored: it names no key (ui.csp_extra and the dispatcher: seed are not overridable)")
+				break
+			}
+		}
+	}
+	return warnings
 }

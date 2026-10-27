@@ -5,15 +5,11 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -53,7 +49,10 @@ type Hydra struct {
 	Version string `yaml:"version"`
 	// SystemSecrets is Hydra's secrets.system, in Hydra's order; empty means
 	// the fallback mode (challenges validated by the admin API).
-	SystemSecrets     List     `yaml:"system_secrets"`
+	SystemSecrets List `yaml:"system_secrets"`
+	// SystemSecretsFile holds one secret per line, so a secret may contain a
+	// comma. Like every path of the file, a relative one starts from the
+	// working directory.
 	SystemSecretsFile string   `yaml:"system_secrets_file"`
 	LoginConsentTTL   Duration `yaml:"login_consent_ttl"`
 	MaxInFlight       int      `yaml:"max_in_flight"`
@@ -73,11 +72,16 @@ type FailureRateLimit struct {
 	Block Duration `yaml:"block"`
 }
 
+// Secrets the dispatcher reads back are keyrings: the active key encrypts or
+// signs, the previous ones only decrypt or verify, for rotation without
+// downtime. The webhook key only signs, receivers verify.
 type Secrets struct {
 	CookieKey              Key  `yaml:"cookie_key"`
+	CookieKeysPrevious     Keys `yaml:"cookie_keys_previous"`
 	EncryptionKey          Key  `yaml:"encryption_key"`
 	EncryptionKeysPrevious Keys `yaml:"encryption_keys_previous"`
 	ChallengeKey           Key  `yaml:"challenge_key"`
+	ChallengeKeysPrevious  Keys `yaml:"challenge_keys_previous"`
 	WebhookSigningKey      Key  `yaml:"webhook_signing_key"`
 }
 
@@ -143,8 +147,9 @@ type Observability struct {
 	LogIP            string   `yaml:"log_ip"`
 	DebugMaxDuration Duration `yaml:"debug_max_duration"`
 	Sentry           struct {
-		DSN                string  `yaml:"dsn"`
-		Environment        string  `yaml:"environment"`
+		DSN         string `yaml:"dsn"`
+		Environment string `yaml:"environment"`
+		// Release empty means the version of the binary.
 		Release            string  `yaml:"release"`
 		SampleRate         float64 `yaml:"sample_rate"`
 		TracesSampleRate   float64 `yaml:"traces_sample_rate"`
@@ -231,9 +236,10 @@ func defaults() *Config {
 }
 
 // Load reads the configuration file at path (none when path is empty),
-// applies the environment and validates the result. lookupEnv is
-// os.LookupEnv outside tests. Warnings report accepted but dubious settings.
-func Load(path string, lookupEnv func(string) (string, bool)) (*Config, []string, error) {
+// applies the environment (os.Environ() outside tests) and validates the
+// result. Warnings report accepted but dubious settings.
+func Load(path string, environ []string) (*Config, []string, error) {
+	lookupEnv := lookupIn(environ)
 	c := defaults()
 	if path != "" {
 		data, err := os.ReadFile(path)
@@ -250,37 +256,15 @@ func Load(path string, lookupEnv func(string) (string, bool)) (*Config, []string
 	if err := c.resolve(); err != nil {
 		return nil, nil, err
 	}
-	warnings := c.Seed.ignoredKeys()
+	warnings := append(unknownOverrides(environ), c.Seed.ignoredKeys()...)
 	validationWarnings, err := c.validate()
 	return c, append(warnings, validationWarnings...), err
-}
-
-// decodeFile expands ${VAR} in every value, then decodes strictly: an
-// unknown key is an error, so typos do not pass silently.
-func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) error {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return err
-	}
-	if doc.Kind == 0 { // empty file
-		return nil
-	}
-	expandNode(&doc, lookupEnv)
-	expanded, err := yaml.Marshal(&doc)
-	if err != nil {
-		return err
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(expanded))
-	dec.KnownFields(true)
-	if err := dec.Decode(c); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
 }
 
 // resolve fills the values that default to other values, and reads the
 // secrets given as files.
 func (c *Config) resolve() error {
+	c.Seed.resolve()
 	if c.Security.EmulatedAPIAuthorizedHosts == nil {
 		l := append(List{}, c.Security.AdminAuthorizedHosts...)
 		c.Security.EmulatedAPIAuthorizedHosts = &l
@@ -297,7 +281,12 @@ func (c *Config) resolve() error {
 		if err != nil {
 			return fmt.Errorf("hydra.system_secrets_file: %w", err)
 		}
-		c.Hydra.SystemSecrets = splitList(strings.ReplaceAll(string(data), "\n", ","))
+		c.Hydra.SystemSecrets = List{}
+		for line := range strings.Lines(string(data)) {
+			if line = strings.TrimSpace(line); line != "" {
+				c.Hydra.SystemSecrets = append(c.Hydra.SystemSecrets, line)
+			}
+		}
 	}
 	return nil
 }

@@ -1,0 +1,88 @@
+# Every infrastructure key, each with a value other than its default:
+# TestEveryKeyIsRead proves that each one is read from the file.
+server:
+  listen: ":9000"
+  base_url: "https://dispatcher.example.org/auth"
+  trusted_proxies: ["10.1.0.0/16"]
+  cookie_path: "/auth"
+  replicas_hint: 3
+hydra:
+  admin_url: "https://hydra-admin.example.org"
+  timeout: 7s
+  version: "2.3"
+  system_secrets_file: testdata/system-secrets
+  login_consent_ttl: 45m
+  max_in_flight: 64
+security:
+  admin_authorized_hosts: ["10.2.0.0/16"]
+  emulated_api_authorized_hosts: ["10.3.0.0/16"]
+  metrics_authorized_hosts: ["10.4.0.0/16"]
+  failure_rate_limit: { max: 5, per: 2m, block: 10m }
+secrets:
+  cookie_key: "1111111111111111111111111111111111111111111111111111111111111111"
+  cookie_keys_previous: ["2222222222222222222222222222222222222222222222222222222222222222"]
+  encryption_key: "3333333333333333333333333333333333333333333333333333333333333333"
+  encryption_keys_previous: ["4444444444444444444444444444444444444444444444444444444444444444"]
+  challenge_key: "5555555555555555555555555555555555555555555555555555555555555555"
+  challenge_keys_previous: ["6666666666666666666666666666666666666666666666666666666666666666"]
+  webhook_signing_key: "7777777777777777777777777777777777777777777777777777777777777777"
+tls:
+  min_version: "1.3"
+  ca_file: testdata/system-secrets   # Load only checks that it exists
+  pinned_spki_sha256: ["47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="]
+  hsts_include_subdomains: true
+state:
+  redis_dsn: "redis://redis:6379/1"
+  key_prefix: "go:"
+  redis_pool_size: 20
+remember:
+  backend: postgres
+store:
+  backend: postgres   # the only backend: the one key equal to its default
+  dsn: "postgres://dispatcher@postgres/dispatcher"
+admin:
+  ui: { enabled: false }
+  api:
+    enabled: false
+    private_key: "private"
+    public_key: "public"
+    token_ttl: 600
+    rate_limit_per_minute: 50
+  session: { idle_timeout: 10m, max_age: 4h, reauth_window: 2m }
+  hydra_clients: { enabled: false }
+  client_secret_max_age: 90d
+ui:
+  theme_dir: themes/acme
+  reload: true
+  remember_last_flow: false
+  csp_extra: { font-src: ["https://fonts.gstatic.com"] }
+  default_locale: en
+  supported_locales: [en]
+observability:
+  log_level: debug
+  log_format: text
+  access_log_sample: 0.5
+  log_ip: full
+  debug_max_duration: 2h
+  sentry:
+    dsn: "https://key@sentry.example.org/1"
+    environment: staging
+    release: "1.2.3"
+    sample_rate: 0.25
+    traces_sample_rate: 0.1
+    max_events_per_minute: 30
+  metrics: { listen: ":9090", max_label_values: 100 }
+  audit: { output: syslog, pseudonymize_subject: false }
+  tracing:
+    enabled: true
+    endpoint: "http://otel:4317"
+    protocol: http/protobuf
+    sampler_ratio: 0.5
+webhooks:
+  process_timeout: 10s
+  max_processes: 8
+logout:
+  propagate_without_record: none
+serve:
+  migrate: true
+  bootstrap: true

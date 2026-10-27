@@ -1,0 +1,61 @@
+# Snapshot of hydra-dispatcher config/packages/dispatcher.yaml, the seed of
+# the Symfony repository: its %env(VAR)% placeholders must be refused.
+dispatcher:
+  apps:
+    - id: hydra-oidc
+      login_url: http://oidc.hydra.test/login
+      consent_url: http://oidc.hydra.test/consent
+      logout_url: http://oidc.hydra.test/logout
+      method: oidc
+    - id: hydra-sql
+      login_url: http://sql.hydra.test/
+      consent_url: http://sql.hydra.test/connect/consent
+      logout_url: http://sql.hydra.test/logout
+      method: pwd
+    - id: hydra-2fa
+      login_url: http://2fa.hydra.test/login
+      consent_url: http://2fa.hydra.test/consent
+      logout_url: http://2fa.hydra.test/logout
+      method: otp
+  login_accept_webhook_url: ~
+  consent_accept_webhook_url: ~
+  app_auto_select: false
+  consent_auto_accept: false
+  hydra_public_url: localhost:4444
+  admin_authorized_hosts: "%dispatcher.admin_authorized_hosts%"
+  challenge_ttl: 3600
+  session_ttl: 86400
+  aggregate_amr_from_login_request: false
+  flows:
+    - id: hydra-oidc
+      steps:
+        - id: hydra-oidc
+          order: 0
+      title:
+        fr: Hydra oidc
+        en: Hydra oidc En
+      description:
+        fr: Authentification via OIDC
+        en: OIDC Authentication
+      icon_url:
+        fr: ~
+        en: ~
+    - id: hydra-sql-2fa
+      steps:
+        - id: hydra-sql
+          order: 0
+        - id: hydra-2fa
+          order: 1
+      title:
+        fr: Hydra SQL 2FA
+        en: Hydra SQL 2FA En
+      description:
+        fr: Authentification via SQL double facteur
+        en: SQL Authentication second factor
+      icon_url:
+        fr: ~
+        en: ~
+
+  oauth2_clients:
+    - id: "%env(OAUTH2_ADMIN_CLIENT_ID)%"
+      secret: "%env(OAUTH2_ADMIN_CLIENT_SECRET)%"

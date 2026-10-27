@@ -23,7 +23,7 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 
-	cfg, warnings, err := config.Load(*configPath, os.LookupEnv)
+	cfg, warnings, err := config.Load(*configPath, os.Environ())
 	if err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}

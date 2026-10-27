@@ -18,9 +18,11 @@ security:
   metrics_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 secrets:
   cookie_key: "${DISPATCHER_COOKIE_KEY}"          # 32 octets : cookies remember et admin
+  cookie_keys_previous: []                         # lecture seule, pour la rotation (voir Rotation des clés)
   encryption_key: "${DISPATCHER_ENCRYPTION_KEY}"   # 32 octets : secrets en base, clé active
   encryption_keys_previous: []                     # déchiffrement seul, pour la rotation
   challenge_key: "${DISPATCHER_CHALLENGE_KEY}"     # 32 octets : HMAC des challenges d'étape
+  challenge_keys_previous: []                      # vérification seule, pour la rotation
   webhook_signing_key: "${DISPATCHER_WEBHOOK_KEY}" # HMAC des requêtes webhook
 tls:
   min_version: "1.2"             # suites conformes au guide TLS de l'ANSSI
@@ -61,6 +63,7 @@ observability:
   sentry:
     dsn: "${SENTRY_DSN}"          # vide = désactivé
     environment: "${SENTRY_ENVIRONMENT}"
+    release: ""                  # vide = version du binaire
     sample_rate: 1.0             # part des erreurs envoyées
     traces_sample_rate: 0        # tracing de performance
     max_events_per_minute: 60
@@ -75,7 +78,7 @@ observability:
     endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
     protocol: grpc               # grpc | http/protobuf
     sampler_ratio: 0.01
-dispatcher:                      # graine, format inchangé ; session_ttl et cache_providers ignorés avec avertissement
+dispatcher:                      # graine au format Symfony ; session_ttl et cache_providers ignorés avec avertissement
   apps: []
   flows: []
   oauth2_clients: []

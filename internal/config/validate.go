@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/netip"
 	"net/url"
 	"os"
@@ -39,11 +40,15 @@ func (c *Config) validate() (warnings []string, err error) {
 	if err := httpURL(c.Server.BaseURL); err != nil {
 		fail("server.base_url", "%v", err)
 	}
-	if _, err := c.Server.TrustedProxies.Prefixes(); err != nil {
-		fail("server.trusted_proxies", "%v", err)
+	if !strings.HasPrefix(c.Server.CookiePath, "/") {
+		fail("server.cookie_path", "%q does not start with /", c.Server.CookiePath)
 	}
-	if c.Server.ReplicasHint > 1 && c.State.RedisDSN == "" {
-		fail("state.redis_dsn", "is required when server.replicas_hint is above 1: the in-memory store is not shared")
+	if c.State.RedisDSN == "" {
+		if c.Server.ReplicasHint > 1 {
+			fail("state.redis_dsn", "is required when server.replicas_hint is above 1: the in-memory store is not shared")
+		} else {
+			warnings = append(warnings, "state.redis_dsn is empty: flows in progress stay in this instance's memory, unshared and lost on restart")
+		}
 	}
 
 	if err := httpURL(c.Hydra.AdminURL); err != nil {
@@ -54,23 +59,24 @@ func (c *Config) validate() (warnings []string, err error) {
 	positive("hydra.max_in_flight", int64(c.Hydra.MaxInFlight))
 	// 2.2 and 2.3 are the formats internal/hydra/flowcodec reads.
 	oneOf("hydra.version", c.Hydra.Version, "2.1", "2.2", "2.3")
-	if c.Hydra.Version == "2.1" && len(c.Hydra.SystemSecrets) > 0 {
+	switch {
+	case len(c.Hydra.SystemSecrets) == 0:
+	case c.Hydra.Version == "2.1":
 		warnings = append(warnings, "hydra.system_secrets is ignored: Hydra 2.1 does not encrypt its challenges")
-	}
-	for i, s := range c.Hydra.SystemSecrets {
+	case len(c.Hydra.SystemSecrets[0]) < 16:
 		// Hydra itself refuses a first secret under 16 characters.
-		if i == 0 && len(s) < 16 {
-			fail("hydra.system_secrets", "the first secret is shorter than 16 characters, Hydra refuses it")
-		}
+		fail("hydra.system_secrets", "the first secret is shorter than 16 characters, Hydra refuses it")
 	}
 
 	for _, l := range []struct {
 		path  string
 		hosts List
+		open  string // what a /0 network means
 	}{
-		{"security.admin_authorized_hosts", c.Security.AdminAuthorizedHosts},
-		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts},
-		{"security.metrics_authorized_hosts", *c.Security.MetricsAuthorizedHosts},
+		{"server.trusted_proxies", c.Server.TrustedProxies, "X-Forwarded-For is trusted from every address, the allowlists can be bypassed"},
+		{"security.admin_authorized_hosts", c.Security.AdminAuthorizedHosts, "open to every address"},
+		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts, "open to every address"},
+		{"security.metrics_authorized_hosts", *c.Security.MetricsAuthorizedHosts, "open to every address"},
 	} {
 		ps, err := l.hosts.Prefixes()
 		if err != nil {
@@ -78,7 +84,7 @@ func (c *Config) validate() (warnings []string, err error) {
 		}
 		for _, p := range ps {
 			if p.Bits() == 0 {
-				warnings = append(warnings, fmt.Sprintf("%s contains %s: open to every address", l.path, p))
+				warnings = append(warnings, fmt.Sprintf("%s contains %s: %s", l.path, p, l.open))
 			}
 		}
 	}
@@ -120,6 +126,21 @@ func (c *Config) validate() (warnings []string, err error) {
 	} else if !slices.Contains(c.UI.SupportedLocales, c.UI.DefaultLocale) {
 		fail("ui.default_locale", "%q is not in ui.supported_locales", c.UI.DefaultLocale)
 	}
+	for _, d := range slices.Sorted(maps.Keys(c.UI.CSPExtra)) {
+		path := "ui.csp_extra." + d
+		if !slices.Contains(cspDirectives, d) {
+			fail(path, "is not one of %s", strings.Join(cspDirectives, ", "))
+			continue
+		}
+		for _, src := range c.UI.CSPExtra[d] {
+			switch {
+			case src == "" || strings.ContainsAny(src, " \t;,"):
+				fail(path, "%q is not a single source", src)
+			case d == "script-src" && (strings.HasPrefix(src, "'unsafe-") || src == "*" || src == "data:"):
+				fail(path, "%q would allow inline or arbitrary scripts", src)
+			}
+		}
+	}
 
 	o := c.Observability
 	oneOf("observability.log_level", o.LogLevel, "debug", "info", "warn", "error")
@@ -138,18 +159,41 @@ func (c *Config) validate() (warnings []string, err error) {
 	positive("webhooks.max_processes", int64(c.Webhooks.MaxProcesses))
 	oneOf("logout.propagate_without_record", c.Logout.PropagateWithoutRecord, "all", "none")
 
+	c.Seed.validate(fail)
+
 	return warnings, errors.Join(errs...)
 }
 
+// cspDirectives are the directives ui.csp_extra may extend: sources of
+// content, never default-src or frame-ancestors.
+var cspDirectives = []string{"connect-src", "font-src", "frame-src", "img-src", "media-src", "script-src", "style-src", "worker-src"}
+
+// httpURL checks a base URL: absolute, without query or fragment.
 func httpURL(s string) error {
-	if s == "" {
-		return errors.New("is required")
+	u, err := absoluteURL(s)
+	if err != nil {
+		return err
 	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("%q is not an absolute http(s) URL without query", s)
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("%q has a query or a fragment", u.Redacted())
 	}
 	return nil
+}
+
+// absoluteURL parses an absolute http(s) URL. Errors hide its password: an
+// error ends up in the logs.
+func absoluteURL(s string) (*url.URL, error) {
+	if s == "" {
+		return nil, errors.New("is required")
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return nil, errors.New("is not a valid URL") // url.Parse quotes it whole
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("%q is not an absolute http(s) URL", u.Redacted())
+	}
+	return u, nil
 }
 
 // Prefixes parses a list of CIDRs; a bare address stands for itself (/32 or

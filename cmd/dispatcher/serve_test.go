@@ -16,14 +16,13 @@ import (
 
 func testConfig(t *testing.T, hydraAdminURL string) *config.Config {
 	t.Helper()
-	env := map[string]string{
-		"DISPATCHER_SERVER_BASE_URL":       "http://dispatcher.hydra.test",
-		"DISPATCHER_HYDRA_ADMIN_URL":       hydraAdminURL,
-		"DISPATCHER_STORE_DSN":             "postgres://dispatcher@postgres/dispatcher",
-		"DISPATCHER_SECRETS_COOKIE_KEY":    strings.Repeat("ab", 32),
-		"DISPATCHER_SECRETS_CHALLENGE_KEY": strings.Repeat("cd", 32),
-	}
-	cfg, _, err := config.Load("", func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+	cfg, _, err := config.Load("", []string{
+		"DISPATCHER_SERVER_BASE_URL=http://dispatcher.hydra.test",
+		"DISPATCHER_HYDRA_ADMIN_URL=" + hydraAdminURL,
+		"DISPATCHER_STORE_DSN=postgres://dispatcher@postgres/dispatcher",
+		"DISPATCHER_SECRETS_COOKIE_KEY=" + strings.Repeat("ab", 32),
+		"DISPATCHER_SECRETS_CHALLENGE_KEY=" + strings.Repeat("cd", 32),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

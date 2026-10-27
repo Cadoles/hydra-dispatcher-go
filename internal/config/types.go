@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +25,7 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 	v, err := parseDuration(strings.TrimSpace(n.Value))
 	if err != nil {
-		return fmt.Errorf("line %d: %w", n.Line, err)
+		return fmt.Errorf("%s%w", at(n), err)
 	}
 	*d = Duration(v)
 	return nil
@@ -31,17 +33,14 @@ func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
 
 func parseDuration(s string) (time.Duration, error) {
 	if secs, err := strconv.ParseInt(s, 10, 64); err == nil {
-		if secs < 0 {
-			return 0, fmt.Errorf("negative duration %q", s)
-		}
-		return time.Duration(secs) * time.Second, nil
+		return times(secs, time.Second, s)
 	}
 	if days, ok := strings.CutSuffix(s, "d"); ok {
 		n, err := strconv.ParseInt(days, 10, 64)
-		if err != nil || n < 0 {
+		if err != nil {
 			return 0, fmt.Errorf("invalid duration %q", s)
 		}
-		return time.Duration(n) * 24 * time.Hour, nil
+		return times(n, 24*time.Hour, s)
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d < 0 {
@@ -50,12 +49,27 @@ func parseDuration(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// times returns n units, refusing what a time.Duration cannot hold rather
+// than wrapping around.
+func times(n int64, unit time.Duration, s string) (time.Duration, error) {
+	switch {
+	case n < 0:
+		return 0, fmt.Errorf("negative duration %q", s)
+	case n > math.MaxInt64/int64(unit):
+		return 0, fmt.Errorf("duration %q is too long", s)
+	}
+	return time.Duration(n) * unit, nil
+}
+
 // List accepts a YAML sequence or a comma-separated string, the form lists
 // take in environment variables ("10.0.0.0/8,172.16.0.0/12").
 type List []string
 
 func (l *List) UnmarshalYAML(n *yaml.Node) error {
-	if n.Kind == yaml.SequenceNode {
+	switch n.Kind {
+	case yaml.MappingNode:
+		return fmt.Errorf("%sexpected a list or a comma-separated string", at(n))
+	case yaml.SequenceNode:
 		var items []string
 		if err := n.Decode(&items); err != nil {
 			return err
@@ -82,9 +96,12 @@ func splitList(s string) List {
 type Key []byte
 
 func (k *Key) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.ScalarNode {
+		return fmt.Errorf("%sa key is a string", at(n))
+	}
 	key, err := parseKey(n.Value)
 	if err != nil {
-		return fmt.Errorf("line %d: %w", n.Line, err)
+		return fmt.Errorf("%s%w", at(n), err)
 	}
 	*k = key
 	return nil
@@ -122,7 +139,7 @@ func (ks *Keys) UnmarshalYAML(n *yaml.Node) error {
 	for i, s := range l {
 		k, err := parseKey(s)
 		if err != nil {
-			return fmt.Errorf("line %d, key %d: %w", n.Line, i, err)
+			return fmt.Errorf("%skey %d: %w", at(n), i, err)
 		}
 		keys = append(keys, k)
 	}
@@ -131,18 +148,21 @@ func (ks *Keys) UnmarshalYAML(n *yaml.Node) error {
 }
 
 // Localized maps a locale to a text. A plain string applies to every locale,
-// under the empty locale: lookups fall back to it.
+// under the empty locale: lookups fall back to it. A null or empty text is no
+// text, as with Symfony's isset: { fr: ~ } falls back like a missing locale.
 type Localized map[string]string
 
 func (l *Localized) UnmarshalYAML(n *yaml.Node) error {
+	m := map[string]string{}
 	if n.Kind == yaml.ScalarNode {
-		*l = Localized{"": n.Value}
-		return nil
-	}
-	var m map[string]string
-	if err := n.Decode(&m); err != nil {
+		m[""] = n.Value
+	} else if err := n.Decode(&m); err != nil {
 		return err
 	}
-	*l = m
+	maps.DeleteFunc(m, func(_, text string) bool { return text == "" })
+	*l = nil
+	if len(m) > 0 {
+		*l = m
+	}
 	return nil
 }
