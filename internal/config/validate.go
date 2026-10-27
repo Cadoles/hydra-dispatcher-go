@@ -52,6 +52,11 @@ func (c *Config) validate() (warnings []string, err error) {
 	positive("hydra.timeout", int64(c.Hydra.Timeout))
 	positive("hydra.login_consent_ttl", int64(c.Hydra.LoginConsentTTL))
 	positive("hydra.max_in_flight", int64(c.Hydra.MaxInFlight))
+	// 2.2 and 2.3 are the formats internal/hydra/flowcodec reads.
+	oneOf("hydra.version", c.Hydra.Version, "2.1", "2.2", "2.3")
+	if c.Hydra.Version == "2.1" && len(c.Hydra.SystemSecrets) > 0 {
+		warnings = append(warnings, "hydra.system_secrets is ignored: Hydra 2.1 does not encrypt its challenges")
+	}
 	for i, s := range c.Hydra.SystemSecrets {
 		// Hydra itself refuses a first secret under 16 characters.
 		if i == 0 && len(s) < 16 {

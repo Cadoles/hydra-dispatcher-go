@@ -48,6 +48,9 @@ type Server struct {
 type Hydra struct {
 	AdminURL string   `yaml:"admin_url"`
 	Timeout  Duration `yaml:"timeout"`
+	// Version is the Hydra release: it fixes the format of the challenges
+	// SystemSecrets decrypts. Hydra 2.1 does not encrypt them.
+	Version string `yaml:"version"`
 	// SystemSecrets is Hydra's secrets.system, in Hydra's order; empty means
 	// the fallback mode (challenges validated by the admin API).
 	SystemSecrets     List     `yaml:"system_secrets"`
@@ -189,6 +192,7 @@ func defaults() *Config {
 	c.Server.TrustedProxies = append(List{}, privateNetworks...)
 	c.Server.CookiePath = "/"
 	c.Hydra.Timeout = Duration(5 * time.Second)
+	c.Hydra.Version = "2.2"
 	c.Hydra.LoginConsentTTL = Duration(30 * time.Minute)
 	c.Hydra.MaxInFlight = 512
 	c.Security.AdminAuthorizedHosts = append(List{}, privateNetworks...)

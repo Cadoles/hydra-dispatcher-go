@@ -69,6 +69,7 @@ func TestDesignDocExample(t *testing.T) {
 	}{
 		{"server.base_url", c.Server.BaseURL, "http://dispatcher.hydra.test"},
 		{"hydra.timeout", c.Hydra.Timeout.Std(), 5 * time.Second},
+		{"hydra.version", c.Hydra.Version, "2.2"},
 		{"hydra.system_secrets", c.Hydra.SystemSecrets, List{"youReallyNeedToChangeThis", "an-older-system-secret"}},
 		{"hydra.login_consent_ttl", c.Hydra.LoginConsentTTL.Std(), 30 * time.Minute},
 		{"security.failure_rate_limit.block", c.Security.FailureRateLimit.Block.Std(), 5 * time.Minute},
@@ -162,6 +163,7 @@ admin:
 		"DISPATCHER_ADMIN_CLIENT_SECRET_MAX_AGE":       "90d",
 		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE":   "0.1",
 		"DISPATCHER_HYDRA_SYSTEM_SECRETS":              "youReallyNeedToChangeThis,another-secret",
+		"DISPATCHER_HYDRA_VERSION":                     "2.3",
 	})))
 	if err != nil {
 		t.Fatal(err)
@@ -181,6 +183,7 @@ admin:
 		{"admin.client_secret_max_age", c.Admin.ClientSecretMaxAge.Std(), 90 * 24 * time.Hour},
 		{"observability.access_log_sample", c.Observability.AccessLogSample, 0.1},
 		{"hydra.system_secrets", c.Hydra.SystemSecrets, List{"youReallyNeedToChangeThis", "another-secret"}},
+		{"hydra.version", c.Hydra.Version, "2.3"},
 	} {
 		if !reflect.DeepEqual(check.got, check.want) {
 			t.Errorf("%s = %#v, want %#v", check.name, check.got, check.want)
@@ -221,6 +224,7 @@ server:
   base_url: "${BASE}/"
 hydra:
   timeout: "${TIMEOUT:-5s}"
+  version: ${HYDRA_VERSION:-2.3}
   system_secrets: "${SECRETS}"
 admin:
   ui: { enabled: "${ADMIN_UI:-false}" }
@@ -251,6 +255,8 @@ dispatcher:
 		{"server.base_url", c.Server.BaseURL, "http://dispatcher.hydra.test"},
 		{"hydra.timeout", c.Hydra.Timeout.Std(), 5 * time.Second},
 		{"hydra.system_secrets", c.Hydra.SystemSecrets, List{"youReallyNeedToChangeThis", "second"}},
+		// A float to YAML, a version to the dispatcher.
+		{"hydra.version", c.Hydra.Version, "2.3"},
 		{"admin.ui.enabled", c.Admin.UI.Enabled, false},
 		{"admin.api.token_ttl", c.Admin.API.TokenTTL.Std(), 900 * time.Second},
 		{"observability.sentry.environment", c.Observability.Sentry.Environment, "123"},
@@ -311,6 +317,7 @@ func TestValidation(t *testing.T) {
 		{"replicas without Redis", map[string]string{"DISPATCHER_SERVER_REPLICAS_HINT": "3"}, "state.redis_dsn"},
 		{"Redis DSN scheme", map[string]string{"DISPATCHER_STATE_REDIS_DSN": "http://redis:6379"}, "state.redis_dsn"},
 		{"short Hydra secret", map[string]string{"DISPATCHER_HYDRA_SYSTEM_SECRETS": "short"}, "hydra.system_secrets"},
+		{"Hydra version", map[string]string{"DISPATCHER_HYDRA_VERSION": "2.4"}, "hydra.version"},
 		{"default locale", map[string]string{"DISPATCHER_UI_DEFAULT_LOCALE": "de"}, "ui.default_locale"},
 		{"log level", map[string]string{"DISPATCHER_OBSERVABILITY_LOG_LEVEL": "verbose"}, "observability.log_level"},
 		{"sample rate", map[string]string{"DISPATCHER_OBSERVABILITY_SENTRY_SAMPLE_RATE": "1.5"}, "observability.sentry.sample_rate"},
@@ -333,6 +340,17 @@ func TestValidation(t *testing.T) {
 	}
 	if len(warnings) != 2 {
 		t.Errorf("warnings = %q, want one per open network", warnings)
+	}
+
+	_, warnings, err = Load("", envOf(required(map[string]string{
+		"DISPATCHER_HYDRA_VERSION":        "2.1",
+		"DISPATCHER_HYDRA_SYSTEM_SECRETS": "youReallyNeedToChangeThis",
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "hydra.system_secrets") {
+		t.Errorf("warnings = %q, want system secrets ignored with Hydra 2.1", warnings)
 	}
 }
 
