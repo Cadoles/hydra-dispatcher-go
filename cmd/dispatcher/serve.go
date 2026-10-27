@@ -9,11 +9,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 )
 
 func serve(ctx context.Context, args []string) error {
@@ -63,10 +63,15 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger) (http.Han
 		return nil, err
 	}
 
+	hydraClient, err := hydra.New(cfg.Hydra, cfg.TLS)
+	if err != nil {
+		return nil, fmt.Errorf("hydra client: %w", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", httpx.Health())
 	mux.Handle("GET /ready", httpx.Ready(map[string]httpx.Check{
-		"hydra": hydraReady(cfg.Hydra),
+		"hydra": hydraClient.Ready,
 	}, 2*time.Second, logger))
 
 	return httpx.Chain(httpx.Routes(mux),
@@ -101,26 +106,4 @@ func utcMillis(groups []string, a slog.Attr) slog.Attr {
 		a.Value = slog.StringValue(a.Value.Time().UTC().Format("2006-01-02T15:04:05.000Z07:00"))
 	}
 	return a
-}
-
-// hydraReady probes Hydra's admin readiness endpoint. It moves to
-// internal/hydra with the admin client (B4).
-func hydraReady(h config.Hydra) httpx.Check {
-	client := &http.Client{Timeout: h.Timeout.Std()}
-	u := strings.TrimRight(h.AdminURL, "/") + "/health/ready"
-	return func(ctx context.Context) error {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return err
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return err
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("hydra /health/ready: status %d", resp.StatusCode)
-		}
-		return nil
-	}
 }

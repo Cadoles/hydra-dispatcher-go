@@ -25,6 +25,12 @@ func infoFrom(ctx context.Context) *requestInfo {
 	return inf
 }
 
+// WithTraceID returns a context carrying traceID, for work outside an HTTP
+// request (background jobs, tests).
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	return context.WithValue(ctx, infoKey{}, &requestInfo{traceID: traceID})
+}
+
 // TraceID returns the trace id of the request ctx belongs to, or "".
 func TraceID(ctx context.Context) string {
 	if inf := infoFrom(ctx); inf != nil {

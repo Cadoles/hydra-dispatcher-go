@@ -52,6 +52,9 @@ go test -race ./...
 docker build --build-arg VERSION=dev -t hydra-dispatcher-go .
 ```
 
+The emulated API's golden files (`internal/hydra/testdata/emulated`) are
+rewritten with `go test ./internal/hydra -args -update`; review the diff.
+
 The full stack (Hydra, login apps, Postgres, Redis) runs from the sibling
 `hydra-dev` repository.
 
