@@ -239,34 +239,59 @@ func TestConsentRequestForApp(t *testing.T) {
 	var r ory.OAuth2ConsentRequest
 	decode(t, body(t, hydra22+"consent_request.json"), &r)
 	r.Skip = ory.PtrBool(true)
+	hydraChallenge, hydraLoginChallenge := r.Challenge, r.GetLoginChallenge()
 	step := Step{Challenge: "step-consent-challenge-2", LoginChallenge: "step-login-challenge-2", Subject: "test2@test.com"}
-	got := golden(t, "consent_request.json", ConsentRequestForApp(r, step, Extensions{
+	served, err := ConsentRequestForApp(r, step, Extensions{
 		Claims: map[string]any{"email": "test2@test.com"},
-	}))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := golden(t, "consent_request.json", served)
 	var doc map[string]any
 	decode(t, got, &doc)
 	if doc["challenge"] != step.Challenge || doc["login_challenge"] != step.LoginChallenge ||
 		doc["subject"] != step.Subject || doc["skip"] != false {
 		t.Errorf("consent request = %s", got)
 	}
+	if r.Challenge != hydraChallenge || r.GetLoginChallenge() != hydraLoginChallenge || !r.GetSkip() ||
+		r.AdditionalProperties != nil && r.AdditionalProperties["x_dispatcher_claims"] != nil {
+		t.Error("ConsentRequestForApp changed its argument")
+	}
 	servesSymfonyFields(t, symfony21+"14-sql-2fa-consent-skipped/0061-front-GET-oauth2_auth_requests_consent.json", got)
 
 	var nilRaw json.RawMessage
 	for _, tt := range []struct {
 		context any
-		want    any
+		want    any // nil: refused
 	}{
 		{nil, map[string]any{}},
 		{[]any{}, map[string]any{}},
 		{map[string]any(nil), map[string]any{}},
 		{nilRaw, map[string]any{}}, // flowcodec's flow without context
+		{json.RawMessage{}, map[string]any{}},
+		{json.RawMessage(" "), map[string]any{}},
 		{json.RawMessage(" null "), map[string]any{}},
 		{json.RawMessage("[]"), map[string]any{}},
 		{json.RawMessage(`{"step":1}`), map[string]any{"step": 1.0}},
-		{[]any{"a"}, []any{"a"}}, // any JSON is a context for Hydra
+		// Hydra accepts any JSON, but apps decode the context into a map.
+		{[]any{"a"}, nil},
+		{json.RawMessage(`"a"`), nil},
+		{false, nil},
+		{func() {}, nil},
 	} {
 		r.Context, r.Amr = tt.context, nil
-		out, err := json.Marshal(ConsentRequestForApp(r, step, Extensions{}))
+		served, err := ConsentRequestForApp(r, step, Extensions{})
+		if tt.want == nil {
+			if err == nil {
+				t.Errorf("context %#v served, want refused", tt.context)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("context %#v: %v", tt.context, err)
+		}
+		out, err := json.Marshal(served)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -276,5 +301,83 @@ func TestConsentRequestForApp(t *testing.T) {
 			!reflect.DeepEqual(doc["x_dispatcher_claims"], map[string]any{}) {
 			t.Errorf("context %#v: served %s", tt.context, out)
 		}
+	}
+}
+
+// The SDK serialises AdditionalProperties over the model's own fields: they
+// must not bring back Hydra's challenge, subject or skip.
+func TestAdditionalPropertiesStayMasked(t *testing.T) {
+	hydra := map[string]any{"challenge": "L", "login_challenge": "L", "subject": "hydra-subject", "skip": true, "x_hydra_next": "kept"}
+	login, err := json.Marshal(LoginRequestForApp(ory.OAuth2LoginRequest{AdditionalProperties: hydra}, Step{Challenge: "c1"}, Extensions{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consentRequest, err := ConsentRequestForApp(ory.OAuth2ConsentRequest{AdditionalProperties: hydra}, Step{Challenge: "c2", LoginChallenge: "c1"}, Extensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consent, err := json.Marshal(consentRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, served := range [][]byte{login, consent} {
+		var doc map[string]any
+		decode(t, served, &doc)
+		if doc["challenge"] == "L" || doc["login_challenge"] == "L" || doc["subject"] == "hydra-subject" ||
+			doc["skip"] != false || doc["x_hydra_next"] != "kept" {
+			t.Errorf("served %s", served)
+		}
+	}
+	if len(hydra) != 5 {
+		t.Errorf("the emulation changed its argument: %v", hydra)
+	}
+}
+
+// On the Hydra 2.1 answers the Symfony dispatcher received, login apps get
+// what it served them, value for value.
+func TestSymfonyParity(t *testing.T) {
+	const capture = symfony21 + "14-sql-2fa-consent-skipped/"
+	var symfony map[string]any
+	decode(t, body(t, capture+"0051-front-GET-oauth2_auth_requests_login.json"), &symfony)
+	var lr ory.OAuth2LoginRequest
+	decode(t, body(t, capture+"0032-hydra-GET-admin_oauth2_auth_requests_login.json"), &lr)
+	claims, _ := symfony["x_dispatcher_claims"].(map[string]any)
+	matchesSymfony(t, symfony, LoginRequestForApp(lr,
+		Step{Challenge: symfony["challenge"].(string), Subject: symfony["subject"].(string)},
+		Extensions{Claims: claims}))
+
+	symfony = nil
+	decode(t, body(t, capture+"0061-front-GET-oauth2_auth_requests_consent.json"), &symfony)
+	var cr ory.OAuth2ConsentRequest
+	decode(t, body(t, capture+"0069-hydra-GET-admin_oauth2_auth_requests_consent.json"), &cr)
+	served, err := ConsentRequestForApp(cr, Step{
+		Challenge:      symfony["challenge"].(string),
+		LoginChallenge: symfony["login_challenge"].(string),
+		Subject:        symfony["subject"].(string),
+	}, Extensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	symfony["x_dispatcher_claims"] = map[string]any{} // added to consent requests
+	matchesSymfony(t, symfony, served)
+}
+
+// matchesSymfony compares served with Symfony's answer, but for the client's
+// dates: Symfony reformatted them (+00:00, no fraction), Go relays Hydra's.
+func matchesSymfony(t *testing.T, symfony map[string]any, served any) {
+	t.Helper()
+	data, err := json.Marshal(served)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	decode(t, data, &got)
+	for _, doc := range []map[string]any{symfony, got} {
+		client, _ := doc["client"].(map[string]any)
+		delete(client, "created_at")
+		delete(client, "updated_at")
+	}
+	if d := diff(symfony, got, ""); len(d) > 0 {
+		t.Errorf("served differs from Symfony: %v", d)
 	}
 }

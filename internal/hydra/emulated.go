@@ -1,7 +1,9 @@
 package hydra
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 
 	ory "github.com/ory/hydra-client-go/v26"
@@ -48,8 +50,14 @@ func LoginRequestForApp(r ory.OAuth2LoginRequest, step Step, ext Extensions) ory
 
 // ConsentRequestForApp does the same for a consent request, whose acr, amr
 // and context the caller has set to the flow's aggregates; an empty context
-// is served as {}, never [] (a PHP artefact) nor null.
-func ConsentRequestForApp(r ory.OAuth2ConsentRequest, step Step, ext Extensions) ory.OAuth2ConsentRequest {
+// is served as {}, never [] (a PHP artefact) nor null. A context that is not
+// a JSON object is refused: Hydra accepts any JSON, but login apps read it as
+// an object (hydra-passwordless decodes it into a map).
+func ConsentRequestForApp(r ory.OAuth2ConsentRequest, step Step, ext Extensions) (ory.OAuth2ConsentRequest, error) {
+	ctx, err := appContext(r.Context)
+	if err != nil {
+		return ory.OAuth2ConsentRequest{}, err
+	}
 	r.Challenge = step.Challenge
 	r.LoginChallenge = ory.PtrString(step.LoginChallenge)
 	r.Subject = ory.PtrString(step.Subject)
@@ -57,11 +65,9 @@ func ConsentRequestForApp(r ory.OAuth2ConsentRequest, step Step, ext Extensions)
 	r.RequestedScope = nonNil(r.RequestedScope)
 	r.RequestedAccessTokenAudience = nonNil(r.RequestedAccessTokenAudience)
 	r.Amr = nonNil(r.Amr)
-	if emptyContext(r.Context) {
-		r.Context = map[string]any{}
-	}
+	r.Context = ctx
 	r.AdditionalProperties = withExtensions(r.AdditionalProperties, ext)
-	return r
+	return r, nil
 }
 
 func nonNil(s []string) []string {
@@ -71,36 +77,51 @@ func nonNil(s []string) []string {
 	return s
 }
 
-// emptyContext reports whether c serialises as null or []. It looks at the
-// JSON, so typed nils count too: a nil map, or the nil json.RawMessage
-// flowcodec gives for a flow without context.
-func emptyContext(c any) bool {
-	if c == nil {
-		return true
+// appContext returns c, or {} when c serialises as null, [] or nothing. It
+// looks at the JSON, so typed nils count too: a nil map, or the nil
+// json.RawMessage flowcodec gives for a flow without context.
+func appContext(c any) (any, error) {
+	if raw, ok := c.(json.RawMessage); c == nil || ok && len(bytes.TrimSpace(raw)) == 0 {
+		return map[string]any{}, nil
 	}
 	data, err := json.Marshal(c)
 	if err != nil {
-		return false
+		return nil, fmt.Errorf("consent context: %w", err)
 	}
 	var v any
-	if json.Unmarshal(data, &v) != nil {
-		return false
+	if err := json.Unmarshal(data, &v); err != nil {
+		return nil, fmt.Errorf("consent context: %w", err)
 	}
 	switch v := v.(type) {
 	case nil:
-		return true
+		return map[string]any{}, nil
 	case []any:
-		return len(v) == 0
+		if len(v) == 0 {
+			return map[string]any{}, nil
+		}
+	case map[string]any:
+		return c, nil
 	}
-	return false
+	return nil, fmt.Errorf("consent context: %T is not a JSON object", v)
 }
 
-// withExtensions sets the extensions on a copy of props: the SDK serialises
-// AdditionalProperties next to the model's own fields.
+// emulatedFields are the fields LoginRequestForApp and ConsentRequestForApp
+// replace or normalise.
+var emulatedFields = []string{
+	"challenge", "login_challenge", "subject", "skip",
+	"requested_scope", "requested_access_token_audience", "amr", "context",
+}
+
+// withExtensions sets the extensions on a copy of props. The SDK serialises
+// AdditionalProperties over the model's own fields: the copy drops the
+// emulated ones, so props never bring back Hydra's challenge or skip.
 func withExtensions(props map[string]any, ext Extensions) map[string]any {
 	out := maps.Clone(props)
 	if out == nil {
 		out = map[string]any{}
+	}
+	for _, k := range emulatedFields {
+		delete(out, k)
 	}
 	claims := ext.Claims
 	if claims == nil {

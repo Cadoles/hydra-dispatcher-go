@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -160,6 +161,11 @@ func TestErrors(t *testing.T) {
 		{"oversized 200", reply(200, `{"challenge":"`+strings.Repeat("a", maxBody)+`"}`), true, 0, ""},
 		// Hydra's public port, or a proxy: a broken setup, not an unknown challenge.
 		{"404 page", http.NotFound, true, 0, ""},
+		// A gateway in front of the admin API, whose JSON is not Hydra's.
+		{"gateway refusal", reply(401, `{"error":"unauthorized"}`), true, 0, ""},
+		{"gateway rate limit", reply(429, `{"error":"rate_limited"}`), true, 0, ""},
+		{"null error", reply(404, `{"error":null}`), true, 0, ""},
+		{"redirect_to outside a 410", reply(404, `{"redirect_to":"http://oidc.client.test/cb"}`), true, 0, ""},
 		{"4xx cut short", cutBody(410), true, 0, ""},
 		{"redirect", http.RedirectHandler("/elsewhere", http.StatusTemporaryRedirect).ServeHTTP, true, 0, ""},
 		{"too slow", func(w http.ResponseWriter, _ *http.Request) { time.Sleep(200 * time.Millisecond) }, true, 0, ""},
@@ -195,6 +201,28 @@ func TestErrors(t *testing.T) {
 	_, err := newTestClient(t, srv.URL, 4, time.Second).LoginRequest(context.Background(), challenge)
 	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), challenge) {
 		t.Errorf("connection refused: err = %v, want ErrUnavailable without the challenge", err)
+	}
+}
+
+// ErrUnavailable keeps its cause: a caller that gave up is not Hydra down,
+// and hydra.timeout feeds hydra_rejected_total{reason="timeout"}.
+func TestErrorCauses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := newTestClient(t, srv.URL, 4, time.Second).LoginRequest(ctx, "L")
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Errorf("caller gone: err = %v, want ErrUnavailable and context.Canceled", err)
+	}
+
+	_, err = newTestClient(t, srv.URL, 4, 50*time.Millisecond).LoginRequest(context.Background(), "L")
+	var netErr net.Error
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Errorf("hydra.timeout: err = %v, want ErrUnavailable and a timeout", err)
 	}
 }
 
@@ -301,10 +329,52 @@ func TestReady(t *testing.T) {
 	}
 }
 
+// A probe that gives up, waiting for its turn or while calling Hydra, leaves
+// no answer behind for the next one.
+func TestReadyGivesUp(t *testing.T) {
+	entered, release := make(chan struct{}, 2), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		reply(http.StatusOK, `{"status":"ok"}`)(w, r)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, 1, 5*time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Ready(ctx) }()
+	<-entered
+	waiting, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer stop()
+	if err := c.Ready(waiting); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("probe waiting for its turn = %v, want its deadline", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("probe cancelled while calling = %v, want context.Canceled", err)
+	}
+	close(release)
+	if err := c.Ready(context.Background()); err != nil {
+		t.Errorf("next probe = %v, want Hydra's answer, not a cached cancellation", err)
+	}
+}
+
+// With a dedicated CA, and HTTP/2 negotiated as Hydra serves it over TLS.
 func TestTLSWithDedicatedCA(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	protos := make(chan string, 1)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case protos <- r.Proto:
+		default:
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
 	defer srv.Close()
 	ca := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
@@ -317,6 +387,8 @@ func TestTLSWithDedicatedCA(t *testing.T) {
 	}
 	if err := withCA.Ready(context.Background()); err != nil {
 		t.Errorf("with the CA: %v", err)
+	} else if proto := <-protos; proto != "HTTP/2.0" {
+		t.Errorf("with the CA: Hydra called over %s, want HTTP/2.0", proto)
 	}
 	if err := newTestClient(t, srv.URL, 1, time.Second).Ready(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Errorf("without the CA: err = %v, want the certificate refused", err)

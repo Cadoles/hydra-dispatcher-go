@@ -25,7 +25,9 @@ import (
 
 var (
 	// ErrUnavailable covers network errors, timeouts, 5xx and unexpected
-	// answers: error E1004 for the user.
+	// answers: error E1004 for the user. The cause stays wrapped:
+	// context.Canceled when the caller gave up, context.DeadlineExceeded (and a
+	// net.Error timing out) past hydra.timeout or the caller's deadline.
 	ErrUnavailable = errors.New("hydra unavailable")
 	// ErrOverloaded means hydra.max_in_flight calls are already running: the
 	// caller answers 503 with Retry-After instead of queueing.
@@ -195,19 +197,19 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 
 // classify turns an SDK error into ErrUnavailable or a RequestError. A 4xx
 // is a RequestError only with Hydra's error document: a 404 page from
-// elsewhere (Hydra's public port, a proxy) or a body cut short is a broken
-// setup or network, not an unknown challenge.
+// elsewhere (Hydra's public port, a proxy), a gateway's refusal or a body cut
+// short is a broken setup or network, not an unknown challenge.
 func classify(op string, resp *http.Response, err error) error {
 	err = withoutURL(err)
 	switch {
 	case resp == nil: // no answer: refused, timed out, cancelled
-		return fmt.Errorf("%s: %w: %v", op, ErrUnavailable, err)
+		return fmt.Errorf("%s: %w: %w", op, ErrUnavailable, err)
 	case resp.StatusCode >= 500 || resp.StatusCode < 400: // includes a 2xx the SDK could not decode, and redirects
-		return fmt.Errorf("%s: %w: status %d: %v", op, ErrUnavailable, resp.StatusCode, err)
+		return fmt.Errorf("%s: %w: status %d: %w", op, ErrUnavailable, resp.StatusCode, err)
 	}
 	var apiErr *ory.GenericOpenAPIError
-	if !errors.As(err, &apiErr) || !hydraError(apiErr.Body()) {
-		return fmt.Errorf("%s: %w: status %d without Hydra's error document: %v", op, ErrUnavailable, resp.StatusCode, err)
+	if !errors.As(err, &apiErr) || !hydraError(resp.StatusCode, apiErr.Body()) {
+		return fmt.Errorf("%s: %w: status %d without Hydra's error document: %w", op, ErrUnavailable, resp.StatusCode, err)
 	}
 	return &RequestError{Op: op, Status: resp.StatusCode, Body: apiErr.Body()}
 }
@@ -222,14 +224,23 @@ func withoutURL(err error) error {
 	return err
 }
 
-// hydraError reports whether body is one of Hydra's error documents: an
-// OAuth2 error, or the redirect_to of a request already handled.
-func hydraError(body []byte) bool {
-	var doc struct {
-		Error      json.RawMessage `json:"error"`
-		RedirectTo json.RawMessage `json:"redirect_to"`
+// hydraError reports whether a 4xx body is one of Hydra's error documents:
+// an OAuth2 error, or on a 410 the redirect_to of a request already handled.
+// Hydra's admin API has neither authentication nor rate limit: a 401, 407 or
+// 429 comes from a gateway or proxy in front of it, even with a JSON error.
+func hydraError(status int, body []byte) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusProxyAuthRequired, http.StatusTooManyRequests:
+		return false
 	}
-	return json.Unmarshal(body, &doc) == nil && (doc.Error != nil || doc.RedirectTo != nil)
+	var doc struct {
+		Error      string `json:"error"`
+		RedirectTo string `json:"redirect_to"`
+	}
+	if json.Unmarshal(body, &doc) != nil {
+		return false
+	}
+	return doc.Error != "" || status == http.StatusGone && doc.RedirectTo != ""
 }
 
 // present refuses the nil model the SDK returns, without an error, for an
