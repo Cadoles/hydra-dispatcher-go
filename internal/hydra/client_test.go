@@ -179,6 +179,9 @@ func TestErrors(t *testing.T) {
 		{"gateway refusal", reply(401, `{"error":"unauthorized"}`), true, 401, ""},
 		{"gateway rate limit", reply(429, `{"error":"rate_limited"}`), true, 429, ""},
 		{"null error", reply(404, `{"error":null}`), true, 404, ""},
+		// Hydra's members by their exact names: a struct takes any case.
+		{"error of another case", reply(404, `{"Error":"not_found"}`), true, 404, ""},
+		{"redirect_to of another case", reply(410, `{"Redirect_To":"http://oidc.client.test/cb"}`), true, 410, ""},
 		{"redirect_to outside a 410", reply(404, `{"redirect_to":"http://oidc.client.test/cb"}`), true, 404, ""},
 		{"4xx cut short", cutBody(410), true, 410, ""},
 		{"redirect", http.RedirectHandler("/elsewhere", http.StatusTemporaryRedirect).ServeHTTP, true, 307, ""},
@@ -222,6 +225,31 @@ func TestErrors(t *testing.T) {
 	var unavailable *UnavailableError
 	if !errors.As(err, &unavailable) || unavailable.Status != 0 || strings.Contains(err.Error(), challenge) || strings.Contains(err.Error(), "SENTINEL-PASSWORD") {
 		t.Errorf("connection refused: err = %v, want ErrUnavailable without status, the challenge nor the password", err)
+	}
+}
+
+// Hydra's error document reaches the login apps as Hydra wrote it.
+func TestRequestErrorBodyAsServed(t *testing.T) {
+	const sent = "{ \"error\" : \"request_forbidden\",\n  \"error_hint\": \"Field 'subject' does not match.\", \"x_hydra_next\": 12345678901234567891 }\n"
+	srv := httptest.NewServer(http.HandlerFunc(reply(http.StatusForbidden, sent)))
+	defer srv.Close()
+	_, err := newTestClient(t, srv.URL, 1, time.Second).AcceptLogin(context.Background(), "L", ory.AcceptOAuth2LoginRequest{Subject: "alice"})
+	var reqErr *RequestError
+	if !errors.As(err, &reqErr) || string(reqErr.Body) != sent {
+		t.Errorf("err = %v, want a RequestError with the body as sent", err)
+	}
+}
+
+// A body cut short says so, whatever the status: neither a document missing
+// nor a cause.
+func TestUnreadBody(t *testing.T) {
+	for _, status := range []int{http.StatusGone, http.StatusBadGateway} {
+		srv := httptest.NewServer(http.HandlerFunc(cutBody(status)))
+		_, err := newTestClient(t, srv.URL, 1, time.Second).LoginRequest(context.Background(), "L")
+		srv.Close()
+		if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), fmt.Sprintf("status %d while reading the body: ", status)) {
+			t.Errorf("%d cut short: err = %v", status, err)
+		}
 	}
 }
 
@@ -319,16 +347,20 @@ func TestErrorCauses(t *testing.T) {
 	}
 }
 
-// Hydra is called directly, never through HTTP_PROXY. Setting it would not
-// tell: ProxyFromEnvironment skips loopback addresses and reads the
-// environment once per process.
-func TestNoProxy(t *testing.T) {
+// What no call can show in a test. Hydra is called directly, never through
+// HTTP_PROXY: setting it would not tell, as ProxyFromEnvironment skips
+// loopback addresses and reads the environment once per process. Idle
+// connections are closed before Hydra closes them, after 120 s.
+func TestTransportSettings(t *testing.T) {
 	transport, err := newTransport(config.Hydra{Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.2"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if transport.Proxy != nil {
 		t.Error("the transport takes a proxy")
+	}
+	if d := transport.IdleConnTimeout; d <= 0 || d >= 120*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want below Hydra's 120 s", d)
 	}
 }
 
@@ -506,36 +538,106 @@ func TestInFlightCap(t *testing.T) {
 }
 
 // Every call the cap lets through gets its connection: a lower limit in the
-// transport would queue calls out of the cap's sight.
+// transport would queue calls out of the cap's sight. Over HTTP/2, past the
+// 250 streams Go's server (Hydra's) allows per connection, the client opens
+// another rather than wait for a stream.
 func TestConnectionsFollowTheCap(t *testing.T) {
-	const n = 300 // above the 256 connections per host the transport used to allow
-	var arrived atomic.Int32
-	var queued atomic.Bool
-	all := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if arrived.Add(1) == n {
-			close(all)
-		}
-		select {
-		case <-all:
-		case <-time.After(2 * time.Second):
-			queued.Store(true)
-		}
-	}))
-	defer srv.Close()
-	c := newTestClient(t, srv.URL, n, 10*time.Second)
+	for _, h2 := range []bool{false, true} {
+		t.Run(map[bool]string{false: "http1", true: "http2"}[h2], func(t *testing.T) {
+			const n = 300 // above the 256 connections per host the transport used to allow
+			var arrived atomic.Int32
+			var queued, otherProto atomic.Bool
+			all := make(chan struct{})
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if h2 && r.ProtoMajor != 2 {
+					otherProto.Store(true)
+				}
+				if arrived.Add(1) == n {
+					close(all)
+				}
+				select {
+				case <-all:
+				case <-time.After(2 * time.Second):
+					queued.Store(true)
+				}
+			}))
+			tlsConfig := config.TLS{MinVersion: "1.2"}
+			if h2 {
+				srv.EnableHTTP2 = true
+				srv.StartTLS()
+				tlsConfig = config.TLS{MinVersion: "1.3", CAFile: caFile(t, srv)}
+			} else {
+				srv.Start()
+			}
+			defer srv.Close()
+			c, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(10 * time.Second), MaxInFlight: n}, tlsConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	var wg sync.WaitGroup
-	for range n {
-		wg.Go(func() {
-			if err := c.RejectLogout(context.Background(), "U"); err != nil {
-				t.Error(err)
+			var wg sync.WaitGroup
+			for range n {
+				wg.Go(func() {
+					if err := c.RejectLogout(context.Background(), "U"); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			wg.Wait()
+			if queued.Load() {
+				t.Errorf("the %d calls did not reach Hydra together", n)
+			}
+			if otherProto.Load() {
+				t.Error("a call did not go over HTTP/2")
 			}
 		})
 	}
-	wg.Wait()
-	if queued.Load() {
-		t.Errorf("the %d calls did not reach Hydra together", n)
+}
+
+// Connections are kept for the next calls, up to the cap: Go's default of 2
+// idle connections per host would open one per call under load.
+func TestIdleConnectionsKept(t *testing.T) {
+	const n = 16
+	var opened atomic.Int32
+	var mu sync.Mutex
+	waiting, release := 0, make(chan struct{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Each wave's calls are held until all have arrived: n connections.
+		mu.Lock()
+		wave := release
+		if waiting++; waiting == n {
+			close(release)
+			waiting, release = 0, make(chan struct{})
+		}
+		mu.Unlock()
+		select {
+		case <-wave:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, n, 5*time.Second)
+
+	for range 2 {
+		var wg sync.WaitGroup
+		for range n {
+			wg.Go(func() {
+				if err := c.RejectLogout(context.Background(), "U"); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+		wg.Wait()
+	}
+	if got := opened.Load(); got != n {
+		t.Errorf("%d connections opened for two waves of %d calls, want %d", got, n, n)
 	}
 }
 
@@ -601,6 +703,31 @@ func TestReadyGivesUp(t *testing.T) {
 	close(release)
 	if err := c.Ready(context.Background()); err != nil {
 		t.Errorf("next probe = %v, want Hydra's answer, not a cached cancellation", err)
+	}
+}
+
+// /health/ready has no 4xx and answers JSON: anything else is Hydra
+// unavailable, even an error document.
+func TestReadyAnswers(t *testing.T) {
+	for _, tt := range []struct {
+		status            int
+		contentType, body string
+	}{
+		{http.StatusNotFound, "application/json", `{"error":"Not Found","error_description":"Unable to locate the resource"}`},
+		{http.StatusGone, "application/json", `{"redirect_to":"http://oidc.client.test/cb"}`},
+		{http.StatusOK, "text/plain", "ok"},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", tt.contentType)
+			w.WriteHeader(tt.status)
+			_, _ = io.WriteString(w, tt.body)
+		}))
+		err := newTestClient(t, srv.URL, 1, time.Second).Ready(context.Background())
+		srv.Close()
+		var unavailable *UnavailableError
+		if !errors.As(err, &unavailable) || unavailable.Op != "ready" || unavailable.Status != tt.status {
+			t.Errorf("%d %s: Ready = %#v, want an UnavailableError of ready with that status", tt.status, tt.body, err)
+		}
 	}
 }
 

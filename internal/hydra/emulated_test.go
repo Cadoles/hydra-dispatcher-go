@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	ory "github.com/ory/hydra-client-go/v26"
@@ -84,23 +85,30 @@ func diff(want, got any, path string) []string {
 }
 
 // missing lists the members of want absent from got, or of another JSON
-// type, through nested objects.
+// type, through nested objects. Arrays may hold other values: their first
+// elements are compared, when both have one.
 func missing(want, got any, path string) []string {
-	wm, ok := want.(map[string]any)
-	if !ok {
-		return nil
-	}
-	gm, _ := got.(map[string]any)
 	var out []string
-	for k, w := range wm {
-		g, ok := gm[k]
+	check := func(w, g any, ok bool, path string) {
 		switch {
 		case !ok:
-			out = append(out, path+"."+k+": missing")
+			out = append(out, path+": missing")
 		case w != nil && reflect.TypeOf(w) != reflect.TypeOf(g):
-			out = append(out, fmt.Sprintf("%s.%s: %T served as %T", path, k, w, g))
+			out = append(out, fmt.Sprintf("%s: %T served as %T", path, w, g))
 		default:
-			out = append(out, missing(w, g, path+"."+k)...)
+			out = append(out, missing(w, g, path)...)
+		}
+	}
+	switch w := want.(type) {
+	case map[string]any:
+		gm, _ := got.(map[string]any)
+		for k, v := range w {
+			g, ok := gm[k]
+			check(v, g, ok, path+"."+k)
+		}
+	case []any:
+		if g, _ := got.([]any); len(w) > 0 && len(g) > 0 {
+			check(w[0], g[0], true, path+"[0]")
 		}
 	}
 	slices.Sort(out)
@@ -487,29 +495,107 @@ func TestAdditionalPropertiesStayMasked(t *testing.T) {
 	}
 }
 
+// Login apps get Hydra's answer whole, but for what the emulation replaces:
+// challenges, subject and skip, an empty context as {}, and the extension.
+// The models' fields are masked in the additional properties: a member Hydra
+// would add under one of those names (acr on a login request) would be lost.
+func TestServedKeepsHydraMembers(t *testing.T) {
+	for _, tt := range []struct{ login, consent string }{
+		{hydra22 + "login_request.json", hydra22 + "consent_request.json"},
+		{hydra23 + "login_request.json", hydra23 + "consent_request.json"},
+		{symfony21 + "01-skip/0002-hydra-GET-admin_oauth2_auth_requests_login.json", symfony21 + "01-skip/0005-hydra-GET-admin_oauth2_auth_requests_consent.json"},
+		{symfony21 + "14-sql-2fa-consent-skipped/0032-hydra-GET-admin_oauth2_auth_requests_login.json", symfony21 + "14-sql-2fa-consent-skipped/0069-hydra-GET-admin_oauth2_auth_requests_consent.json"},
+	} {
+		step := Step{Challenge: "step-challenge", LoginChallenge: "step-login-challenge", Subject: "step-subject"}
+		login, err := json.Marshal(LoginRequestForApp(loginRequest(t, tt.login), step, Extensions{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		served, err := ConsentRequestForApp(consentRequest(t, tt.consent), step, Extensions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		consent, err := json.Marshal(served)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, answer := range []struct {
+			path   string
+			served []byte
+		}{{tt.login, login}, {tt.consent, consent}} {
+			var want, got map[string]any
+			decode(t, body(t, answer.path), &want)
+			decode(t, answer.served, &got)
+			withoutClientNulls(want)
+			want["challenge"], want["subject"], want["skip"] = step.Challenge, step.Subject, false
+			want["x_dispatcher_claims"] = map[string]any{}
+			if answer.path == tt.consent {
+				want["login_challenge"] = step.LoginChallenge
+				if c, ok := want["context"].([]any); ok && len(c) == 0 { // Hydra 2.1 behind Symfony
+					want["context"] = map[string]any{}
+				}
+			}
+			if d := diff(want, got, ""); len(d) > 0 {
+				t.Errorf("%s: served differs from Hydra's: %v", answer.path, d)
+			}
+		}
+	}
+}
+
 // On the Hydra 2.1 answers the Symfony dispatcher received, login apps get
-// what it served them, value for value.
+// what it served them, value for value. Symfony read Hydra's login request
+// before serving each step's: that answer is the source. A step's consent
+// request comes from the consent request Hydra served at the end, with the
+// aggregates so far, which the caller sets: those Symfony served.
 func TestSymfonyParity(t *testing.T) {
-	const capture = symfony21 + "14-sql-2fa-consent-skipped/"
-	lr := loginRequest(t, capture+"0032-hydra-GET-admin_oauth2_auth_requests_login.json")
+	for _, capture := range []string{
+		"05-sql-2fa-consent-screen-accept-INCOMPLETE-no-2fa-app-calls",
+		"07-oidc-after-sql-retry-consent-skipped",
+		"09-sql-2fa-consent-skipped-INCOMPLETE-no-2fa-app-calls",
+		"12-sql-consent-skipped",
+		"14-sql-2fa-consent-skipped",
+	} {
+		t.Run(capture, func(t *testing.T) {
+			files, err := filepath.Glob(filepath.Join(symfony21, capture, "*.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var hydraLogin, hydraConsent string
+			var appConsents []string
+			logins := 0
+			for _, f := range files {
+				switch name := filepath.Base(f); {
+				case strings.Contains(name, "-hydra-GET-admin_oauth2_auth_requests_login."):
+					hydraLogin = f
+				case strings.Contains(name, "-front-GET-oauth2_auth_requests_login."):
+					logins++
+					matchesSymfonyLogin(t, f, loginRequest(t, hydraLogin))
+				case strings.Contains(name, "-front-GET-oauth2_auth_requests_consent."):
+					appConsents = append(appConsents, f)
+				case strings.Contains(name, "-hydra-GET-admin_oauth2_auth_requests_consent.") && hydraConsent == "":
+					hydraConsent = f
+				}
+			}
+			if logins == 0 || len(appConsents) == 0 || hydraConsent == "" {
+				t.Fatalf("%d login requests, consent requests %q, Hydra's %q: the capture changed", logins, appConsents, hydraConsent)
+			}
+			for _, f := range appConsents {
+				matchesSymfonyConsent(t, f, consentRequest(t, hydraConsent))
+			}
+		})
+	}
+}
 
-	// First step: Symfony served subject null and claims [] (a PHP empty
-	// array); the emulated API serves "" and {}.
+// matchesSymfonyConsent does the same for a consent request, served from
+// Hydra's cr with the aggregates Symfony served.
+func matchesSymfonyConsent(t *testing.T, exchange string, cr ory.OAuth2ConsentRequest) {
+	t.Helper()
 	var symfony map[string]any
-	decode(t, body(t, capture+"0037-front-GET-oauth2_auth_requests_login.json"), &symfony)
-	symfony["subject"], symfony["x_dispatcher_claims"] = "", map[string]any{}
-	matchesSymfony(t, symfony, LoginRequestForApp(lr, Step{Challenge: symfony["challenge"].(string)}, Extensions{}))
-
-	symfony = nil
-	decode(t, body(t, capture+"0051-front-GET-oauth2_auth_requests_login.json"), &symfony)
-	claims, _ := symfony["x_dispatcher_claims"].(map[string]any)
-	matchesSymfony(t, symfony, LoginRequestForApp(lr,
-		Step{Challenge: symfony["challenge"].(string), Subject: symfony["subject"].(string)},
-		Extensions{Claims: claims}))
-
-	symfony = nil
-	decode(t, body(t, capture+"0061-front-GET-oauth2_auth_requests_consent.json"), &symfony)
-	cr := consentRequest(t, capture+"0069-hydra-GET-admin_oauth2_auth_requests_consent.json")
+	decode(t, body(t, exchange), &symfony)
+	cr.Acr, cr.Amr, cr.Context = ory.PtrString(symfony["acr"].(string)), nil, symfony["context"]
+	for _, m := range symfony["amr"].([]any) {
+		cr.Amr = append(cr.Amr, m.(string))
+	}
 	served, err := ConsentRequestForApp(cr, Step{
 		Challenge:      symfony["challenge"].(string),
 		LoginChallenge: symfony["login_challenge"].(string),
@@ -520,6 +606,27 @@ func TestSymfonyParity(t *testing.T) {
 	}
 	symfony["x_dispatcher_claims"] = map[string]any{} // added to consent requests
 	matchesSymfony(t, symfony, served)
+}
+
+// matchesSymfonyLogin compares the login request Symfony served in exchange
+// with the one served from Hydra's answer lr, for the same step. On a first
+// step, Symfony served subject null and claims [] (a PHP empty array); the
+// emulated API serves "" and {}.
+func matchesSymfonyLogin(t *testing.T, exchange string, lr ory.OAuth2LoginRequest) {
+	t.Helper()
+	var symfony map[string]any
+	decode(t, body(t, exchange), &symfony)
+	if symfony["subject"] == nil {
+		symfony["subject"] = ""
+	}
+	claims, ok := symfony["x_dispatcher_claims"].(map[string]any)
+	if !ok {
+		claims = map[string]any{}
+		symfony["x_dispatcher_claims"] = claims
+	}
+	matchesSymfony(t, symfony, LoginRequestForApp(lr,
+		Step{Challenge: symfony["challenge"].(string), Subject: symfony["subject"].(string)},
+		Extensions{Claims: claims}))
 }
 
 // matchesSymfony compares served with Symfony's answer, but for the client's

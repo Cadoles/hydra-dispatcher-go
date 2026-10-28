@@ -107,13 +107,11 @@ func (e *RequestError) Error() string {
 // RedirectTo returns where Hydra sends a request it already handled (410),
 // or "".
 func (e *RequestError) RedirectTo() string {
-	var body struct {
-		RedirectTo string `json:"redirect_to"`
-	}
-	if e.Status != http.StatusGone || json.Unmarshal(e.Body, &body) != nil {
+	var doc map[string]json.RawMessage
+	if e.Status != http.StatusGone || json.Unmarshal(e.Body, &doc) != nil {
 		return ""
 	}
-	return body.RedirectTo
+	return stringMember(doc, "redirect_to")
 }
 
 // Client calls the admin API with one shared transport and a cap on
@@ -260,10 +258,13 @@ func classify(op string, resp *http.Response, err error) error {
 	unavailable.Status = resp.StatusCode
 	var apiErr *ory.GenericOpenAPIError
 	switch {
+	case resp.StatusCode < 300: // a 2xx not decoded, incomplete or cut short
+	case !errors.As(err, &apiErr): // the SDK reads any other body whole first
+		unavailable.detail = " while reading the body"
 	case resp.StatusCode >= 500:
-		unavailable.detail = serverCause(resp, unavailable.err)
-	case resp.StatusCode < 400: // a 2xx not decoded or incomplete, a redirect
-	case !errors.As(err, &apiErr) || !hydraError(resp.StatusCode, apiErr.Body()):
+		unavailable.detail = serverCause(resp, apiErr.Body())
+	case resp.StatusCode < 400: // a redirect
+	case !hydraError(resp.StatusCode, apiErr.Body()):
 		unavailable.detail = " without Hydra's error document"
 	default:
 		return &RequestError{Op: op, Status: resp.StatusCode, Body: apiErr.Body()}
@@ -276,14 +277,13 @@ func classify(op string, resp *http.Response, err error) error {
 // /health/ready, which the SDK's message leaves out, or "". It drops the
 // request's query values, which a gateway may quote: the challenge never
 // goes to the logs.
-func serverCause(resp *http.Response, err error) string {
-	var apiErr *ory.GenericOpenAPIError
+func serverCause(resp *http.Response, body []byte) string {
 	var doc struct {
 		Error       string          `json:"error"`
 		Description string          `json:"error_description"`
 		Errors      json.RawMessage `json:"errors"`
 	}
-	if !errors.As(err, &apiErr) || json.Unmarshal(apiErr.Body(), &doc) != nil {
+	if json.Unmarshal(body, &doc) != nil {
 		return ""
 	}
 	cause := doc.Error
@@ -336,17 +336,26 @@ func hydraError(status int, body []byte) bool {
 	if status == http.StatusProxyAuthRequired || status == http.StatusTooManyRequests {
 		return false
 	}
-	var doc struct {
-		Error      string `json:"error"`
-		RedirectTo string `json:"redirect_to"`
-	}
+	var doc map[string]json.RawMessage
 	if json.Unmarshal(body, &doc) != nil {
 		return false
 	}
+	code := stringMember(doc, "error")
 	if status == http.StatusUnauthorized {
-		return doc.Error == "request_unauthorized"
+		return code == "request_unauthorized"
 	}
-	return doc.Error != "" || status == http.StatusGone && doc.RedirectTo != ""
+	return code != "" || status == http.StatusGone && stringMember(doc, "redirect_to") != ""
+}
+
+// stringMember returns the string member name of doc, or "". The name is
+// matched exactly: a struct's fields would also take {"Error": …} or
+// {"ERROR": …}, which Hydra never writes.
+func stringMember(doc map[string]json.RawMessage, name string) string {
+	var s string
+	if json.Unmarshal(doc[name], &s) != nil {
+		return ""
+	}
+	return s
 }
 
 // answer decodes the body of a 2xx with decode, in place of the SDK's model:
@@ -441,7 +450,9 @@ func (c *Client) RejectLogout(ctx context.Context, challenge string) error {
 // out of the in-flight cap: a full cap is load, not Hydra down, and must not
 // take the instance out of the load balancer. /ready is outside every
 // allowlist, so probes call Hydra one at a time and share its answer for
-// readyTTL.
+// readyTTL. A call's error is always an UnavailableError: /health/ready has
+// no 4xx, so whatever answers one, error document or not, is not Hydra's
+// admin API.
 func (c *Client) Ready(ctx context.Context) error {
 	select {
 	case c.readySlot <- struct{}{}:
@@ -454,7 +465,11 @@ func (c *Client) Ready(ctx context.Context) error {
 	}
 	_, resp, err := c.metadata.IsReady(ctx).Execute()
 	if err != nil {
-		err = classify("ready", resp, err)
+		cause := err
+		var reqErr *RequestError
+		if err = classify("ready", resp, err); errors.As(err, &reqErr) {
+			err = &UnavailableError{Op: "ready", Status: reqErr.Status, err: cause}
+		}
 	}
 	if ctx.Err() == nil { // Hydra's answer, not this probe giving up
 		c.readyAt, c.readyErr = time.Now(), err
