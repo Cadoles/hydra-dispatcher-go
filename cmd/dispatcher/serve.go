@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,9 +19,13 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 )
 
+// configEnv names the configuration file when -config is not given: the
+// image's HEALTHCHECK reads it too, for the server.listen it may set.
+const configEnv = "DISPATCHER_CONFIG"
+
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	configPath := fs.String("config", "", "configuration file (default: DISPATCHER_* variables only)")
+	configPath := fs.String("config", os.Getenv(configEnv), "configuration file (default: $"+configEnv+", else DISPATCHER_* variables only)")
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}
@@ -33,14 +38,13 @@ func serve(ctx context.Context, args []string) error {
 		}
 		return fmt.Errorf("configuration: %w", err)
 	}
-	logs := newLogHandler(os.Stdout, cfg.Observability)
-	logger := slog.New(logs).With("log_type", "app")
+	logger, accessLogger := newLoggers(os.Stdout, cfg.Observability)
 	slog.SetDefault(logger)
 	for _, w := range warnings {
 		logger.Warn("config.warning", "detail", w)
 	}
 
-	handler, err := newHandler(cfg, logger, slog.New(logs).With("log_type", "access"))
+	handler, err := newHandler(cfg, logger, accessLogger)
 	if err != nil {
 		return err
 	}
@@ -93,33 +97,48 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger) (http.Han
 
 	return httpx.Chain(httpx.Routes(mux),
 		httpx.RealIP(trusted),
-		// traceparent is honoured from proxies and login apps only.
-		httpx.Trace(append(trusted, loginApps...)),
+		// traceparent is honoured from proxies and login apps only. Concat:
+		// an append could share the array RealIP holds.
+		httpx.Trace(slices.Concat(trusted, loginApps)),
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP),
 		httpx.Recover(logger),
 	), nil
 }
 
-// newLogHandler writes one JSON (or text) line per record, stamped with the
-// instance and version, and with the trace id and route of request contexts.
-func newLogHandler(w io.Writer, o config.Observability) slog.Handler {
+// newLoggers returns the application and access loggers. The access log has
+// its own level, info: access_log_sample sets its volume, and its errors and
+// aborted requests are written whatever log_level.
+func newLoggers(w io.Writer, o config.Observability) (app, access *slog.Logger) {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
+	app = slog.New(newLogHandler(w, o.LogFormat, level)).With("log_type", "app")
+	access = slog.New(newLogHandler(w, o.LogFormat, slog.LevelInfo)).With("log_type", "access")
+	return app, access
+}
+
+// newLogHandler writes one JSON (or text) line per record, stamped with the
+// instance and version, and with the trace id and route of request contexts.
+// Handlers sharing w do not interleave their lines: os.File serializes each
+// write.
+func newLogHandler(w io.Writer, format string, level slog.Level) slog.Handler {
 	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: logFormat}
 	var h slog.Handler = slog.NewJSONHandler(w, opts)
-	if o.LogFormat == "text" {
+	if format == "text" {
 		h = slog.NewTextHandler(w, opts)
 	}
 	instance, _ := os.Hostname()
-	return httpx.LogHandler(h.WithAttrs([]slog.Attr{
+	// Given through LogHandler, which then renames an event's own instance
+	// or version.
+	return httpx.LogHandler(h).WithAttrs([]slog.Attr{
 		slog.String("instance", instance),
 		slog.String("version", version),
-	}))
+	})
 }
 
 // logFormat writes the record time in RFC 3339, UTC, to the millisecond, and
-// the level in lowercase, as the design document has them. An attribute of
-// the same name but of another kind is left as it is.
+// the level in lowercase, as the design document has them. LogHandler
+// renames an event's own time or level; without it, such an attribute of
+// another kind is left as it is.
 func logFormat(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) > 0 {
 		return a

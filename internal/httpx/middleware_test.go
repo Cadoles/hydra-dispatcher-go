@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -42,6 +45,13 @@ func TestRealIP(t *testing.T) {
 		{"unknown hop", "10.0.5.5:80", []string{"unknown"}, "invalid IP"},
 		{"empty hop", "10.0.5.5:80", []string{"198.51.100.1,"}, "invalid IP"},
 		{"empty header", "10.0.5.5:80", []string{""}, "invalid IP"},
+		// What the client writes left of its own address is never read: it can
+		// make itself neither trusted nor unknown.
+		{"malformed hop left of the client", "10.0.5.5:80", []string{"garbage, 198.51.100.1"}, "198.51.100.1"},
+		{"malformed line left of the client", "10.0.5.5:80", []string{"garbage", "198.51.100.1, 10.1.2.3"}, "198.51.100.1"},
+		{"trusted address left of the client", "10.0.5.5:80", []string{"10.3.0.7, 198.51.100.1"}, "198.51.100.1"},
+		{"IPv4-mapped trusted hop", "10.0.5.5:80", []string{"198.51.100.1, ::ffff:10.1.2.3"}, "198.51.100.1"},
+		{"IPv6 proxy chain", "[fd00::1]:80", []string{"2001:db8::42, fd00::2, [fd00::3]:443"}, "2001:db8::42"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -205,16 +215,23 @@ func TestAccessLogSamplingAndIP(t *testing.T) {
 	mux.HandleFunc("GET /fail", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })
 
 	for _, tt := range []struct {
-		logIP, remote, want string
+		logIP, remote, xff, want string
 	}{
-		{"none", "203.0.113.7:1", ""},
-		{"full", "203.0.113.7:1", "203.0.113.7"},
-		{"truncated", "[2001:db8:1:2::42]:1", "2001:db8:1::/48"},
+		{"none", "203.0.113.7:1", "", ""},
+		{"full", "203.0.113.7:1", "", "203.0.113.7"},
+		{"truncated", "[2001:db8:1:2::42]:1", "", "2001:db8:1::/48"},
+		// Unreadable X-Forwarded-For: shown, never mistaken for none.
+		{"truncated", "10.0.5.5:80", "unknown", "unknown"},
+		{"full", "10.0.5.5:80", "unknown", "unknown"},
+		{"none", "10.0.5.5:80", "unknown", ""},
 	} {
 		h, buf := stack(mux, 0, tt.logIP)
 		for _, path := range []string{"/ok", "/fail", "/nowhere"} {
 			r := httptest.NewRequest(http.MethodGet, path, nil)
 			r.RemoteAddr = tt.remote
+			if tt.xff != "" {
+				r.Header.Set("X-Forwarded-For", tt.xff)
+			}
 			h.ServeHTTP(httptest.NewRecorder(), r)
 		}
 		lines := logLines(t, buf)
@@ -223,8 +240,22 @@ func TestAccessLogSamplingAndIP(t *testing.T) {
 			t.Fatalf("log_ip %s: lines = %v", tt.logIP, lines)
 		}
 		if got, _ := lines[0]["ip"].(string); got != tt.want {
-			t.Errorf("log_ip %s: ip = %q, want %q", tt.logIP, got, tt.want)
+			t.Errorf("log_ip %s, X-Forwarded-For %q: ip = %q, want %q", tt.logIP, tt.xff, got, tt.want)
 		}
+	}
+}
+
+// Probes are read (GET, HEAD); another method on their paths is written.
+func TestAccessLogQuietPaths(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.Handle("GET /ready", Health())
+	h, buf := stack(mux, 1, "none")
+	for _, m := range []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodDelete} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(m, "/ready", nil))
+	}
+	lines := logLines(t, buf)
+	if len(lines) != 2 || lines[0]["method"] != "POST" || lines[1]["method"] != "DELETE" || lines[0]["status"] != float64(405) {
+		t.Errorf("log lines = %v, want POST and DELETE only, in 405", lines)
 	}
 }
 
@@ -273,6 +304,51 @@ func TestStatusWriter(t *testing.T) {
 	}
 	if !flushed.Flushed {
 		t.Error("the flush did not reach the connection")
+	}
+
+	// 101 Switching Protocols is final, unlike the other 1xx.
+	sw := &statusWriter{ResponseWriter: httptest.NewRecorder()}
+	sw.WriteHeader(http.StatusSwitchingProtocols)
+	if sw.status != http.StatusSwitchingProtocols {
+		t.Errorf("status after a 101 = %d", sw.status)
+	}
+}
+
+// http.ServeContent copies by ReadFrom, which statusWriter keeps for the
+// sendfile of net/http, and counts.
+func TestStatusWriterReadFrom(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "theme.css")
+	content := strings.Repeat("body{}", 5000)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /theme.css", func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := w.(io.ReaderFrom); !ok {
+			t.Error("statusWriter hides io.ReaderFrom")
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() { _ = f.Close() }()
+		http.ServeContent(w, r, "theme.css", time.Time{}, f)
+	})
+	h, buf := stack(mux, 1, "none")
+	srv := httptest.NewServer(h)
+	resp, err := http.Get(srv.URL + "/theme.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	srv.Close()
+	if string(b) != content {
+		t.Errorf("body of %d bytes, want %d", len(b), len(content))
+	}
+	if l := logLines(t, buf)[0]; l["status"] != float64(200) || l["bytes"] != float64(len(content)) {
+		t.Errorf("status = %v, bytes = %v, want 200 and %d", l["status"], l["bytes"], len(content))
 	}
 }
 
@@ -336,6 +412,9 @@ func TestRecoverStartedResponse(t *testing.T) {
 		status float64
 	}{
 		{"written", func(w http.ResponseWriter) { _, _ = w.Write([]byte("partial page ")) }, 200},
+		{"copied", func(w http.ResponseWriter) {
+			_, _ = io.Copy(w, io.LimitReader(strings.NewReader("partial page "), 100))
+		}, 200},
 		{"flushed", func(w http.ResponseWriter) { _ = http.NewResponseController(w).Flush() }, 200},
 		{"status set", func(w http.ResponseWriter) {
 			w.Header().Set("Location", "https://elsewhere.example")
@@ -370,8 +449,8 @@ func TestRecoverStartedResponse(t *testing.T) {
 }
 
 // A panic before any final status gets the 500: after a 103, on an invalid
-// status (net/http panics before sending it), and on a path the access log
-// skips, where Recover tracks the response itself.
+// status (net/http panics before sending it), after copying nothing, and on a
+// path the access log skips, where Recover tracks the response itself.
 func TestRecoverBeforeStatus(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /hints", func(w http.ResponseWriter, _ *http.Request) {
@@ -379,10 +458,14 @@ func TestRecoverBeforeStatus(t *testing.T) {
 		panic("kaboom")
 	})
 	mux.HandleFunc("GET /invalid", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(1000) })
+	mux.HandleFunc("GET /nothing-copied", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.Copy(w, io.LimitReader(strings.NewReader(""), 1))
+		panic("kaboom")
+	})
 	mux.HandleFunc("GET /ready", func(http.ResponseWriter, *http.Request) { panic("kaboom") })
 	h, buf := stack(mux, 1, "none")
 	srv := httptest.NewServer(h)
-	for _, path := range []string{"/hints", "/invalid", "/ready"} {
+	for _, path := range []string{"/hints", "/invalid", "/nothing-copied", "/ready"} {
 		resp, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Errorf("%s: %v", path, err)
@@ -400,7 +483,7 @@ func TestRecoverBeforeStatus(t *testing.T) {
 	for _, l := range logLines(t, buf) {
 		count[l["msg"]]++
 	}
-	if count["http.panic"] != 3 || count["http.request"] != 2 {
-		t.Errorf("log lines = %v, want 3 panics and 2 access lines (none for /ready)", count)
+	if count["http.panic"] != 4 || count["http.request"] != 3 {
+		t.Errorf("log lines = %v, want 4 panics and 3 access lines (none for /ready)", count)
 	}
 }

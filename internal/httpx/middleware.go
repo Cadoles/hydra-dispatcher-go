@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	mathrand "math/rand/v2"
@@ -150,7 +151,8 @@ func Routes(mux *http.ServeMux) http.Handler {
 	})
 }
 
-// quietPaths are probes and scrapes, never written to the access log.
+// quietPaths are probes and scrapes, never written to the access log when
+// read (GET or HEAD). Another method is no probe: it is written.
 var quietPaths = map[string]bool{"/health": true, "/ready": true, "/metrics": true}
 
 // AccessLog writes one line per request. Successful requests are sampled at
@@ -160,7 +162,7 @@ var quietPaths = map[string]bool{"/health": true, "/ready": true, "/metrics": tr
 func AccessLog(logger *slog.Logger, sample float64, logIP string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if quietPaths[r.URL.Path] {
+			if quietPaths[r.URL.Path] && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -213,16 +215,16 @@ func logRequest(logger *slog.Logger, r *http.Request, start time.Time, sw *statu
 }
 
 // formatIP applies observability.log_ip: truncated keeps the /24 (IPv4) or
-// /48 (IPv6) network.
+// /48 (IPv6) network. A client RealIP could not tell (X-Forwarded-For
+// unreadable) is "unknown", so that it shows, unlike with none.
 func formatIP(ip netip.Addr, mode string) string {
-	if !ip.IsValid() {
+	switch {
+	case mode == "none":
 		return ""
-	}
-	switch mode {
-	case "full":
+	case !ip.IsValid():
+		return "unknown"
+	case mode == "full":
 		return ip.String()
-	case "none":
-		return ""
 	}
 	bits := 48
 	if ip.Is4() {
@@ -250,7 +252,8 @@ func truncate(s string, n int) string {
 // statusWriter records what the handler wrote, for the access log and
 // Recover. It hides http.Flusher and http.Hijacker from type assertions:
 // handlers reach them through http.NewResponseController, which unwraps it.
-// A flush is recorded, since it sends the headers; a hijack is not.
+// A flush is recorded, since it sends the headers; a hijack is not. It keeps
+// io.ReaderFrom, for the sendfile of http.ServeContent.
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -261,7 +264,8 @@ func (w *statusWriter) WriteHeader(status int) {
 	// Called first: it panics on an invalid code, and nothing is sent then.
 	w.ResponseWriter.WriteHeader(status)
 	// A 1xx (103 Early Hints) is informational: the final status follows.
-	if w.status == 0 && status >= 200 {
+	// 101 Switching Protocols is final.
+	if w.status == 0 && (status >= 200 || status == http.StatusSwitchingProtocols) {
 		w.status = status
 	}
 }
@@ -283,6 +287,17 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += int64(n)
+	return n, err
+}
+
+// ReadFrom copies through the ReadFrom of net/http, which sends a file by
+// sendfile. Nothing read, nothing is sent: the status stays unset.
+func (w *statusWriter) ReadFrom(src io.Reader) (int64, error) {
+	n, err := io.Copy(w.ResponseWriter, src)
+	if n > 0 && w.status == 0 {
+		w.status = http.StatusOK
+	}
+	w.bytes += n
 	return n, err
 }
 

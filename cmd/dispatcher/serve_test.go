@@ -20,6 +20,7 @@ import (
 func requiredEnv(hydraAdminURL string) []string {
 	return []string{
 		"DISPATCHER_SERVER_BASE_URL=http://dispatcher.hydra.test",
+		"DISPATCHER_SERVER_TRUSTED_PROXIES=10.0.0.10",
 		"DISPATCHER_HYDRA_ADMIN_URL=" + hydraAdminURL,
 		"DISPATCHER_STORE_DSN=postgres://dispatcher@postgres/dispatcher",
 		"DISPATCHER_SECRETS_COOKIE_KEY=" + strings.Repeat("ab", 32),
@@ -110,16 +111,19 @@ func TestHandler(t *testing.T) {
 
 func TestLogHandler(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := testConfig(t, "http://hydra:4445")
-	logger := slog.New(newLogHandler(&buf, cfg.Observability)).With("log_type", "app")
+	logger, _ := newLoggers(&buf, testConfig(t, "http://hydra:4445").Observability)
 	logger.Warn("server.started")
-	// An attribute named like a standard one is left alone, and does not panic.
-	logger.Error("webhook.failed", "time", "12:00")
-	// So is a time in a group, which LogHandler hands over as a group
-	// attribute rather than by WithGroup.
+	// An event's attribute named like a field of the line is renamed: the
+	// line keeps one time, level, log_type, instance and version.
+	logger.Error("webhook.failed", "time", "12:00", "level", "debug", "log_type", "audit", "instance", "i", "version", "v")
+	// A time in a group is the group's, which LogHandler hands over as a
+	// group attribute rather than by WithGroup: neither renamed nor reformatted.
 	logger.WithGroup("g").Info("e", slog.Time("time", time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("CET", 3600))))
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("lines = %q", lines)
+	}
 	var line map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &line); err != nil {
 		t.Fatal(err)
@@ -130,9 +134,86 @@ func TestLogHandler(t *testing.T) {
 	if line["level"] != "warn" || line["version"] != version || line["instance"] == "" || line["log_type"] != "app" || line["msg"] != "server.started" {
 		t.Errorf("line = %v", line)
 	}
-	if len(lines) != 3 || !strings.Contains(lines[1], `"level":"error"`) || !strings.Contains(lines[1], `"time":"12:00"`) ||
-		!strings.Contains(lines[2], `"g":{"time":"2026-01-02T03:04:05+01:00"}`) {
-		t.Errorf("lines = %q", lines)
+	for _, key := range []string{"time", "level", "log_type", "instance", "version"} {
+		if n := strings.Count(lines[1], `"`+key+`":`); n != 1 {
+			t.Errorf("%s written %d times: %s", key, n, lines[1])
+		}
+	}
+	if !strings.Contains(lines[1], `"level":"error"`) || !strings.Contains(lines[1], `"log_type":"app"`) ||
+		!strings.Contains(lines[1], `"attr_time":"12:00","attr_level":"debug","attr_log_type":"audit","attr_instance":"i","attr_version":"v"`) {
+		t.Errorf("line = %s", lines[1])
+	}
+	if !strings.Contains(lines[2], `"g":{"time":"2026-01-02T03:04:05+01:00"}`) {
+		t.Errorf("line = %s", lines[2])
+	}
+}
+
+// The access log has its own level: log_level does not silence it, nor its
+// errors, which the design document has always written.
+func TestLoggersLevel(t *testing.T) {
+	env := append(requiredEnv("http://127.0.0.1:1"), "DISPATCHER_OBSERVABILITY_LOG_LEVEL=warn")
+	cfg, _, err := config.Load("", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	logger, accessLogger := newLoggers(&buf, cfg.Observability)
+	logger.Info("flow.started")
+	logger.Warn("challenge.invalid")
+	h, err := newHandler(cfg, logger, accessLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/nowhere", nil))
+
+	out := buf.String()
+	if strings.Contains(out, "flow.started") || !strings.Contains(out, "challenge.invalid") {
+		t.Errorf("application log at warn: %s", out)
+	}
+	if !strings.Contains(out, `"msg":"http.request"`) || !strings.Contains(out, `"log_type":"access"`) || !strings.Contains(out, `"status":404`) {
+		t.Errorf("the 404 is missing from the access log at log_level warn: %s", out)
+	}
+}
+
+// traceparent is honoured from the proxies and the login apps, as RealIP
+// tells them, and from them only: no more from every private address.
+func TestHandlerTrace(t *testing.T) {
+	cfg, _, err := config.Load("", append(requiredEnv("http://127.0.0.1:1"),
+		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=192.168.5.0/24"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.DiscardHandler)
+	h, err := newHandler(cfg, logger, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const parent = "4bf92f3577b34da6a3ce929d0e0e4736"
+	for _, tt := range []struct {
+		name, remote, xff string
+		honoured          bool
+	}{
+		{"login app", "192.168.5.7:1", "", true},
+		{"login app behind the proxy", "10.0.0.10:1", "192.168.5.7", true},
+		{"the proxy itself", "10.0.0.10:1", "", true},
+		{"Internet behind the proxy", "10.0.0.10:1", "203.0.113.7", false},
+		{"Internet", "203.0.113.7:1", "", false},
+		// Private, but neither a proxy nor a login app: its X-Forwarded-For
+		// is not read either.
+		{"another private host", "10.0.0.99:1", "", false},
+		{"another private host claiming a login app", "10.0.0.99:1", "192.168.5.7", false},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/health", nil)
+		r.RemoteAddr = tt.remote
+		r.Header.Set("Traceparent", "00-"+parent+"-00f067aa0ba902b7-01")
+		if tt.xff != "" {
+			r.Header.Set("X-Forwarded-For", tt.xff)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if got := w.Header().Get("X-Trace-ID") == parent; got != tt.honoured {
+			t.Errorf("%s: traceparent honoured = %v, want %v", tt.name, got, tt.honoured)
+		}
 	}
 }
 

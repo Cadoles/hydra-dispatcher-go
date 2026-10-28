@@ -44,8 +44,7 @@ func main() {
 	// The lines written before serve reads the configuration (its warnings,
 	// a fatal error) and those of the other commands keep the format of the
 	// design document, at the default level.
-	slog.SetDefault(slog.New(newLogHandler(os.Stdout, config.Observability{LogLevel: "info", LogFormat: "json"})).
-		With("log_type", "app"))
+	slog.SetDefault(slog.New(newLogHandler(os.Stdout, "json", slog.LevelInfo)).With("log_type", "app"))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// After the first signal, a second one kills at once.
 	context.AfterFunc(ctx, stop)
@@ -107,13 +106,25 @@ func parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
 }
 
 // healthcheck lets a distroless image (no shell, no curl) run a HEALTHCHECK.
-// It probes the server.listen of DISPATCHER_SERVER_LISTEN, else the default
-// one: a listen set in the configuration file needs -url.
+// It probes the server.listen serve uses: that of the DISPATCHER_CONFIG file
+// and the variables, read as serve reads them, else DISPATCHER_SERVER_LISTEN
+// or the default. A file given to serve by -config alone needs -url.
 func healthcheck(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
-	url := fs.String("url", healthURL(os.Getenv("DISPATCHER_SERVER_LISTEN")), "health endpoint to probe")
+	url := fs.String("url", "", "health endpoint to probe (default: that of the server.listen serve uses)")
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
+	}
+	if *url == "" {
+		listen := os.Getenv("DISPATCHER_SERVER_LISTEN")
+		if path := os.Getenv(configEnv); path != "" {
+			cfg, _, err := config.Load(path, os.Environ())
+			if err != nil {
+				return fmt.Errorf("configuration: %w", err)
+			}
+			listen = cfg.Server.Listen
+		}
+		*url = healthURL(listen)
 	}
 
 	// Under the 3 s of the image's HEALTHCHECK, so the error is printed
@@ -154,7 +165,11 @@ func healthURL(listen string) string {
 	return "http://" + net.JoinHostPort(host, port) + "/health"
 }
 
-func printVersion(_ context.Context, _ []string) error {
+func printVersion(_ context.Context, args []string) error {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	if help, err := parseFlags(fs, args); help || err != nil {
+		return err
+	}
 	fmt.Println(version)
 	return nil
 }

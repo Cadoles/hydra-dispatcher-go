@@ -33,9 +33,11 @@ type Config struct {
 }
 
 type Server struct {
-	Listen         string `yaml:"listen"`
-	BaseURL        string `yaml:"base_url"`
-	TrustedProxies List   `yaml:"trusted_proxies"`
+	Listen  string `yaml:"listen"`
+	BaseURL string `yaml:"base_url"`
+	// TrustedProxies has no default (nil): it is required, [] when clients
+	// connect directly.
+	TrustedProxies *List  `yaml:"trusted_proxies"`
 	CookiePath     string `yaml:"cookie_path"`
 	// ReplicasHint > 1 refuses the in-memory state store.
 	ReplicasHint int `yaml:"replicas_hint"`
@@ -201,7 +203,6 @@ const DefaultListen = ":8080"
 func defaults() *Config {
 	c := &Config{}
 	c.Server.Listen = DefaultListen
-	c.Server.TrustedProxies = append(List{}, privateNetworks...)
 	c.Server.CookiePath = "/"
 	c.Hydra.Timeout = Duration(5 * time.Second)
 	c.Hydra.Version = "2.2"

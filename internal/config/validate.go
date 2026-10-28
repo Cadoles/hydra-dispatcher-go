@@ -76,6 +76,15 @@ func (c *Config) validate() (warnings []string, err error) {
 		fail("hydra.system_secrets", "the first secret is shorter than 16 characters, Hydra refuses it")
 	}
 
+	// No default: the private networks were one, and let any host in them,
+	// or any address translation into them (a Kubernetes node, docker-proxy),
+	// choose its address by X-Forwarded-For.
+	trusted := List{}
+	if c.Server.TrustedProxies == nil {
+		fail("server.trusted_proxies", "is required: the addresses of the reverse proxies only, or [] when clients connect directly")
+	} else {
+		trusted = *c.Server.TrustedProxies
+	}
 	admin := c.Security.AdminAuthorizedHosts
 	allowlists := false
 	for _, l := range []struct {
@@ -83,7 +92,7 @@ func (c *Config) validate() (warnings []string, err error) {
 		hosts List
 		open  string // what a list covering every address means
 	}{
-		{"server.trusted_proxies", c.Server.TrustedProxies, "X-Forwarded-For is trusted from every address, the allowlists can be bypassed"},
+		{"server.trusted_proxies", trusted, "X-Forwarded-For is trusted from every address, the allowlists can be bypassed"},
 		{"security.admin_authorized_hosts", admin, "open to every address"},
 		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts, "open to every address"},
 		{"security.metrics_authorized_hosts", *c.Security.MetricsAuthorizedHosts, "open to every address"},
@@ -102,7 +111,7 @@ func (c *Config) validate() (warnings []string, err error) {
 		}
 		allowlists = allowlists || (l.path != "server.trusted_proxies" && len(l.hosts) > 0)
 	}
-	if len(c.Server.TrustedProxies) == 0 && allowlists {
+	if c.Server.TrustedProxies != nil && len(trusted) == 0 && allowlists {
 		// A forgotten ${TRUSTED_PROXIES}, say: the proxy's address is often
 		// in the private networks of the default allowlists.
 		warnings = append(warnings, "server.trusted_proxies is empty: behind a reverse proxy, every client has the proxy's address and passes the allowlists that contain it")

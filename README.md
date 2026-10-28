@@ -16,9 +16,13 @@ dispatcher healthcheck [-url ...]            probe /health of a local server (co
 dispatcher version                           print the version
 ```
 
+`-config` defaults to `$DISPATCHER_CONFIG`, which `healthcheck` reads too for
+the `server.listen` to probe: in a container, give the file by the variable.
+
 `serve` exposes `/health` (liveness) and `/ready` (Hydra reachable, within
 2 s; 503 otherwise, details in the log). Logs are JSON lines on stdout,
-`log_type` `app` or `access`, with the request's `trace_id`.
+`log_type` `app` or `access`, with the request's `trace_id`; `log_level`
+applies to the application log only.
 
 ## Configuration
 
@@ -35,8 +39,10 @@ environment are used.
   and `ui.csp_extra` are not reachable this way.
 - Durations take `5s`, `30m`, `365d` or seconds (`900`); lists a YAML sequence
   or a comma-separated string; keys 32 bytes in hex or base64.
-- Unknown keys are errors. Required: `server.base_url`, `hydra.admin_url`,
-  `store.dsn`, `secrets.cookie_key`, `secrets.challenge_key`.
+- Unknown keys are errors. Required: `server.base_url`,
+  `server.trusted_proxies` (the reverse proxies' addresses only, `[]` when
+  clients connect directly), `hydra.admin_url`, `store.dsn`,
+  `secrets.cookie_key`, `secrets.challenge_key`.
 
 ## Development
 

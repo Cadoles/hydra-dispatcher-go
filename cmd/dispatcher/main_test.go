@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -34,11 +35,20 @@ func TestRun(t *testing.T) {
 		// serve dispatcher.yaml would run on the variables alone.
 		{"argument", []string{"serve", "dispatcher.yaml"}, errUsage, ""},
 		{"argument after the flags", []string{"healthcheck", "-url", "http://127.0.0.1:1/health", "extra"}, errUsage, ""},
+		{"version argument", []string{"version", "extra"}, errUsage, ""},
 	}
 	t.Run("serve with a missing configuration file", func(t *testing.T) {
 		err := run(context.Background(), []string{"serve", "-config", "/nonexistent/dispatcher.yaml"}, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "configuration") {
 			t.Errorf("err = %v, want a configuration error", err)
+		}
+	})
+	// The file the image's HEALTHCHECK reads too.
+	t.Run("serve with DISPATCHER_CONFIG", func(t *testing.T) {
+		t.Setenv("DISPATCHER_CONFIG", "/nonexistent/from-the-variable.yaml")
+		err := run(context.Background(), []string{"serve"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "from-the-variable.yaml") {
+			t.Errorf("err = %v, want the file of DISPATCHER_CONFIG read", err)
 		}
 	})
 	for _, tt := range tests {
@@ -94,6 +104,35 @@ func TestHealthcheck(t *testing.T) {
 	if err := healthcheck(context.Background(), []string{"-url", "http://127.0.0.1:1/health"}); err == nil {
 		t.Error("healthcheck of a closed port: want an error")
 	}
+
+	// With DISPATCHER_CONFIG, the server.listen of the file, read as serve
+	// reads it: the variable still wins over the file.
+	t.Run("configuration file", func(t *testing.T) {
+		status = http.StatusOK
+		for _, kv := range requiredEnv("http://127.0.0.1:1") {
+			k, v, _ := strings.Cut(kv, "=")
+			t.Setenv(k, v)
+		}
+		t.Setenv("DISPATCHER_SERVER_LISTEN", "")
+		_ = os.Unsetenv("DISPATCHER_SERVER_LISTEN") // restored by t.Setenv
+		path := filepath.Join(t.TempDir(), "dispatcher.yaml")
+		if err := os.WriteFile(path, []byte("server:\n  listen: \""+srv.Listener.Addr().String()+"\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("DISPATCHER_CONFIG", path)
+		if err := healthcheck(context.Background(), nil); err != nil {
+			t.Errorf("listen of the file: %v", err)
+		}
+		t.Setenv("DISPATCHER_SERVER_LISTEN", "127.0.0.1:1")
+		if err := healthcheck(context.Background(), nil); err == nil {
+			t.Error("DISPATCHER_SERVER_LISTEN on a closed port: want an error, it wins over the file")
+		}
+		// A configuration serve refuses fails the probe, saying why.
+		t.Setenv("DISPATCHER_CONFIG", filepath.Join(t.TempDir(), "missing.yaml"))
+		if err := healthcheck(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "configuration") {
+			t.Errorf("missing file: err = %v, want a configuration error", err)
+		}
+	})
 }
 
 // TestMainProcess runs main in a child process, the test binary itself, for
@@ -125,6 +164,7 @@ func TestMainProcess(t *testing.T) {
 		want int
 	}{
 		{"version", 0},
+		{"version extra", 2},
 		{"help", 0},
 		{"", 2},
 		{"nope", 2},
@@ -177,6 +217,75 @@ func TestMainProcess(t *testing.T) {
 		}
 		if code := exitCode(cmd.Wait()); code != 0 || !strings.Contains(out.String(), `"msg":"server.stopped"`) {
 			t.Errorf("exit code %d, output:\n%s", code, out.String())
+		}
+	})
+
+	// After the first signal, a second one stops at once, without waiting
+	// for the request in flight: /ready, held by a Hydra that does not answer.
+	t.Run("second signal", func(t *testing.T) {
+		probed, release := make(chan struct{}, 1), make(chan struct{})
+		hydra := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			select {
+			case probed <- struct{}{}:
+			default:
+			}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}))
+		defer hydra.Close()
+		defer close(release)
+
+		cmd := child("serve", append(requiredEnv(hydra.URL), "DISPATCHER_SERVER_LISTEN=127.0.0.1:0")...)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer time.AfterFunc(10*time.Second, func() { _ = cmd.Process.Kill() }).Stop()
+		lines := bufio.NewScanner(stdout)
+		var addr string
+		for addr == "" && lines.Scan() {
+			var line struct{ Msg, Addr string }
+			if json.Unmarshal(lines.Bytes(), &line) == nil && line.Msg == "server.started" {
+				addr = line.Addr
+			}
+		}
+		go func() {
+			if resp, err := http.Get("http://" + addr + "/ready"); err == nil {
+				_ = resp.Body.Close()
+			}
+		}()
+		<-probed
+
+		var rest strings.Builder
+		done := make(chan error, 1)
+		go func() {
+			for lines.Scan() {
+				rest.WriteString(lines.Text() + "\n")
+			}
+			done <- cmd.Wait()
+		}()
+		// The first SIGTERM starts the graceful shutdown, which waits for
+		// /ready; any later one, once the signal is let through, kills.
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		var waited error
+	signal:
+		for {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case waited = <-done:
+				break signal
+			case <-tick.C:
+			}
+		}
+		var exit *exec.ExitError
+		if !errors.As(waited, &exit) || !exit.Sys().(syscall.WaitStatus).Signaled() || strings.Contains(rest.String(), "server.stopped") {
+			t.Errorf("wait = %v, want killed by the second signal, output:\n%s", waited, rest.String())
 		}
 	})
 }

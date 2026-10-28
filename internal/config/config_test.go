@@ -35,11 +35,12 @@ func envOf(m map[string]string) []string {
 // required holds the keys without default, set through DISPATCHER_* variables.
 func required(extra map[string]string) map[string]string {
 	m := map[string]string{
-		"DISPATCHER_SERVER_BASE_URL":       "http://dispatcher.hydra.test",
-		"DISPATCHER_HYDRA_ADMIN_URL":       "http://hydra:4445",
-		"DISPATCHER_STORE_DSN":             "postgres://lasql:lasql@postgres:5432/dispatcher",
-		"DISPATCHER_SECRETS_COOKIE_KEY":    hexKey,
-		"DISPATCHER_SECRETS_CHALLENGE_KEY": base64Key,
+		"DISPATCHER_SERVER_BASE_URL":        "http://dispatcher.hydra.test",
+		"DISPATCHER_SERVER_TRUSTED_PROXIES": "10.0.0.10",
+		"DISPATCHER_HYDRA_ADMIN_URL":        "http://hydra:4445",
+		"DISPATCHER_STORE_DSN":              "postgres://lasql:lasql@postgres:5432/dispatcher",
+		"DISPATCHER_SECRETS_COOKIE_KEY":     hexKey,
+		"DISPATCHER_SECRETS_CHALLENGE_KEY":  base64Key,
 	}
 	for k, v := range extra {
 		m[k] = v
@@ -652,7 +653,9 @@ dispatcher:
 // allowlist without address, as with DISPATCHER_* variables. In a sequence,
 // it gives no item.
 func TestEmptyExpansion(t *testing.T) {
-	c, _, err := load(t, `
+	env := required(map[string]string{"METRICS": ""})
+	delete(env, "DISPATCHER_SERVER_TRUSTED_PROXIES") // the file sets it
+	c, _, err := Load(writeFile(t, `
 server:
   trusted_proxies: ${UNSET}
   cookie_path: "${COOKIE_PATH:-/}"
@@ -660,13 +663,13 @@ security:
   admin_authorized_hosts: ["10.9.0.0/16", "${UNSET}"]
   metrics_authorized_hosts: "${METRICS}"
   emulated_api_authorized_hosts: ["${UNSET}"]
-`, map[string]string{"METRICS": ""})
+`), envOf(env))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Server.TrustedProxies) != 0 || len(*c.Security.MetricsAuthorizedHosts) != 0 || len(*c.Security.EmulatedAPIAuthorizedHosts) != 0 ||
+	if len(*c.Server.TrustedProxies) != 0 || len(*c.Security.MetricsAuthorizedHosts) != 0 || len(*c.Security.EmulatedAPIAuthorizedHosts) != 0 ||
 		!slices.Equal(c.Security.AdminAuthorizedHosts, List{"10.9.0.0/16"}) || c.Server.CookiePath != "/" {
-		t.Errorf("trusted = %v, metrics = %v, emulated = %v, admin = %v, cookie_path = %q", c.Server.TrustedProxies,
+		t.Errorf("trusted = %v, metrics = %v, emulated = %v, admin = %v, cookie_path = %q", *c.Server.TrustedProxies,
 			*c.Security.MetricsAuthorizedHosts, *c.Security.EmulatedAPIAuthorizedHosts, c.Security.AdminAuthorizedHosts, c.Server.CookiePath)
 	}
 	for _, content := range []string{
@@ -887,7 +890,7 @@ func TestDocuments(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	_, _, err := Load("", nil)
-	for _, path := range []string{"server.base_url", "hydra.admin_url", "store.dsn", "secrets.cookie_key", "secrets.challenge_key"} {
+	for _, path := range []string{"server.base_url", "server.trusted_proxies", "hydra.admin_url", "store.dsn", "secrets.cookie_key", "secrets.challenge_key"} {
 		if err == nil || !strings.Contains(err.Error(), path) {
 			t.Errorf("empty configuration: err = %v, want it to name %s", err, path)
 		}
@@ -940,6 +943,32 @@ func TestValidation(t *testing.T) {
 	_, _, err = Load("", envOf(required(map[string]string{"DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": "nowhere"})))
 	if err == nil || strings.Count(err.Error(), "nowhere") != 1 {
 		t.Errorf("invalid admin list: err = %v, want one error", err)
+	}
+}
+
+// server.trusted_proxies has no default: the private networks let any host,
+// or any address translation into them, choose its address.
+func TestTrustedProxiesRequired(t *testing.T) {
+	env := required(nil)
+	delete(env, "DISPATCHER_SERVER_TRUSTED_PROXIES")
+	if _, _, err := Load("", envOf(env)); err == nil || !strings.Contains(err.Error(), "server.trusted_proxies: is required") {
+		t.Errorf("unset: err = %v", err)
+	}
+	// [] says the clients connect directly, by the file or a variable.
+	for _, tt := range []struct {
+		file string
+		env  map[string]string
+	}{
+		{"server:\n  trusted_proxies: []\n", nil},
+		{"", map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": ""}},
+	} {
+		env := required(nil)
+		delete(env, "DISPATCHER_SERVER_TRUSTED_PROXIES")
+		maps.Copy(env, tt.env)
+		c, _, err := Load(writeFile(t, tt.file), envOf(env))
+		if err != nil || c.Server.TrustedProxies == nil || len(*c.Server.TrustedProxies) != 0 {
+			t.Errorf("%q %v: err = %v", tt.file, tt.env, err)
+		}
 	}
 }
 
