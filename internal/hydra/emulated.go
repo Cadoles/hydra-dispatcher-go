@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
+	"strings"
 
 	ory "github.com/ory/hydra-client-go/v26"
 )
@@ -114,15 +116,16 @@ var emulatedFields = []string{
 
 // withExtensions sets the extensions on a copy of props. The SDK serialises
 // AdditionalProperties over the model's own fields: the copy drops the
-// emulated ones, so props never bring back Hydra's challenge or skip.
+// emulated ones, so props never bring back Hydra's challenge or skip, and
+// every x_dispatcher_ member, so ext alone decides the extensions served.
 func withExtensions(props map[string]any, ext Extensions) map[string]any {
 	out := maps.Clone(props)
 	if out == nil {
 		out = map[string]any{}
 	}
-	for _, k := range emulatedFields {
-		delete(out, k)
-	}
+	maps.DeleteFunc(out, func(k string, _ any) bool {
+		return slices.Contains(emulatedFields, k) || strings.HasPrefix(k, "x_dispatcher_")
+	})
 	claims := ext.Claims
 	if claims == nil {
 		claims = map[string]any{}

@@ -154,10 +154,24 @@ func TestErrors(t *testing.T) {
 	}{
 		{"already handled", reply(410, `{"redirect_to":"http://oidc.client.test/cb?error=x"}`), false, 410, "http://oidc.client.test/cb?error=x"},
 		{"unknown challenge", reply(404, `{"error":"Not Found","error_description":"Unable to locate the resource"}`), false, 404, ""},
+		// Hydra 2.2 and later, on an expired login or consent request.
+		{"expired", reply(401, `{"error":"request_unauthorized","error_description":"The request could not be authorized.","error_hint":"The login request has expired, please try again.","status_code":401}`), false, 401, ""},
+		{"another subject", reply(403, `{"error":"request_forbidden","error_hint":"Field 'subject' does not match subject from previous authentication."}`), false, 403, ""},
+		{"conflict", reply(409, `{"error":"Conflict","error_description":"The login request was already used and can no longer be changed."}`), false, 409, ""},
+		{"refused body", reply(400, `{"error":"invalid_request"}`), false, 400, ""},
 		{"server error", reply(500, `{"error":"boom"}`), true, 0, ""},
+		// A gateway quoting the URL it was asked: the challenge stays out.
+		{"server error quoting the request", func(w http.ResponseWriter, r *http.Request) {
+			reply(502, `{"error":"bad_gateway","error_description":"upstream failed for `+r.URL.RequestURI()+` (`+r.URL.Query().Get("login_challenge")+`)"}`)(w, r)
+		}, true, 0, ""},
 		{"unexpected 200", reply(200, `{"unexpected":true}`), true, 0, ""},
 		{"empty 200", reply(200, ""), true, 0, ""},
 		{"null 200", reply(200, "null"), true, 0, ""},
+		{"incomplete 200", reply(200, `{"challenge":"C","client":{},"request_url":"","skip":false,"subject":"","redirect_to":""}`), true, 0, ""},
+		{"XML 200", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, "<html><body>blocked</body></html>")
+		}, true, 0, ""},
 		{"oversized 200", reply(200, `{"challenge":"`+strings.Repeat("a", maxBody)+`"}`), true, 0, ""},
 		// Hydra's public port, or a proxy: a broken setup, not an unknown challenge.
 		{"404 page", http.NotFound, true, 0, ""},
@@ -198,9 +212,26 @@ func TestErrors(t *testing.T) {
 
 	srv := httptest.NewServer(http.NotFoundHandler())
 	srv.Close() // refused connections
-	_, err := newTestClient(t, srv.URL, 4, time.Second).LoginRequest(context.Background(), challenge)
-	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), challenge) {
-		t.Errorf("connection refused: err = %v, want ErrUnavailable without the challenge", err)
+	// A gateway's credentials in admin_url stay out too.
+	adminURL := strings.Replace(srv.URL, "://", "://dispatcher:SENTINEL-PASSWORD@", 1)
+	_, err := newTestClient(t, adminURL, 4, time.Second).LoginRequest(context.Background(), challenge)
+	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), challenge) || strings.Contains(err.Error(), "SENTINEL-PASSWORD") {
+		t.Errorf("connection refused: err = %v, want ErrUnavailable without the challenge nor the password", err)
+	}
+}
+
+// A 5xx keeps Hydra's error and its description, which the SDK's message
+// leaves out, bounded and without the request's query values.
+func TestServerErrorCause(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reply(500, `{"error":"server_error","error_description":"pq: connection refused (`+r.URL.RawQuery+`, `+r.URL.Query().Get("login_challenge")+`)`+strings.Repeat(" x", 500)+`"}`)(w, r)
+	}))
+	defer srv.Close()
+	_, err := newTestClient(t, srv.URL, 4, time.Second).LoginRequest(context.Background(), "L+/=")
+	msg := err.Error()
+	if !strings.Contains(msg, "(server_error: pq: connection refused (login_challenge=…, …) x x") ||
+		strings.Contains(msg, "L+/=") || strings.Contains(msg, "L%2B%2F%3D") || len(msg) > 400 {
+		t.Errorf("err = %v, want Hydra's error and description, bounded, without the challenge", err)
 	}
 }
 
@@ -224,6 +255,155 @@ func TestErrorCauses(t *testing.T) {
 	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Errorf("hydra.timeout: err = %v, want ErrUnavailable and a timeout", err)
 	}
+
+	// The same once the headers are in: the SDK reads the body inside the call.
+	slowBody := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"challenge":`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer slowBody.Close()
+	_, err = newTestClient(t, slowBody.URL, 4, 50*time.Millisecond).LoginRequest(context.Background(), "L")
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Errorf("hydra.timeout in the body: err = %v, want ErrUnavailable and a timeout", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	_, err = newTestClient(t, slowBody.URL, 4, time.Second).LoginRequest(ctx, "L")
+	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Errorf("caller gone in the body: err = %v, want ErrUnavailable and context.Canceled", err)
+	}
+}
+
+// 2 s for the TLS handshake, whatever hydra.timeout.
+func TestTLSHandshakeTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() { // accepts, never answers
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+		}
+	}()
+	start := time.Now()
+	err = newTestClient(t, "https://"+ln.Addr().String(), 1, 10*time.Second).RejectLogout(context.Background(), "U")
+	var netErr net.Error
+	if !errors.Is(err, ErrUnavailable) || !errors.As(err, &netErr) || !netErr.Timeout() || time.Since(start) > 3*time.Second {
+		t.Errorf("err = %v after %v, want a timeout after 2 s", err, time.Since(start))
+	}
+}
+
+// silentProxy forwards TCP connections to target. silence makes those
+// opened so far swallow everything, without a reset, as when Hydra's node is
+// gone; later ones still forward.
+func silentProxy(t *testing.T, target string) (addr string, silence func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	var silent []*atomic.Bool
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			client, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			server, err := net.Dial("tcp", target)
+			if err != nil {
+				_ = client.Close()
+				continue
+			}
+			s := new(atomic.Bool)
+			mu.Lock()
+			conns, silent = append(conns, client, server), append(silent, s)
+			mu.Unlock()
+			forward := func(dst, src net.Conn) {
+				buf := make([]byte, 32<<10)
+				for {
+					n, err := src.Read(buf)
+					if n > 0 && !s.Load() {
+						if _, err := dst.Write(buf[:n]); err != nil {
+							return
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}
+			go forward(server, client)
+			go forward(client, server)
+		}
+	}()
+	return ln.Addr().String(), func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, s := range silent {
+			s.Store(true)
+		}
+	}
+}
+
+// Over HTTP/2, a connection that stops answering is dropped after an
+// unanswered ping, rather than taking every call multiplexed on it until
+// TCP gives up.
+func TestDeadHTTP2Connection(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+	addr, silence := silentProxy(t, srv.Listener.Addr().String())
+	c, err := New(config.Hydra{AdminURL: "https://" + addr, Timeout: config.Duration(200 * time.Millisecond), MaxInFlight: 4},
+		config.TLS{MinVersion: "1.3", CAFile: caFile(t, srv)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RejectLogout(context.Background(), "U"); err != nil {
+		t.Fatal(err)
+	}
+
+	silence()
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		err := c.RejectLogout(context.Background(), "U")
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("calls still fail on the dead connection: %v", err)
+		}
+	}
+}
+
+// caFile writes the certificate of a TLS test server, as a dedicated CA.
+func caFile(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return ca
 }
 
 // Past hydra.max_in_flight, calls fail at once rather than queue; /ready is
@@ -376,12 +556,8 @@ func TestTLSWithDedicatedCA(t *testing.T) {
 	srv.EnableHTTP2 = true
 	srv.StartTLS()
 	defer srv.Close()
-	ca := filepath.Join(t.TempDir(), "ca.pem")
-	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
-	withCA, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.3", CAFile: ca})
+	withCA, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.3", CAFile: caFile(t, srv)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,11 +594,7 @@ func TestTLS12Suites(t *testing.T) {
 		}))
 		srv.TLS = &tls.Config{MaxVersion: tls.VersionTLS12, CipherSuites: []uint16{tt.suite}}
 		srv.StartTLS()
-		ca := filepath.Join(t.TempDir(), "ca.pem")
-		if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		c, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.2", CAFile: ca})
+		c, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.2", CAFile: caFile(t, srv)})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -115,60 +116,120 @@ func servesSymfonyFields(t *testing.T, symfonyExchange string, served []byte) {
 	}
 }
 
-// withoutNulls drops null members: the SDK omits null optional fields
-// (the client's unset *_lifespan, a logout request's null client), which
-// readers treat as absent anyway.
-func withoutNulls(v any) any {
-	switch v := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, x := range v {
-			if x != nil {
-				out[k] = withoutNulls(x)
-			}
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, x := range v {
-			out[i] = withoutNulls(x)
-		}
-		return out
+// withoutClientNulls drops the null members the SDK omits: the client's
+// unset fields (its *_lifespan, skip_logout_consent) and a logout request's
+// null client, which readers treat as absent anyway. A null anywhere else
+// is a value the round trip must keep.
+func withoutClientNulls(doc map[string]any) map[string]any {
+	if c, ok := doc["client"]; ok && c == nil {
+		delete(doc, "client")
 	}
-	return v
+	client, _ := doc["client"].(map[string]any)
+	maps.DeleteFunc(client, func(_ string, v any) bool { return v == nil })
+	return doc
 }
+
+// roundTrip decodes a 2xx answer as the client does, then serialises the
+// model again, as the emulated API does.
+func roundTrip(t *testing.T, original []byte, decodeAnswer func([]byte) (any, error)) []string {
+	t.Helper()
+	m, err := decodeAnswer(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want, got map[string]any
+	decode(t, original, &want)
+	decode(t, again, &got)
+	return diff(withoutClientNulls(want), got, "")
+}
+
+func loginAnswer(b []byte) (any, error)   { return decodeLoginRequest(b) }
+func consentAnswer(b []byte) (any, error) { return decodeConsentRequest(b) }
+func logoutAnswer(b []byte) (any, error)  { return decodeLogoutRequest(b) }
 
 // The SDK models must carry every value of Hydra's answers, for every
 // supported version: whatever the emulated API re-serves comes through them.
 func TestModelsRoundTrip(t *testing.T) {
 	for _, tt := range []struct {
-		path  string
-		model func() any
+		path         string
+		decodeAnswer func([]byte) (any, error)
 	}{
-		{hydra22 + "login_request.json", func() any { return &ory.OAuth2LoginRequest{} }},
-		{hydra22 + "consent_request.json", func() any { return &ory.OAuth2ConsentRequest{} }},
-		{hydra23 + "login_request.json", func() any { return &ory.OAuth2LoginRequest{} }},
-		{hydra23 + "consent_request.json", func() any { return &ory.OAuth2ConsentRequest{} }},
-		{symfony21 + "14-sql-2fa-consent-skipped/0032-hydra-GET-admin_oauth2_auth_requests_login.json", func() any { return &ory.OAuth2LoginRequest{} }},
-		{symfony21 + "14-sql-2fa-consent-skipped/0069-hydra-GET-admin_oauth2_auth_requests_consent.json", func() any { return &ory.OAuth2ConsentRequest{} }},
-		{symfony21 + "13-logout/0029-hydra-GET-admin_oauth2_auth_requests_logout.json", func() any { return &ory.OAuth2LogoutRequest{} }},
+		{hydra22 + "login_request.json", loginAnswer},
+		{hydra22 + "consent_request.json", consentAnswer},
+		{hydra23 + "login_request.json", loginAnswer},
+		{hydra23 + "consent_request.json", consentAnswer},
+		{symfony21 + "14-sql-2fa-consent-skipped/0032-hydra-GET-admin_oauth2_auth_requests_login.json", loginAnswer},
+		{symfony21 + "14-sql-2fa-consent-skipped/0069-hydra-GET-admin_oauth2_auth_requests_consent.json", consentAnswer},
+		{symfony21 + "01-skip/0002-hydra-GET-admin_oauth2_auth_requests_login.json", loginAnswer},
+		{symfony21 + "01-skip/0005-hydra-GET-admin_oauth2_auth_requests_consent.json", consentAnswer},
+		{symfony21 + "13-logout/0029-hydra-GET-admin_oauth2_auth_requests_logout.json", logoutAnswer},
 	} {
 		t.Run(filepath.Base(tt.path), func(t *testing.T) {
-			original := body(t, tt.path)
-			m := tt.model()
-			decode(t, original, m)
-			again, err := json.Marshal(m)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var want, got any
-			decode(t, original, &want)
-			decode(t, again, &got)
-			if d := diff(withoutNulls(want), got, ""); len(d) > 0 {
+			if d := roundTrip(t, body(t, tt.path), tt.decodeAnswer); len(d) > 0 {
 				t.Errorf("round trip changed the document: %v", d)
 			}
 		})
 	}
+}
+
+// A client's jwks comes back as Hydra served it, even with keys the SDK's
+// model refuses: RFC 7517 only requires kty, Hydra checks the key material.
+func TestJWKSKeptAsServed(t *testing.T) {
+	jwks := map[string]any{"keys": []any{
+		map[string]any{"kty": "EC", "crv": "P-256",
+			"x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},
+		map[string]any{"kty": "EC", "crv": "P-256", "kid": "k2", "use": "sig", "alg": "ES256",
+			"x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU", "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0"},
+	}}
+	data, err := json.Marshal(jwks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set ory.JsonWebKeySet
+	if json.Unmarshal(data, &set) == nil {
+		t.Error("the SDK's model takes a key without alg, kid or use: decodeClient may decode the jwks again")
+	}
+	for _, tt := range []struct {
+		path         string
+		decodeAnswer func([]byte) (any, error)
+	}{
+		{hydra22 + "login_request.json", loginAnswer},
+		{hydra22 + "consent_request.json", consentAnswer},
+	} {
+		var doc map[string]any
+		decode(t, body(t, tt.path), &doc)
+		doc["client"].(map[string]any)["jwks"] = jwks
+		original, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := roundTrip(t, original, tt.decodeAnswer); len(d) > 0 {
+			t.Errorf("%s: round trip changed the document: %v", tt.path, d)
+		}
+	}
+}
+
+// loginRequest and consentRequest decode a fixture as the client does.
+func loginRequest(t *testing.T, path string) ory.OAuth2LoginRequest {
+	t.Helper()
+	r, err := decodeLoginRequest(body(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *r
+}
+
+func consentRequest(t *testing.T, path string) ory.OAuth2ConsentRequest {
+	t.Helper()
+	r, err := decodeConsentRequest(body(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *r
 }
 
 func golden(t *testing.T, name string, v any) []byte {
@@ -197,8 +258,7 @@ func golden(t *testing.T, name string, v any) []byte {
 }
 
 func TestLoginRequestForApp(t *testing.T) {
-	var r ory.OAuth2LoginRequest
-	decode(t, body(t, hydra22+"login_request.json"), &r)
+	r := loginRequest(t, hydra22+"login_request.json")
 	r.RequestedAccessTokenAudience = nil // as a decrypted flow has it
 	// A Hydra skip the dispatcher ignores: no app may see it.
 	r.Skip, r.Subject = true, "hydra-subject"
@@ -236,8 +296,7 @@ func TestLoginRequestForApp(t *testing.T) {
 }
 
 func TestConsentRequestForApp(t *testing.T) {
-	var r ory.OAuth2ConsentRequest
-	decode(t, body(t, hydra22+"consent_request.json"), &r)
+	r := consentRequest(t, hydra22+"consent_request.json")
 	r.Skip = ory.PtrBool(true)
 	hydraChallenge, hydraLoginChallenge := r.Challenge, r.GetLoginChallenge()
 	step := Step{Challenge: "step-consent-challenge-2", LoginChallenge: "step-login-challenge-2", Subject: "test2@test.com"}
@@ -305,9 +364,11 @@ func TestConsentRequestForApp(t *testing.T) {
 }
 
 // The SDK serialises AdditionalProperties over the model's own fields: they
-// must not bring back Hydra's challenge, subject or skip.
+// must not bring back Hydra's challenge, subject or skip, nor extensions the
+// step does not set.
 func TestAdditionalPropertiesStayMasked(t *testing.T) {
-	hydra := map[string]any{"challenge": "L", "login_challenge": "L", "subject": "hydra-subject", "skip": true, "x_hydra_next": "kept"}
+	hydra := map[string]any{"challenge": "L", "login_challenge": "L", "subject": "hydra-subject", "skip": true, "x_hydra_next": "kept",
+		"x_dispatcher_restart_url": "http://dispatcher.hydra.test/?login_challenge=L", "x_dispatcher_device": "stale"}
 	login, err := json.Marshal(LoginRequestForApp(ory.OAuth2LoginRequest{AdditionalProperties: hydra}, Step{Challenge: "c1"}, Extensions{}))
 	if err != nil {
 		t.Fatal(err)
@@ -324,11 +385,12 @@ func TestAdditionalPropertiesStayMasked(t *testing.T) {
 		var doc map[string]any
 		decode(t, served, &doc)
 		if doc["challenge"] == "L" || doc["login_challenge"] == "L" || doc["subject"] == "hydra-subject" ||
-			doc["skip"] != false || doc["x_hydra_next"] != "kept" {
+			doc["skip"] != false || doc["x_hydra_next"] != "kept" ||
+			doc["x_dispatcher_restart_url"] != nil || doc["x_dispatcher_device"] != nil {
 			t.Errorf("served %s", served)
 		}
 	}
-	if len(hydra) != 5 {
+	if len(hydra) != 7 {
 		t.Errorf("the emulation changed its argument: %v", hydra)
 	}
 }
@@ -337,10 +399,17 @@ func TestAdditionalPropertiesStayMasked(t *testing.T) {
 // what it served them, value for value.
 func TestSymfonyParity(t *testing.T) {
 	const capture = symfony21 + "14-sql-2fa-consent-skipped/"
+	lr := loginRequest(t, capture+"0032-hydra-GET-admin_oauth2_auth_requests_login.json")
+
+	// First step: Symfony served subject null and claims [] (a PHP empty
+	// array); the emulated API serves "" and {}.
 	var symfony map[string]any
+	decode(t, body(t, capture+"0037-front-GET-oauth2_auth_requests_login.json"), &symfony)
+	symfony["subject"], symfony["x_dispatcher_claims"] = "", map[string]any{}
+	matchesSymfony(t, symfony, LoginRequestForApp(lr, Step{Challenge: symfony["challenge"].(string)}, Extensions{}))
+
+	symfony = nil
 	decode(t, body(t, capture+"0051-front-GET-oauth2_auth_requests_login.json"), &symfony)
-	var lr ory.OAuth2LoginRequest
-	decode(t, body(t, capture+"0032-hydra-GET-admin_oauth2_auth_requests_login.json"), &lr)
 	claims, _ := symfony["x_dispatcher_claims"].(map[string]any)
 	matchesSymfony(t, symfony, LoginRequestForApp(lr,
 		Step{Challenge: symfony["challenge"].(string), Subject: symfony["subject"].(string)},
@@ -348,8 +417,7 @@ func TestSymfonyParity(t *testing.T) {
 
 	symfony = nil
 	decode(t, body(t, capture+"0061-front-GET-oauth2_auth_requests_consent.json"), &symfony)
-	var cr ory.OAuth2ConsentRequest
-	decode(t, body(t, capture+"0069-hydra-GET-admin_oauth2_auth_requests_consent.json"), &cr)
+	cr := consentRequest(t, capture+"0069-hydra-GET-admin_oauth2_auth_requests_consent.json")
 	served, err := ConsentRequestForApp(cr, Step{
 		Challenge:      symfony["challenge"].(string),
 		LoginChallenge: symfony["login_challenge"].(string),

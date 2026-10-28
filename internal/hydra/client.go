@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -33,15 +34,20 @@ var (
 	// caller answers 503 with Retry-After instead of queueing.
 	ErrOverloaded = errors.New("hydra overloaded: too many calls in flight")
 
-	// errEmptyAnswer is a 2xx without a body, or with null: the SDK decodes
-	// it as a nil model without an error.
+	// errEmptyAnswer is a 2xx without a body, or with null, where a model or
+	// a redirect_to is expected.
 	errEmptyAnswer = errors.New("empty answer")
+	// errIncompleteAnswer is a 2xx request without a member every Hydra
+	// request carries.
+	errIncompleteAnswer = errors.New("incomplete answer")
 )
 
 const (
 	// maxBody bounds Hydra's answers: a login request with its client
 	// weighs a few KiB.
 	maxBody = 1 << 20
+	// maxCause bounds the part of a 5xx error document kept in the error.
+	maxCause = 200
 	// readyTTL is how long Ready reuses Hydra's answer.
 	readyTTL = time.Second
 )
@@ -58,9 +64,10 @@ var tls12Suites = []uint16{
 	tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 }
 
-// RequestError is a 4xx answer: an unknown or expired challenge (404), a
-// request already handled (410, with redirect_to), or a refused body. Body is
-// Hydra's error document, forwarded as is to login apps on the emulated API.
+// RequestError is a 4xx answer: an unknown challenge (404), an expired one
+// (401, from Hydra 2.2 on), a request already handled (410, with
+// redirect_to), or a refused body. Body is Hydra's error document, forwarded
+// as is to login apps on the emulated API.
 type RequestError struct {
 	Op     string
 	Status int
@@ -103,7 +110,10 @@ type Client struct {
 // followed. Connections are kept alive and reused (Go's default of 2 idle
 // connections per host would open a connection per call under load); their
 // number is bounded by hydra.max_in_flight alone, as a lower limit in the
-// transport would queue the calls the cap let through.
+// transport would queue the calls the cap let through. Over HTTP/2, a
+// connection silent for hydra.timeout gets a ping, and is closed if it stays
+// unanswered for 2 s: a Hydra node gone without a reset would otherwise take
+// every call multiplexed on it until TCP gives up.
 func New(h config.Hydra, t config.TLS) (*Client, error) {
 	tlsConfig, err := clientTLS(t)
 	if err != nil {
@@ -114,6 +124,7 @@ func New(h config.Hydra, t config.TLS) (*Client, error) {
 		TLSHandshakeTimeout: 2 * time.Second,
 		TLSClientConfig:     tlsConfig,
 		ForceAttemptHTTP2:   true,
+		HTTP2:               &http.HTTP2Config{SendPingTimeout: h.Timeout.Std(), PingTimeout: 2 * time.Second},
 		MaxIdleConns:        h.MaxInFlight,
 		MaxIdleConnsPerHost: h.MaxInFlight,
 		IdleConnTimeout:     90 * time.Second,
@@ -201,17 +212,51 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 // short is a broken setup or network, not an unknown challenge.
 func classify(op string, resp *http.Response, err error) error {
 	err = withoutURL(err)
+	var apiErr *ory.GenericOpenAPIError
 	switch {
 	case resp == nil: // no answer: refused, timed out, cancelled
 		return fmt.Errorf("%s: %w: %w", op, ErrUnavailable, err)
-	case resp.StatusCode >= 500 || resp.StatusCode < 400: // includes a 2xx the SDK could not decode, and redirects
+	case resp.StatusCode >= 500:
+		return fmt.Errorf("%s: %w: status %d%s: %w", op, ErrUnavailable, resp.StatusCode, serverCause(resp, err), err)
+	case resp.StatusCode < 400: // a 2xx not decoded or incomplete, a redirect
 		return fmt.Errorf("%s: %w: status %d: %w", op, ErrUnavailable, resp.StatusCode, err)
-	}
-	var apiErr *ory.GenericOpenAPIError
-	if !errors.As(err, &apiErr) || !hydraError(resp.StatusCode, apiErr.Body()) {
+	case !errors.As(err, &apiErr) || !hydraError(resp.StatusCode, apiErr.Body()):
 		return fmt.Errorf("%s: %w: status %d without Hydra's error document: %w", op, ErrUnavailable, resp.StatusCode, err)
 	}
 	return &RequestError{Op: op, Status: resp.StatusCode, Body: apiErr.Body()}
+}
+
+// serverCause returns " (error: error_description)" from the error document
+// of a 5xx, which the SDK's message leaves out, or "". It drops the request's
+// query values, which a gateway may quote: the challenge never goes to the
+// logs.
+func serverCause(resp *http.Response, err error) string {
+	var apiErr *ory.GenericOpenAPIError
+	var doc struct {
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
+	}
+	if !errors.As(err, &apiErr) || json.Unmarshal(apiErr.Body(), &doc) != nil || doc.Error == "" {
+		return ""
+	}
+	cause := doc.Error
+	if doc.Description != "" {
+		cause += ": " + doc.Description
+	}
+	if resp.Request != nil {
+		for _, values := range resp.Request.URL.Query() {
+			for _, v := range values {
+				if v != "" {
+					cause = strings.ReplaceAll(cause, v, "…")
+					cause = strings.ReplaceAll(cause, url.QueryEscape(v), "…")
+				}
+			}
+		}
+	}
+	if len(cause) > maxCause {
+		cause = strings.ToValidUTF8(cause[:maxCause], "") + "…"
+	}
+	return " (" + cause + ")"
 }
 
 // withoutURL drops the request URL net/http puts in its errors: its query
@@ -226,11 +271,12 @@ func withoutURL(err error) error {
 
 // hydraError reports whether a 4xx body is one of Hydra's error documents:
 // an OAuth2 error, or on a 410 the redirect_to of a request already handled.
-// Hydra's admin API has neither authentication nor rate limit: a 401, 407 or
-// 429 comes from a gateway or proxy in front of it, even with a JSON error.
+// Hydra's admin API has neither authentication nor rate limit: a 407 or 429
+// comes from a gateway or proxy in front of it, even with a JSON error, and so
+// does a 401 but for fosite's request_unauthorized, Hydra's answer from 2.2
+// on to an expired login or consent request.
 func hydraError(status int, body []byte) bool {
-	switch status {
-	case http.StatusUnauthorized, http.StatusProxyAuthRequired, http.StatusTooManyRequests:
+	if status == http.StatusProxyAuthRequired || status == http.StatusTooManyRequests {
 		return false
 	}
 	var doc struct {
@@ -240,15 +286,27 @@ func hydraError(status int, body []byte) bool {
 	if json.Unmarshal(body, &doc) != nil {
 		return false
 	}
+	if status == http.StatusUnauthorized {
+		return doc.Error == "request_unauthorized"
+	}
 	return doc.Error != "" || status == http.StatusGone && doc.RedirectTo != ""
 }
 
-// present refuses the nil model the SDK returns, without an error, for an
-// empty or null 2xx body.
-func present[T any](v *T, resp *http.Response, err error) (*T, *http.Response, error) {
-	if err == nil && v == nil {
-		err = errEmptyAnswer
+// answer decodes the body of a 2xx with decode, in place of the SDK's model:
+// the SDK refuses a client whose jwks has a key without alg, kid or use (see
+// decodeClient), and decodes an XML Content-Type as XML. The SDK leaves the
+// whole body in resp.Body, so its decoding error on a 2xx is moot; a body it
+// could not read stays an error.
+func answer[T any](resp *http.Response, err error, decode func([]byte) (*T, error)) (*T, *http.Response, error) {
+	var apiErr *ory.GenericOpenAPIError
+	if resp == nil || resp.StatusCode >= 300 || err != nil && !errors.As(err, &apiErr) {
+		return nil, resp, err
 	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp, err
+	}
+	v, err := decode(body)
 	return v, resp, err
 }
 
@@ -264,7 +322,8 @@ func redirectTo(r *ory.OAuth2RedirectTo, resp *http.Response, err error) (string
 
 func (c *Client) LoginRequest(ctx context.Context, challenge string) (*ory.OAuth2LoginRequest, error) {
 	return call(c, "get_login_request", func() (*ory.OAuth2LoginRequest, *http.Response, error) {
-		return present(c.oauth2.GetOAuth2LoginRequest(ctx).LoginChallenge(challenge).Execute())
+		_, resp, err := c.oauth2.GetOAuth2LoginRequest(ctx).LoginChallenge(challenge).Execute()
+		return answer(resp, err, decodeLoginRequest)
 	})
 }
 
@@ -283,7 +342,8 @@ func (c *Client) RejectLogin(ctx context.Context, challenge string, body ory.Rej
 
 func (c *Client) ConsentRequest(ctx context.Context, challenge string) (*ory.OAuth2ConsentRequest, error) {
 	return call(c, "get_consent_request", func() (*ory.OAuth2ConsentRequest, *http.Response, error) {
-		return present(c.oauth2.GetOAuth2ConsentRequest(ctx).ConsentChallenge(challenge).Execute())
+		_, resp, err := c.oauth2.GetOAuth2ConsentRequest(ctx).ConsentChallenge(challenge).Execute()
+		return answer(resp, err, decodeConsentRequest)
 	})
 }
 
@@ -301,7 +361,8 @@ func (c *Client) RejectConsent(ctx context.Context, challenge string, body ory.R
 
 func (c *Client) LogoutRequest(ctx context.Context, challenge string) (*ory.OAuth2LogoutRequest, error) {
 	return call(c, "get_logout_request", func() (*ory.OAuth2LogoutRequest, *http.Response, error) {
-		return present(c.oauth2.GetOAuth2LogoutRequest(ctx).LogoutChallenge(challenge).Execute())
+		_, resp, err := c.oauth2.GetOAuth2LogoutRequest(ctx).LogoutChallenge(challenge).Execute()
+		return answer(resp, err, decodeLogoutRequest)
 	})
 }
 

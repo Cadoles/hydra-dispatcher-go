@@ -1,0 +1,46 @@
+package hydra
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+)
+
+// A 2xx missing what every Hydra request carries, or not JSON, is refused.
+func TestDecodeRefusals(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		decodeAnswer func([]byte) (any, error)
+		body         string
+		want         error // nil: any error
+	}{
+		{"login without client_id", loginAnswer, `{"challenge":"L","client":{},"request_url":"u","skip":false,"subject":""}`, errIncompleteAnswer},
+		{"login without request_url", loginAnswer, `{"challenge":"L","client":{"client_id":"c"},"request_url":"","skip":false,"subject":""}`, errIncompleteAnswer},
+		{"consent without subject", consentAnswer, `{"challenge":"C","client":{"client_id":"c"},"request_url":"u"}`, errIncompleteAnswer},
+		{"consent with a null client", consentAnswer, `{"challenge":"C","subject":"s","client":null,"request_url":"u"}`, errIncompleteAnswer},
+		{"logout without request_url", logoutAnswer, `{"challenge":"U","client":null}`, errIncompleteAnswer},
+		{"blank", logoutAnswer, " \n", errEmptyAnswer},
+		{"null", consentAnswer, "null", errEmptyAnswer},
+		{"not JSON", logoutAnswer, "<html></html>", nil},
+		{"client not an object", consentAnswer, `{"challenge":"C","subject":"s","client":"c","request_url":"u"}`, nil},
+		{"client of another type", loginAnswer, `{"challenge":"L","client":{"client_id":5},"request_url":"u","skip":false,"subject":""}`, nil},
+	} {
+		_, err := tt.decodeAnswer([]byte(tt.body))
+		if err == nil || tt.want != nil && !errors.Is(err, tt.want) {
+			t.Errorf("%s: err = %v, want %v", tt.name, err, tt.want)
+		}
+	}
+}
+
+// A logout request initiated by a client keeps it, jwks included.
+func TestDecodeLogoutClient(t *testing.T) {
+	r, err := decodeLogoutRequest([]byte(`{"challenge":"U","request_url":"/oauth2/sessions/logout","rp_initiated":true,
+		"client":{"client_id":"c","jwks":{"keys":[{"kty":"EC","crv":"P-256","x":"x","y":"y"}]}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwks, _ := json.Marshal(r.Client.AdditionalProperties["jwks"])
+	if r.Client.GetClientId() != "c" || string(jwks) != `{"keys":[{"kty":"EC","crv":"P-256","x":"x","y":"y"}]}` {
+		t.Errorf("client = %+v, jwks %s", r.Client, jwks)
+	}
+}
