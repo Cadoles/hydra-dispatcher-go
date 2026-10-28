@@ -15,11 +15,20 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # setup-go may install the go directive's version; the go command then
+      # switches to the toolchain directive's. This tells which one runs.
+      - name: Go version
+        run: go version
+
+      - name: Tidy
+        run: go mod tidy -diff
+
       - name: Build
         run: go build ./...
 
+      # go fmt runs the gofmt of that toolchain, gofmt alone the installed one.
       - name: Format
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+        run: out=$(go fmt ./...); test -z "$out" || { echo "$out"; exit 1; }
 
       - name: Vet
         run: go vet ./...
@@ -33,3 +42,16 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      # Built, never pushed: a Dockerfile or .dockerignore error shows here,
+      # not at release. Same BuildKit pin as hydra-sql-go: the runner's
+      # default fails to mask /proc/acpi.
+      - uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: image=moby/buildkit:v0.23.2
+
+      - name: Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false

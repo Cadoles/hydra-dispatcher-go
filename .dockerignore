@@ -1,4 +1,10 @@
-.git
-*_test.go
-README.md
-testdata/
+# Allowlist: only what this Dockerfile and tools/recorder/Dockerfile build
+# from enters the context, never a local binary, an .env or editor files.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!tools/
+**/*_test.go
+**/testdata
