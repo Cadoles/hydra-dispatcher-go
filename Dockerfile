@@ -14,8 +14,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # --- runtime stage ---
 # No shell, no package manager: the binary probes itself for HEALTHCHECK, on
-# the port of DISPATCHER_SERVER_LISTEN (a listen set in the configuration file
-# needs "healthcheck -url").
+# the server.listen serve uses. Give the configuration file by
+# DISPATCHER_CONFIG, which both read, rather than by "serve -config".
 FROM gcr.io/distroless/static:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 COPY --from=build /out/dispatcher /dispatcher
 EXPOSE 8080

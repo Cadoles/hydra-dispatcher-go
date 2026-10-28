@@ -1,10 +1,12 @@
-# Allowlist: only what this Dockerfile and tools/recorder/Dockerfile build
-# from enters the context, never a local binary, an .env or editor files.
+# Allowlist: only the Go sources this Dockerfile and tools/recorder/Dockerfile
+# build from enter the context, never a local binary (cmd/dispatcher/dispatcher
+# after a go build there), an .env or editor files. Files a package embeds
+# will need a line of their own.
 *
 !go.mod
 !go.sum
-!cmd/
-!internal/
-!tools/
+!cmd/**/*.go
+!internal/**/*.go
+!tools/**/*.go
 **/*_test.go
 **/testdata

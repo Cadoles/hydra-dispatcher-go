@@ -16,9 +16,12 @@ jobs:
           go-version-file: go.mod
 
       # setup-go may install the go directive's version; the go command then
-      # switches to the toolchain directive's. This tells which one runs.
+      # switches to the toolchain directive's, the image's. Fail if another
+      # one runs (GOTOOLCHAIN=local on an older setup-go, say).
       - name: Go version
-        run: go version
+        run: |
+          go version
+          test "$(go env GOVERSION)" = "$(sed -n 's/^toolchain //p' go.mod)"
 
       - name: Tidy
         run: go mod tidy -diff
