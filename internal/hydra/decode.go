@@ -10,7 +10,13 @@ import (
 
 // decodeLoginRequest decodes the login request of a 2xx answer.
 func decodeLoginRequest(body []byte) (*ory.OAuth2LoginRequest, error) {
-	r, err := decodeRequest(body, func(r *ory.OAuth2LoginRequest, c *ory.OAuth2Client) { r.Client = *c })
+	r, err := decodeRequest(body, func(r *ory.OAuth2LoginRequest, c *ory.OAuth2Client, members map[string]json.RawMessage) {
+		if c != nil {
+			r.Client = *c
+		}
+		keepRaw(r.AdditionalProperties, members)
+		keepRawOIDCContext(r.OidcContext, members["oidc_context"])
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +32,12 @@ func decodeLoginRequest(body []byte) (*ory.OAuth2LoginRequest, error) {
 
 // decodeConsentRequest decodes the consent request of a 2xx answer.
 func decodeConsentRequest(body []byte) (*ory.OAuth2ConsentRequest, error) {
-	r, err := decodeRequest(body, func(r *ory.OAuth2ConsentRequest, c *ory.OAuth2Client) { r.Client = c })
+	r, err := decodeRequest(body, func(r *ory.OAuth2ConsentRequest, c *ory.OAuth2Client, members map[string]json.RawMessage) {
+		r.Client = c
+		r.Context = raw(members["context"])
+		keepRaw(r.AdditionalProperties, members)
+		keepRawOIDCContext(r.OidcContext, members["oidc_context"])
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +55,10 @@ func decodeConsentRequest(body []byte) (*ory.OAuth2ConsentRequest, error) {
 // decodeLogoutRequest decodes the logout request of a 2xx answer. Its client
 // is null when the logout was not initiated by one.
 func decodeLogoutRequest(body []byte) (*ory.OAuth2LogoutRequest, error) {
-	r, err := decodeRequest(body, func(r *ory.OAuth2LogoutRequest, c *ory.OAuth2Client) { r.Client = c })
+	r, err := decodeRequest(body, func(r *ory.OAuth2LogoutRequest, c *ory.OAuth2Client, members map[string]json.RawMessage) {
+		r.Client = c
+		keepRaw(r.AdditionalProperties, members)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +72,10 @@ func decodeLogoutRequest(body []byte) (*ory.OAuth2LogoutRequest, error) {
 }
 
 // decodeRequest decodes a login, consent or logout request into the SDK's
-// model, with its client decoded by decodeClient and set by setClient.
-func decodeRequest[T any](body []byte, setClient func(*T, *ory.OAuth2Client)) (*T, error) {
+// model. keep then sets its client, decoded by decodeClient (nil for null or
+// nothing), and puts back from the request's members the values the model
+// holds in an interface{} (see keepRaw).
+func decodeRequest[T any](body []byte, keep func(*T, *ory.OAuth2Client, map[string]json.RawMessage)) (*T, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, errEmptyAnswer
 	}
@@ -85,9 +101,7 @@ func decodeRequest[T any](body []byte, setClient func(*T, *ory.OAuth2Client)) (*
 	if err := json.Unmarshal(data, v); err != nil {
 		return nil, err
 	}
-	if client != nil {
-		setClient(v, client)
-	}
+	keep(v, client, members)
 	return v, nil
 }
 
@@ -96,7 +110,8 @@ func decodeRequest[T any](body []byte, setClient func(*T, *ory.OAuth2Client)) (*
 // requires kty and Hydra checks the key material alone: one such key would
 // fail the whole request. The jwks is therefore kept as Hydra served it, in
 // AdditionalProperties, which the SDK serialises over its own fields; GetJwks
-// is empty.
+// is empty. Its metadata and unknown members are kept as served too (see
+// keepRaw).
 func decodeClient(data json.RawMessage) (*ory.OAuth2Client, error) {
 	if len(data) == 0 {
 		return nil, nil
@@ -105,7 +120,7 @@ func decodeClient(data json.RawMessage) (*ory.OAuth2Client, error) {
 	if err := json.Unmarshal(data, &members); err != nil || members == nil {
 		return nil, err
 	}
-	jwks := members["jwks"]
+	jwks := raw(members["jwks"])
 	delete(members, "jwks")
 	data, err := json.Marshal(members)
 	if err != nil {
@@ -115,13 +130,56 @@ func decodeClient(data json.RawMessage) (*ory.OAuth2Client, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
-	if jwks != nil && string(jwks) != "null" {
+	c.Metadata = raw(members["metadata"])
+	keepRaw(c.AdditionalProperties, members)
+	if jwks != nil {
 		if c.AdditionalProperties == nil {
 			c.AdditionalProperties = map[string]any{}
 		}
 		c.AdditionalProperties["jwks"] = jwks
 	}
 	return &c, nil
+}
+
+// keepRaw sets the values of props back to the JSON Hydra served, taken
+// from members. The SDK decodes them into interface{}, numbers as float64:
+// an integer beyond 2^53, in a client's metadata or a context, would reach
+// the login apps changed. Readers decode the json.RawMessage they find.
+func keepRaw(props map[string]any, members map[string]json.RawMessage) {
+	for k := range props {
+		if v, ok := members[k]; ok {
+			props[k] = v
+		}
+	}
+}
+
+// keepRawOIDCContext does the same for an oidc_context's unknown members and
+// id_token_hint_claims.
+func keepRawOIDCContext(o *ory.OAuth2ConsentRequestOpenIDConnectContext, data json.RawMessage) {
+	if o == nil {
+		return
+	}
+	members := objectMembers(data)
+	keepRaw(o.AdditionalProperties, members)
+	keepRaw(o.IdTokenHintClaims, objectMembers(members["id_token_hint_claims"]))
+}
+
+// raw returns data for an interface{} field: nil for null or nothing, the
+// JSON as served otherwise.
+func raw(data json.RawMessage) any {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	return data
+}
+
+// objectMembers returns the members of a JSON object, nil for anything else.
+func objectMembers(data json.RawMessage) map[string]json.RawMessage {
+	var members map[string]json.RawMessage
+	if json.Unmarshal(data, &members) != nil {
+		return nil
+	}
+	return members
 }
 
 // member is a request member required to be non-empty.

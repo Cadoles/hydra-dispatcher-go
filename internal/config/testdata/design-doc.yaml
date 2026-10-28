@@ -8,6 +8,7 @@ server:
 hydra:
   admin_url: "http://hydra:4445"
   timeout: 5s
+  max_in_flight: 512            # appels simultanés ; au-delà, 503 immédiat avec Retry-After
   version: "2.2"                # 2.1, 2.2 ou 2.3 : fixe le format des challenges chiffrés (voir Versions Hydra)
   system_secrets: "${HYDRA_SYSTEM_SECRETS}"   # optionnel : secrets.system d'Hydra, séparés par des virgules (ou system_secrets_file) ; vide = repli
   login_consent_ttl: 30m        # = ttl.login_consent_request d'Hydra

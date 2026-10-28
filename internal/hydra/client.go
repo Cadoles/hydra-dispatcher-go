@@ -11,10 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -26,9 +28,8 @@ import (
 
 var (
 	// ErrUnavailable covers network errors, timeouts, 5xx and unexpected
-	// answers: error E1004 for the user. The cause stays wrapped:
-	// context.Canceled when the caller gave up, context.DeadlineExceeded (and a
-	// net.Error timing out) past hydra.timeout or the caller's deadline.
+	// answers: error E1004 for the user. Calls return it as an
+	// *UnavailableError.
 	ErrUnavailable = errors.New("hydra unavailable")
 	// ErrOverloaded means hydra.max_in_flight calls are already running: the
 	// caller answers 503 with Retry-After instead of queueing.
@@ -63,6 +64,31 @@ var tls12Suites = []uint16{
 	tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 	tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 }
+
+// UnavailableError is the ErrUnavailable of one call, with what the logs and
+// the metrics need (hydra_requests_total's status_class,
+// hydra_rejected_total's reason). The cause stays wrapped: context.Canceled
+// when the caller gave up, context.DeadlineExceeded (and a net.Error timing
+// out) past hydra.timeout or the caller's deadline.
+type UnavailableError struct {
+	Op string
+	// Status is the status of the answer, 0 when none came.
+	Status int
+	detail string
+	err    error
+}
+
+func (e *UnavailableError) Error() string {
+	msg := e.Op + ": " + ErrUnavailable.Error()
+	if e.Status != 0 {
+		msg += fmt.Sprintf(": status %d", e.Status)
+	}
+	return msg + e.detail + ": " + e.err.Error()
+}
+
+func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailable }
+
+func (e *UnavailableError) Unwrap() error { return e.err }
 
 // RequestError is a 4xx answer: an unknown challenge (404), an expired one
 // (401, from Hydra 2.2 on), a request already handled (410, with
@@ -110,24 +136,17 @@ type Client struct {
 // followed. Connections are kept alive and reused (Go's default of 2 idle
 // connections per host would open a connection per call under load); their
 // number is bounded by hydra.max_in_flight alone, as a lower limit in the
-// transport would queue the calls the cap let through. Over HTTP/2, a
-// connection silent for hydra.timeout gets a ping, and is closed if it stays
-// unanswered for 2 s: a Hydra node gone without a reset would otherwise take
-// every call multiplexed on it until TCP gives up.
+// transport would queue the calls the cap let through. An idle connection is
+// closed after 90 s, before Hydra closes it after 120 s (ory/graceful's
+// default): Go never replays a PUT sent on a connection the server is
+// closing, and the final accept would be lost. Over HTTP/2, a connection
+// silent for hydra.timeout gets a ping, and is closed if it stays unanswered
+// for 2 s: a Hydra node gone without a reset would otherwise take every call
+// multiplexed on it until TCP gives up.
 func New(h config.Hydra, t config.TLS) (*Client, error) {
-	tlsConfig, err := clientTLS(t)
+	transport, err := newTransport(h, t)
 	if err != nil {
 		return nil, err
-	}
-	transport := &http.Transport{
-		DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout: 2 * time.Second,
-		TLSClientConfig:     tlsConfig,
-		ForceAttemptHTTP2:   true,
-		HTTP2:               &http.HTTP2Config{SendPingTimeout: h.Timeout.Std(), PingTimeout: 2 * time.Second},
-		MaxIdleConns:        h.MaxInFlight,
-		MaxIdleConnsPerHost: h.MaxInFlight,
-		IdleConnTimeout:     90 * time.Second,
 	}
 	cfg := ory.NewConfiguration()
 	// The SDK appends /admin/...: a trailing slash would give //admin/...,
@@ -147,6 +166,26 @@ func New(h config.Hydra, t config.TLS) (*Client, error) {
 		metadata:  api.MetadataAPI,
 		inFlight:  make(chan struct{}, h.MaxInFlight),
 		readySlot: make(chan struct{}, 1),
+	}, nil
+}
+
+// newTransport builds the transport New describes. It takes no proxy from
+// the environment: the admin API, without authentication, carries subjects
+// and claims.
+func newTransport(h config.Hydra, t config.TLS) (*http.Transport, error) {
+	tlsConfig, err := clientTLS(t)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 2 * time.Second,
+		TLSClientConfig:     tlsConfig,
+		ForceAttemptHTTP2:   true,
+		HTTP2:               &http.HTTP2Config{SendPingTimeout: h.Timeout.Std(), PingTimeout: 2 * time.Second},
+		MaxIdleConns:        h.MaxInFlight,
+		MaxIdleConnsPerHost: h.MaxInFlight,
+		IdleConnTimeout:     90 * time.Second,
 	}, nil
 }
 
@@ -206,42 +245,60 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 	return zero, classify(op, resp, err)
 }
 
-// classify turns an SDK error into ErrUnavailable or a RequestError. A 4xx
-// is a RequestError only with Hydra's error document: a 404 page from
+// InFlight returns the number of calls running, for hydra_in_flight.
+func (c *Client) InFlight() int { return len(c.inFlight) }
+
+// classify turns an SDK error into an UnavailableError or a RequestError. A
+// 4xx is a RequestError only with Hydra's error document: a 404 page from
 // elsewhere (Hydra's public port, a proxy), a gateway's refusal or a body cut
 // short is a broken setup or network, not an unknown challenge.
 func classify(op string, resp *http.Response, err error) error {
-	err = withoutURL(err)
+	unavailable := &UnavailableError{Op: op, err: withoutURL(err)}
+	if resp == nil { // no answer: refused, timed out, cancelled
+		return unavailable
+	}
+	unavailable.Status = resp.StatusCode
 	var apiErr *ory.GenericOpenAPIError
 	switch {
-	case resp == nil: // no answer: refused, timed out, cancelled
-		return fmt.Errorf("%s: %w: %w", op, ErrUnavailable, err)
 	case resp.StatusCode >= 500:
-		return fmt.Errorf("%s: %w: status %d%s: %w", op, ErrUnavailable, resp.StatusCode, serverCause(resp, err), err)
+		unavailable.detail = serverCause(resp, unavailable.err)
 	case resp.StatusCode < 400: // a 2xx not decoded or incomplete, a redirect
-		return fmt.Errorf("%s: %w: status %d: %w", op, ErrUnavailable, resp.StatusCode, err)
 	case !errors.As(err, &apiErr) || !hydraError(resp.StatusCode, apiErr.Body()):
-		return fmt.Errorf("%s: %w: status %d without Hydra's error document: %w", op, ErrUnavailable, resp.StatusCode, err)
+		unavailable.detail = " without Hydra's error document"
+	default:
+		return &RequestError{Op: op, Status: resp.StatusCode, Body: apiErr.Body()}
 	}
-	return &RequestError{Op: op, Status: resp.StatusCode, Body: apiErr.Body()}
+	return unavailable
 }
 
 // serverCause returns " (error: error_description)" from the error document
-// of a 5xx, which the SDK's message leaves out, or "". It drops the request's
-// query values, which a gateway may quote: the challenge never goes to the
-// logs.
+// of a 5xx, or " (check: error; …)" from the failed checks of
+// /health/ready, which the SDK's message leaves out, or "". It drops the
+// request's query values, which a gateway may quote: the challenge never
+// goes to the logs.
 func serverCause(resp *http.Response, err error) string {
 	var apiErr *ory.GenericOpenAPIError
 	var doc struct {
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
+		Error       string          `json:"error"`
+		Description string          `json:"error_description"`
+		Errors      json.RawMessage `json:"errors"`
 	}
-	if !errors.As(err, &apiErr) || json.Unmarshal(apiErr.Body(), &doc) != nil || doc.Error == "" {
+	if !errors.As(err, &apiErr) || json.Unmarshal(apiErr.Body(), &doc) != nil {
 		return ""
 	}
 	cause := doc.Error
-	if doc.Description != "" {
+	var checks map[string]string
+	switch {
+	case cause != "" && doc.Description != "":
 		cause += ": " + doc.Description
+	case cause == "" && json.Unmarshal(doc.Errors, &checks) == nil:
+		for _, name := range slices.Sorted(maps.Keys(checks)) {
+			cause += "; " + name + ": " + checks[name]
+		}
+		cause = strings.TrimPrefix(cause, "; ")
+	}
+	if cause == "" {
+		return ""
 	}
 	if resp.Request != nil {
 		for _, values := range resp.Request.URL.Query() {

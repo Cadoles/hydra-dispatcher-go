@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -36,14 +37,16 @@ type Extensions struct {
 }
 
 // LoginRequestForApp returns a copy of r for the emulated API: the step's
-// challenge and subject, skip always false, collections Hydra leaves out or
-// null served as [] the way the Symfony dispatcher served them, and the
-// extensions added. The copy is shallow: it shares r's slices, maps and
-// nested models, and ext.Claims.
+// challenge and subject, skip always false, members Hydra always serves
+// present even when r leaves them nil (collections as [], oidc_context as {})
+// the way the Symfony dispatcher served them, and the extensions added. The
+// copy is shallow: it shares r's slices, maps and nested models, and
+// ext.Claims.
 func LoginRequestForApp(r ory.OAuth2LoginRequest, step Step, ext Extensions) ory.OAuth2LoginRequest {
 	r.Challenge = step.Challenge
 	r.Subject = step.Subject
 	r.Skip = false
+	r.OidcContext = nonNilOIDCContext(r.OidcContext)
 	r.RequestedScope = nonNil(r.RequestedScope)
 	r.RequestedAccessTokenAudience = nonNil(r.RequestedAccessTokenAudience)
 	r.AdditionalProperties = withExtensions(r.AdditionalProperties, ext)
@@ -51,10 +54,11 @@ func LoginRequestForApp(r ory.OAuth2LoginRequest, step Step, ext Extensions) ory
 }
 
 // ConsentRequestForApp does the same for a consent request, whose acr, amr
-// and context the caller has set to the flow's aggregates; an empty context
-// is served as {}, never [] (a PHP artefact) nor null. A context that is not
-// a JSON object is refused: Hydra accepts any JSON, but login apps read it as
-// an object (hydra-passwordless decodes it into a map).
+// and context the caller has set to the flow's aggregates: acr is served ""
+// and amr [] when empty, and an empty context {}, never [] (a PHP artefact)
+// nor null. A context that is not a JSON object is refused: Hydra accepts
+// any JSON, but login apps read it as an object (hydra-passwordless decodes
+// it into a map).
 func ConsentRequestForApp(r ory.OAuth2ConsentRequest, step Step, ext Extensions) (ory.OAuth2ConsentRequest, error) {
 	ctx, err := appContext(r.Context)
 	if err != nil {
@@ -64,8 +68,10 @@ func ConsentRequestForApp(r ory.OAuth2ConsentRequest, step Step, ext Extensions)
 	r.LoginChallenge = ory.PtrString(step.LoginChallenge)
 	r.Subject = ory.PtrString(step.Subject)
 	r.Skip = ory.PtrBool(false)
+	r.OidcContext = nonNilOIDCContext(r.OidcContext)
 	r.RequestedScope = nonNil(r.RequestedScope)
 	r.RequestedAccessTokenAudience = nonNil(r.RequestedAccessTokenAudience)
+	r.Acr = ory.PtrString(r.GetAcr())
 	r.Amr = nonNil(r.Amr)
 	r.Context = ctx
 	r.AdditionalProperties = withExtensions(r.AdditionalProperties, ext)
@@ -79,9 +85,21 @@ func nonNil(s []string) []string {
 	return s
 }
 
+// nonNilOIDCContext returns o, or an empty oidc_context, which Hydra serves
+// as {}: flowcodec gives nil for a flow whose oidc_context is null.
+func nonNilOIDCContext(o *ory.OAuth2ConsentRequestOpenIDConnectContext) *ory.OAuth2ConsentRequestOpenIDConnectContext {
+	if o == nil {
+		return &ory.OAuth2ConsentRequestOpenIDConnectContext{}
+	}
+	return o
+}
+
 // appContext returns c, or {} when c serialises as null, [] or nothing. It
 // looks at the JSON, so typed nils count too: a nil map, or the nil
-// json.RawMessage flowcodec gives for a flow without context.
+// json.RawMessage flowcodec gives for a flow without context. The
+// dispatcher's own members (x_dispatcher_ref, which the context sent to
+// Hydra carries) are left out, on a copy whose values stay as JSON: a
+// float64 would change an integer beyond 2^53.
 func appContext(c any) (any, error) {
 	if raw, ok := c.(json.RawMessage); c == nil || ok && len(bytes.TrimSpace(raw)) == 0 {
 		return map[string]any{}, nil
@@ -102,29 +120,52 @@ func appContext(c any) (any, error) {
 			return map[string]any{}, nil
 		}
 	case map[string]any:
-		return c, nil
+		if !slices.ContainsFunc(slices.Collect(maps.Keys(v)), extension) {
+			return c, nil
+		}
+		var members map[string]json.RawMessage
+		_ = json.Unmarshal(data, &members) // an object, as v shows
+		maps.DeleteFunc(members, func(k string, _ json.RawMessage) bool { return extension(k) })
+		return members, nil
 	}
 	return nil, fmt.Errorf("consent context: %T is not a JSON object", v)
 }
 
-// emulatedFields are the fields LoginRequestForApp and ConsentRequestForApp
-// replace or normalise.
-var emulatedFields = []string{
-	"challenge", "login_challenge", "subject", "skip",
-	"requested_scope", "requested_access_token_audience", "amr", "context",
+// modelFields are the JSON members of the login and consent request models.
+// The SDK serialises AdditionalProperties over the model's own fields: a
+// property of one of these names would replace the value served. The SDK's
+// decoding keeps none, but a model built otherwise (decrypted flow, stored
+// state) could bring back Hydra's challenge or skip, or replace the flow's
+// acr. Read from the models, the list follows the SDK.
+var modelFields = slices.Concat(jsonFields[ory.OAuth2LoginRequest](), jsonFields[ory.OAuth2ConsentRequest]())
+
+// jsonFields returns the JSON names of T's fields.
+func jsonFields[T any]() []string {
+	t := reflect.TypeFor[T]()
+	var names []string
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
-// withExtensions sets the extensions on a copy of props. The SDK serialises
-// AdditionalProperties over the model's own fields: the copy drops the
-// emulated ones, so props never bring back Hydra's challenge or skip, and
-// every x_dispatcher_ member, so ext alone decides the extensions served.
+// extension reports whether k is one of the dispatcher's own members, which
+// Extensions alone decide.
+func extension(k string) bool { return strings.HasPrefix(k, "x_dispatcher_") }
+
+// withExtensions sets the extensions on a copy of props. The copy drops the
+// modelFields and every x_dispatcher_ member: props never replace a value
+// served, and ext alone decides the extensions served.
 func withExtensions(props map[string]any, ext Extensions) map[string]any {
 	out := maps.Clone(props)
 	if out == nil {
 		out = map[string]any{}
 	}
 	maps.DeleteFunc(out, func(k string, _ any) bool {
-		return slices.Contains(emulatedFields, k) || strings.HasPrefix(k, "x_dispatcher_")
+		return slices.Contains(modelFields, k) || extension(k)
 	})
 	claims := ext.Claims
 	if claims == nil {

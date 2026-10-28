@@ -159,29 +159,30 @@ func TestErrors(t *testing.T) {
 		{"another subject", reply(403, `{"error":"request_forbidden","error_hint":"Field 'subject' does not match subject from previous authentication."}`), false, 403, ""},
 		{"conflict", reply(409, `{"error":"Conflict","error_description":"The login request was already used and can no longer be changed."}`), false, 409, ""},
 		{"refused body", reply(400, `{"error":"invalid_request"}`), false, 400, ""},
-		{"server error", reply(500, `{"error":"boom"}`), true, 0, ""},
+		{"server error", reply(500, `{"error":"boom"}`), true, 500, ""},
 		// A gateway quoting the URL it was asked: the challenge stays out.
 		{"server error quoting the request", func(w http.ResponseWriter, r *http.Request) {
 			reply(502, `{"error":"bad_gateway","error_description":"upstream failed for `+r.URL.RequestURI()+` (`+r.URL.Query().Get("login_challenge")+`)"}`)(w, r)
-		}, true, 0, ""},
-		{"unexpected 200", reply(200, `{"unexpected":true}`), true, 0, ""},
-		{"empty 200", reply(200, ""), true, 0, ""},
-		{"null 200", reply(200, "null"), true, 0, ""},
-		{"incomplete 200", reply(200, `{"challenge":"C","client":{},"request_url":"","skip":false,"subject":"","redirect_to":""}`), true, 0, ""},
+		}, true, 502, ""},
+		{"unexpected 200", reply(200, `{"unexpected":true}`), true, 200, ""},
+		{"empty 200", reply(200, ""), true, 200, ""},
+		{"null 200", reply(200, "null"), true, 200, ""},
+		{"incomplete 200", reply(200, `{"challenge":"C","client":{},"request_url":"","skip":false,"subject":"","redirect_to":""}`), true, 200, ""},
 		{"XML 200", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/xml")
 			_, _ = io.WriteString(w, "<html><body>blocked</body></html>")
-		}, true, 0, ""},
-		{"oversized 200", reply(200, `{"challenge":"`+strings.Repeat("a", maxBody)+`"}`), true, 0, ""},
+		}, true, 200, ""},
+		{"oversized 200", reply(200, `{"challenge":"`+strings.Repeat("a", maxBody)+`"}`), true, 200, ""},
 		// Hydra's public port, or a proxy: a broken setup, not an unknown challenge.
-		{"404 page", http.NotFound, true, 0, ""},
+		{"404 page", http.NotFound, true, 404, ""},
 		// A gateway in front of the admin API, whose JSON is not Hydra's.
-		{"gateway refusal", reply(401, `{"error":"unauthorized"}`), true, 0, ""},
-		{"gateway rate limit", reply(429, `{"error":"rate_limited"}`), true, 0, ""},
-		{"null error", reply(404, `{"error":null}`), true, 0, ""},
-		{"redirect_to outside a 410", reply(404, `{"redirect_to":"http://oidc.client.test/cb"}`), true, 0, ""},
-		{"4xx cut short", cutBody(410), true, 0, ""},
-		{"redirect", http.RedirectHandler("/elsewhere", http.StatusTemporaryRedirect).ServeHTTP, true, 0, ""},
+		{"gateway refusal", reply(401, `{"error":"unauthorized"}`), true, 401, ""},
+		{"gateway rate limit", reply(429, `{"error":"rate_limited"}`), true, 429, ""},
+		{"null error", reply(404, `{"error":null}`), true, 404, ""},
+		{"redirect_to outside a 410", reply(404, `{"redirect_to":"http://oidc.client.test/cb"}`), true, 404, ""},
+		{"4xx cut short", cutBody(410), true, 410, ""},
+		{"redirect", http.RedirectHandler("/elsewhere", http.StatusTemporaryRedirect).ServeHTTP, true, 307, ""},
+		// No answer: no status.
 		{"too slow", func(w http.ResponseWriter, _ *http.Request) { time.Sleep(200 * time.Millisecond) }, true, 0, ""},
 	}
 	for _, tt := range tests {
@@ -192,19 +193,22 @@ func TestErrors(t *testing.T) {
 			_, getErr := c.LoginRequest(context.Background(), challenge)
 			_, acceptErr := c.AcceptLogin(context.Background(), challenge, ory.AcceptOAuth2LoginRequest{Subject: "alice"})
 
-			for _, err := range []error{getErr, acceptErr} {
+			for op, err := range map[string]error{"get_login_request": getErr, "accept_login": acceptErr} {
 				if got := errors.Is(err, ErrUnavailable); got != tt.wantUnavail {
 					t.Fatalf("err = %v, ErrUnavailable %v, want %v", err, got, tt.wantUnavail)
 				}
 				if strings.Contains(err.Error(), challenge) {
 					t.Errorf("the challenge is in the error: %v", err)
 				}
-				if tt.wantStatus == 0 {
-					continue
-				}
 				var reqErr *RequestError
-				if !errors.As(err, &reqErr) || reqErr.Status != tt.wantStatus || reqErr.RedirectTo() != tt.wantRedirect || len(reqErr.Body) == 0 {
-					t.Errorf("err = %#v, want a RequestError %d redirecting to %q with Hydra's body", err, tt.wantStatus, tt.wantRedirect)
+				var unavailable *UnavailableError
+				switch {
+				case tt.wantUnavail:
+					if !errors.As(err, &unavailable) || unavailable.Op != op || unavailable.Status != tt.wantStatus {
+						t.Errorf("err = %#v, want an UnavailableError of %s with status %d", err, op, tt.wantStatus)
+					}
+				case !errors.As(err, &reqErr) || reqErr.Op != op || reqErr.Status != tt.wantStatus || reqErr.RedirectTo() != tt.wantRedirect || len(reqErr.Body) == 0:
+					t.Errorf("err = %#v, want a RequestError %d of %s redirecting to %q with Hydra's body", err, tt.wantStatus, op, tt.wantRedirect)
 				}
 			}
 		})
@@ -215,8 +219,38 @@ func TestErrors(t *testing.T) {
 	// A gateway's credentials in admin_url stay out too.
 	adminURL := strings.Replace(srv.URL, "://", "://dispatcher:SENTINEL-PASSWORD@", 1)
 	_, err := newTestClient(t, adminURL, 4, time.Second).LoginRequest(context.Background(), challenge)
-	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), challenge) || strings.Contains(err.Error(), "SENTINEL-PASSWORD") {
-		t.Errorf("connection refused: err = %v, want ErrUnavailable without the challenge nor the password", err)
+	var unavailable *UnavailableError
+	if !errors.As(err, &unavailable) || unavailable.Status != 0 || strings.Contains(err.Error(), challenge) || strings.Contains(err.Error(), "SENTINEL-PASSWORD") {
+		t.Errorf("connection refused: err = %v, want ErrUnavailable without status, the challenge nor the password", err)
+	}
+}
+
+// RejectLogout reads no body: any 2xx is done, the rest is classified as for
+// the other calls.
+func TestRejectLogoutAnswers(t *testing.T) {
+	for _, tt := range []struct {
+		status      int
+		body        string
+		wantStatus  int // of the error, 0 for none
+		wantUnavail bool
+	}{
+		{204, "", 0, false},
+		{200, `{"unexpected":true}`, 0, false},
+		{404, `{"error":"Not Found","error_description":"Unable to locate the resource"}`, 404, false},
+		{307, "", 307, true},
+		{500, `{"error":"boom"}`, 500, true},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(reply(tt.status, tt.body)))
+		err := newTestClient(t, srv.URL, 1, time.Second).RejectLogout(context.Background(), "U")
+		srv.Close()
+		var reqErr *RequestError
+		var unavailable *UnavailableError
+		switch {
+		case tt.wantStatus == 0 && err != nil,
+			tt.wantStatus != 0 && tt.wantUnavail && (!errors.As(err, &unavailable) || unavailable.Status != tt.wantStatus),
+			tt.wantStatus != 0 && !tt.wantUnavail && (!errors.As(err, &reqErr) || reqErr.Status != tt.wantStatus):
+			t.Errorf("%d %s: err = %v", tt.status, tt.body, err)
+		}
 	}
 }
 
@@ -232,6 +266,14 @@ func TestServerErrorCause(t *testing.T) {
 	if !strings.Contains(msg, "(server_error: pq: connection refused (login_challenge=…, …) x x") ||
 		strings.Contains(msg, "L+/=") || strings.Contains(msg, "L%2B%2F%3D") || len(msg) > 400 {
 		t.Errorf("err = %v, want Hydra's error and description, bounded, without the challenge", err)
+	}
+
+	// /health/ready names its failed checks instead.
+	ready := httptest.NewServer(http.HandlerFunc(reply(503, `{"errors":{"migrations":"pending","database":"dial tcp: connection refused"}}`)))
+	defer ready.Close()
+	err = newTestClient(t, ready.URL, 4, time.Second).Ready(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "status 503 (database: dial tcp: connection refused; migrations: pending)") {
+		t.Errorf("Ready = %v, want the failed checks", err)
 	}
 }
 
@@ -274,6 +316,19 @@ func TestErrorCauses(t *testing.T) {
 	_, err = newTestClient(t, slowBody.URL, 4, time.Second).LoginRequest(ctx, "L")
 	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
 		t.Errorf("caller gone in the body: err = %v, want ErrUnavailable and context.Canceled", err)
+	}
+}
+
+// Hydra is called directly, never through HTTP_PROXY. Setting it would not
+// tell: ProxyFromEnvironment skips loopback addresses and reads the
+// environment once per process.
+func TestNoProxy(t *testing.T) {
+	transport, err := newTransport(config.Hydra{Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{MinVersion: "1.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport.Proxy != nil {
+		t.Error("the transport takes a proxy")
 	}
 }
 
@@ -429,9 +484,15 @@ func TestInFlightCap(t *testing.T) {
 	if err := c.Ready(context.Background()); err != nil {
 		t.Errorf("Ready with the cap full = %v, want ok: load is not Hydra down", err)
 	}
+	if n := c.InFlight(); n != 1 {
+		t.Errorf("InFlight = %d during the first call, want 1", n)
+	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Errorf("first call = %v", err)
+	}
+	if n := c.InFlight(); n != 0 {
+		t.Errorf("InFlight = %d once done, want 0", n)
 	}
 
 	func() {

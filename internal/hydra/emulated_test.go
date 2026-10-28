@@ -42,9 +42,13 @@ func body(t *testing.T, path string) json.RawMessage {
 	return data
 }
 
+// decode keeps numbers as written: through a float64, an integer changed
+// beyond 2^53 would compare equal.
 func decode(t *testing.T, data []byte, v any) {
 	t.Helper()
-	if err := json.Unmarshal(data, v); err != nil {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.UseNumber()
+	if err := d.Decode(v); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -213,6 +217,42 @@ func TestJWKSKeptAsServed(t *testing.T) {
 	}
 }
 
+// Integers beyond 2^53 come back as Hydra served them, wherever the SDK's
+// models hold an interface{}: a float64 would change them.
+func TestNumbersKeptAsServed(t *testing.T) {
+	const big = json.Number("12345678901234567891")
+	for _, tt := range []struct {
+		path         string
+		decodeAnswer func([]byte) (any, error)
+	}{
+		{hydra22 + "login_request.json", loginAnswer},
+		{hydra22 + "consent_request.json", consentAnswer},
+		{symfony21 + "13-logout/0029-hydra-GET-admin_oauth2_auth_requests_logout.json", logoutAnswer},
+	} {
+		var doc map[string]any
+		decode(t, body(t, tt.path), &doc)
+		doc["x_hydra_next"] = map[string]any{"n": big}
+		if client, ok := doc["client"].(map[string]any); ok {
+			client["metadata"] = map[string]any{"tenant": big}
+			client["x_hydra_next"] = big
+		}
+		if oidc, ok := doc["oidc_context"].(map[string]any); ok {
+			oidc["id_token_hint_claims"] = map[string]any{"uid": big}
+			oidc["x_hydra_next"] = big
+		}
+		if _, ok := doc["context"]; ok {
+			doc["context"] = map[string]any{"uid": big}
+		}
+		original, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := roundTrip(t, original, tt.decodeAnswer); len(d) > 0 {
+			t.Errorf("%s: round trip changed the document: %v", tt.path, d)
+		}
+	}
+}
+
 // loginRequest and consentRequest decode a fixture as the client does.
 func loginRequest(t *testing.T, path string) ory.OAuth2LoginRequest {
 	t.Helper()
@@ -332,7 +372,10 @@ func TestConsentRequestForApp(t *testing.T) {
 		{json.RawMessage(" "), map[string]any{}},
 		{json.RawMessage(" null "), map[string]any{}},
 		{json.RawMessage("[]"), map[string]any{}},
-		{json.RawMessage(`{"step":1}`), map[string]any{"step": 1.0}},
+		{json.RawMessage(`{"step":1}`), map[string]any{"step": json.Number("1")}},
+		// The dispatcher's own members stay out, numbers as they were.
+		{json.RawMessage(`{"uid":12345678901234567891,"x_dispatcher_ref":"r"}`), map[string]any{"uid": json.Number("12345678901234567891")}},
+		{map[string]any{"step": 1, "x_dispatcher_ref": "r", "x_dispatcher_skipped_steps": []string{"otp"}}, map[string]any{"step": json.Number("1")}},
 		// Hydra accepts any JSON, but apps decode the context into a map.
 		{[]any{"a"}, nil},
 		{json.RawMessage(`"a"`), nil},
@@ -361,19 +404,22 @@ func TestConsentRequestForApp(t *testing.T) {
 			t.Errorf("context %#v: served %s", tt.context, out)
 		}
 	}
+
+	ctx := map[string]any{"step": 1, "x_dispatcher_ref": "r"}
+	r.Context = ctx
+	if _, err := ConsentRequestForApp(r, step, Extensions{}); err != nil || ctx["x_dispatcher_ref"] != "r" {
+		t.Errorf("ConsentRequestForApp changed the context it was given: %v, %v", ctx, err)
+	}
 }
 
-// The SDK serialises AdditionalProperties over the model's own fields: they
-// must not bring back Hydra's challenge, subject or skip, nor extensions the
-// step does not set.
-func TestAdditionalPropertiesStayMasked(t *testing.T) {
-	hydra := map[string]any{"challenge": "L", "login_challenge": "L", "subject": "hydra-subject", "skip": true, "x_hydra_next": "kept",
-		"x_dispatcher_restart_url": "http://dispatcher.hydra.test/?login_challenge=L", "x_dispatcher_device": "stale"}
-	login, err := json.Marshal(LoginRequestForApp(ory.OAuth2LoginRequest{AdditionalProperties: hydra}, Step{Challenge: "c1"}, Extensions{}))
+// From a model that leaves them nil, as one built from a decrypted flow may,
+// the members Hydra always serves are served all the same.
+func TestServedFromBareModels(t *testing.T) {
+	login, err := json.Marshal(LoginRequestForApp(ory.OAuth2LoginRequest{}, Step{Challenge: "c1"}, Extensions{}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	consentRequest, err := ConsentRequestForApp(ory.OAuth2ConsentRequest{AdditionalProperties: hydra}, Step{Challenge: "c2", LoginChallenge: "c1"}, Extensions{})
+	consentRequest, err := ConsentRequestForApp(ory.OAuth2ConsentRequest{}, Step{Challenge: "c2", LoginChallenge: "c1"}, Extensions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,16 +427,62 @@ func TestAdditionalPropertiesStayMasked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, served := range [][]byte{login, consent} {
+	always := map[string]any{
+		"oidc_context": map[string]any{}, "requested_scope": []any{}, "requested_access_token_audience": []any{},
+		"skip": false, "subject": "", "x_dispatcher_claims": map[string]any{},
+	}
+	consentWant := maps.Clone(always)
+	maps.Copy(consentWant, map[string]any{"acr": "", "amr": []any{}, "context": map[string]any{}, "login_challenge": "c1"})
+	for _, tt := range []struct {
+		served []byte
+		want   map[string]any
+	}{{login, always}, {consent, consentWant}} {
 		var doc map[string]any
-		decode(t, served, &doc)
-		if doc["challenge"] == "L" || doc["login_challenge"] == "L" || doc["subject"] == "hydra-subject" ||
-			doc["skip"] != false || doc["x_hydra_next"] != "kept" ||
-			doc["x_dispatcher_restart_url"] != nil || doc["x_dispatcher_device"] != nil {
-			t.Errorf("served %s", served)
+		decode(t, tt.served, &doc)
+		for k, v := range tt.want {
+			if !reflect.DeepEqual(doc[k], v) {
+				t.Errorf("%s: %s = %#v, want %#v", tt.served, k, doc[k], v)
+			}
 		}
 	}
-	if len(hydra) != 7 {
+}
+
+// The SDK serialises AdditionalProperties over the model's own fields: they
+// must not bring back Hydra's challenge, subject or skip, replace another
+// field (the flow's acr, the request URL), nor add extensions the step does
+// not set.
+func TestAdditionalPropertiesStayMasked(t *testing.T) {
+	hydra := map[string]any{"challenge": "L", "login_challenge": "L", "subject": "hydra-subject", "skip": true, "x_hydra_next": "kept",
+		"acr": "hydra-acr", "request_url": "http://elsewhere.test/",
+		"x_dispatcher_restart_url": "http://dispatcher.hydra.test/?login_challenge=L", "x_dispatcher_device": "stale"}
+	const requestURL = "http://public.hydra.test/oauth2/auth"
+	login, err := json.Marshal(LoginRequestForApp(ory.OAuth2LoginRequest{RequestUrl: requestURL, AdditionalProperties: hydra},
+		Step{Challenge: "c1"}, Extensions{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consentRequest, err := ConsentRequestForApp(ory.OAuth2ConsentRequest{Acr: ory.PtrString("aggregate"), RequestUrl: ory.PtrString(requestURL), AdditionalProperties: hydra},
+		Step{Challenge: "c2", LoginChallenge: "c1"}, Extensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consent, err := json.Marshal(consentRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		served  []byte
+		wantAcr any
+	}{{login, nil}, {consent, "aggregate"}} {
+		var doc map[string]any
+		decode(t, tt.served, &doc)
+		if doc["challenge"] == "L" || doc["login_challenge"] == "L" || doc["subject"] == "hydra-subject" ||
+			doc["skip"] != false || doc["x_hydra_next"] != "kept" || doc["acr"] != tt.wantAcr || doc["request_url"] != requestURL ||
+			doc["x_dispatcher_restart_url"] != nil || doc["x_dispatcher_device"] != nil {
+			t.Errorf("served %s", tt.served)
+		}
+	}
+	if len(hydra) != 9 {
 		t.Errorf("the emulation changed its argument: %v", hydra)
 	}
 }
