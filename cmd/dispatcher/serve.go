@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
@@ -47,13 +49,24 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	logger.Info("server.started", "addr", ln.Addr().String())
-	if err := httpx.Serve(ctx, httpx.NewServer(handler), ln); err != nil {
+	err = httpx.Serve(ctx, httpx.NewServer(handler, logger), ln, shutdownGrace)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		logger.Warn("server.shutdown_timeout", "grace", shutdownGrace.String())
+	case err != nil:
 		return err
 	}
-	// Stores will be closed here, once in-flight requests are done.
+	// Stores will be closed here. After server.shutdown_timeout, the handlers
+	// of the cut requests may still be running: they will have to be waited
+	// for (counted by a middleware) before a store closes under them.
 	logger.Info("server.stopped")
 	return nil
 }
+
+// shutdownGrace is how long in-flight requests may run after SIGTERM. It
+// stays under the 10 s docker stop waits before SIGKILL, so the dispatcher
+// cuts them and says so.
+const shutdownGrace = 8 * time.Second
 
 // newHandler builds the routes behind the middleware chain every surface
 // shares.
@@ -92,7 +105,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger) (http.Han
 func newLogHandler(w io.Writer, o config.Observability) slog.Handler {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
-	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: utcMillis}
+	opts := &slog.HandlerOptions{Level: level, ReplaceAttr: logFormat}
 	var h slog.Handler = slog.NewJSONHandler(w, opts)
 	if o.LogFormat == "text" {
 		h = slog.NewTextHandler(w, opts)
@@ -104,10 +117,22 @@ func newLogHandler(w io.Writer, o config.Observability) slog.Handler {
 	}))
 }
 
-// utcMillis writes the record time in RFC 3339, UTC, to the millisecond.
-func utcMillis(groups []string, a slog.Attr) slog.Attr {
-	if a.Key == slog.TimeKey && len(groups) == 0 {
-		a.Value = slog.StringValue(a.Value.Time().UTC().Format("2006-01-02T15:04:05.000Z07:00"))
+// logFormat writes the record time in RFC 3339, UTC, to the millisecond, and
+// the level in lowercase, as the design document has them. An attribute of
+// the same name but of another kind is left as it is.
+func logFormat(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) > 0 {
+		return a
+	}
+	switch a.Key {
+	case slog.TimeKey:
+		if a.Value.Kind() == slog.KindTime {
+			a.Value = slog.StringValue(a.Value.Time().UTC().Format("2006-01-02T15:04:05.000Z07:00"))
+		}
+	case slog.LevelKey:
+		if l, ok := a.Value.Any().(slog.Level); ok {
+			a.Value = slog.StringValue(strings.ToLower(l.String()))
+		}
 	}
 	return a
 }

@@ -192,11 +192,15 @@ type Serve struct {
 
 var privateNetworks = List{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 
+// DefaultListen is server.listen when neither the file nor
+// DISPATCHER_SERVER_LISTEN sets it.
+const DefaultListen = ":8080"
+
 // defaults returns the values of the design document for every key a file
 // may omit.
 func defaults() *Config {
 	c := &Config{}
-	c.Server.Listen = ":8080"
+	c.Server.Listen = DefaultListen
 	c.Server.TrustedProxies = append(List{}, privateNetworks...)
 	c.Server.CookiePath = "/"
 	c.Hydra.Timeout = Duration(5 * time.Second)
