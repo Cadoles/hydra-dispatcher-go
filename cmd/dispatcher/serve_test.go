@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -111,7 +114,7 @@ func TestHandler(t *testing.T) {
 
 func TestLogHandler(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := newLoggers(&buf, testConfig(t, "http://hydra:4445").Observability)
+	logger, _, _ := newLoggers(&buf, testConfig(t, "http://hydra:4445").Observability)
 	logger.Warn("server.started")
 	// An event's attribute named like a field of the line is renamed: the
 	// line keeps one time, level, log_type, instance and version.
@@ -157,7 +160,7 @@ func TestLoggersLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	logger, accessLogger := newLoggers(&buf, cfg.Observability)
+	logger, accessLogger, _ := newLoggers(&buf, cfg.Observability)
 	logger.Info("flow.started")
 	logger.Warn("challenge.invalid")
 	h, err := newHandler(cfg, logger, accessLogger)
@@ -217,15 +220,109 @@ func TestHandlerTrace(t *testing.T) {
 	}
 }
 
-// A warning may explain the configuration error: it is logged before it.
-func TestServeConfigWarnings(t *testing.T) {
-	var logs bytes.Buffer
+// The image's HEALTHCHECK reads DISPATCHER_CONFIG: serve warns when a file
+// given by -config alone listens where the probe does not look.
+func TestServeHealthcheckWarning(t *testing.T) {
+	keepLoggers(t)
+	for _, kv := range requiredEnv("http://127.0.0.1:1") {
+		k, v, _ := strings.Cut(kv, "=")
+		t.Setenv(k, v)
+	}
+	dir := t.TempDir()
+	listening := filepath.Join(dir, "listen.yaml")
+	if err := os.WriteFile(listening, []byte("server:\n  listen: \"127.0.0.1:0\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(dir, "empty.yaml")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Canceled: serve stops as soon as it listens.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, tt := range []struct {
+		name, env, listen string
+		args              []string
+		warned            bool
+	}{
+		{"-config alone", "", "", []string{"-config", listening}, true},
+		{"DISPATCHER_CONFIG", listening, "", nil, false},
+		{"both", listening, "", []string{"-config", listening}, false},
+		// The probe follows DISPATCHER_SERVER_LISTEN, which wins over the file.
+		{"-config alone, listen by the variable", "", "127.0.0.1:0", []string{"-config", empty}, false},
+		{"another DISPATCHER_CONFIG", filepath.Join(dir, "missing.yaml"), "", []string{"-config", listening}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(configEnv, tt.env)
+			t.Setenv("DISPATCHER_SERVER_LISTEN", tt.listen)
+			if tt.listen == "" {
+				_ = os.Unsetenv("DISPATCHER_SERVER_LISTEN") // restored by t.Setenv
+			}
+			var err error
+			logs := stdoutOf(t, func() { err = serve(ctx, tt.args) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(logs, "healthcheck without -url"); got != tt.warned {
+				t.Errorf("warned = %v, want %v; logs:\n%s", got, tt.warned, logs)
+			}
+		})
+	}
+}
+
+// Configuration warnings are written whatever log_level: some warn of an
+// allowlist open to every client.
+func TestServeWarningsAtErrorLevel(t *testing.T) {
+	keepLoggers(t)
+	for _, kv := range append(requiredEnv("http://127.0.0.1:1"),
+		"DISPATCHER_OBSERVABILITY_LOG_LEVEL=error", "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", configEnv+"=") {
+		k, v, _ := strings.Cut(kv, "=")
+		t.Setenv(k, v)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var err error
+	logs := stdoutOf(t, func() { err = serve(ctx, nil) })
+	// No server.started: log_level still applies to the rest.
+	if err != nil || !strings.Contains(logs, `"msg":"config.warning"`) || strings.Contains(logs, "server.started") {
+		t.Errorf("err = %v, logs:\n%s", err, logs)
+	}
+}
+
+// keepLoggers restores the default loggers, which serve replaces.
+func keepLoggers(t *testing.T) {
 	defaultLogger, flags, out := slog.Default(), log.Flags(), log.Writer()
 	t.Cleanup(func() {
 		slog.SetDefault(defaultLogger)
 		log.SetFlags(flags)
 		log.SetOutput(out)
 	})
+}
+
+// stdoutOf returns what f writes to os.Stdout, where serve logs.
+func stdoutOf(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout := os.Stdout
+	os.Stdout = w
+	func() {
+		defer func() { os.Stdout = stdout }()
+		f()
+	}()
+	_ = w.Close()
+	b, _ := io.ReadAll(r)
+	_ = r.Close()
+	return string(b)
+}
+
+// A warning may explain the configuration error: it is logged before it.
+func TestServeConfigWarnings(t *testing.T) {
+	var logs bytes.Buffer
+	keepLoggers(t)
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Setenv("DISPATCHER_SERVER_BASE_URL", "")
 	t.Setenv("DISPATCHER_SERVER_BASEURL", "http://typo")

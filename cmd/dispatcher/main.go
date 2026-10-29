@@ -106,9 +106,8 @@ func parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
 }
 
 // healthcheck lets a distroless image (no shell, no curl) run a HEALTHCHECK.
-// It probes the server.listen serve uses: that of the DISPATCHER_CONFIG file
-// and the variables, read as serve reads them, else DISPATCHER_SERVER_LISTEN
-// or the default. A file given to serve by -config alone needs -url.
+// It probes the server.listen serve uses, as probeURL finds it. A file given
+// to serve by -config alone needs -url, which serve warns of.
 func healthcheck(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 	url := fs.String("url", "", "health endpoint to probe (default: that of the server.listen serve uses)")
@@ -116,15 +115,11 @@ func healthcheck(ctx context.Context, args []string) error {
 		return err
 	}
 	if *url == "" {
-		listen := os.Getenv("DISPATCHER_SERVER_LISTEN")
-		if path := os.Getenv(configEnv); path != "" {
-			cfg, _, err := config.Load(path, os.Environ())
-			if err != nil {
-				return fmt.Errorf("configuration: %w", err)
-			}
-			listen = cfg.Server.Listen
+		probe, err := probeURL()
+		if err != nil {
+			return err
 		}
-		*url = healthURL(listen)
+		*url = probe
 	}
 
 	// Under the 3 s of the image's HEALTHCHECK, so the error is printed
@@ -146,6 +141,21 @@ func healthcheck(ctx context.Context, args []string) error {
 		return fmt.Errorf("health: status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// probeURL is the /health URL healthcheck probes without -url: that of the
+// server.listen of the DISPATCHER_CONFIG file and the variables, read as
+// serve reads them, else of DISPATCHER_SERVER_LISTEN or the default.
+func probeURL() (string, error) {
+	listen := os.Getenv("DISPATCHER_SERVER_LISTEN")
+	if path := os.Getenv(configEnv); path != "" {
+		cfg, _, err := config.Load(path, os.Environ())
+		if err != nil {
+			return "", fmt.Errorf("configuration: %w", err)
+		}
+		listen = cfg.Server.Listen
+	}
+	return healthURL(listen), nil
 }
 
 // healthURL is the /health URL of a server listening on listen: an empty or

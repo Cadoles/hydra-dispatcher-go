@@ -53,15 +53,23 @@ func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
 	if !contains(trusted, ip) || len(forwarded) == 0 {
 		return ip
 	}
-	hops := strings.Split(strings.Join(forwarded, ","), ",")
-	for i := len(hops) - 1; i >= 0; i-- {
-		hop, ok := parseHop(hops[i])
-		if !ok {
-			return netip.Addr{}
-		}
-		ip = hop
-		if !contains(trusted, ip) {
-			break
+	// From the right, without splitting: left of its address, the client
+	// writes as many entries as it likes, which are never read.
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		rest := forwarded[i]
+		for {
+			comma := strings.LastIndexByte(rest, ',')
+			hop, ok := parseHop(rest[comma+1:])
+			if !ok {
+				return netip.Addr{}
+			}
+			if ip = hop; !contains(trusted, ip) {
+				return ip
+			}
+			if comma < 0 {
+				break
+			}
+			rest = rest[:comma]
 		}
 	}
 	return ip
@@ -137,14 +145,15 @@ func newTraceID() string {
 }
 
 // Routes serves mux and records the matched pattern ("GET /admin/v1/flows/{id}")
-// for the logs, "unmatched" when none matches. It never records the real path.
+// for the logs, "unmatched" when none matches. It never records the real path:
+// the mux names the trailing-slash redirect of a CONNECT by the path received,
+// so CONNECT, which the dispatcher does not serve, is unmatched.
 func Routes(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if inf := infoFrom(r.Context()); inf != nil {
-			if _, pattern := mux.Handler(r); pattern != "" {
+			inf.route = "unmatched"
+			if _, pattern := mux.Handler(r); pattern != "" && r.Method != http.MethodConnect {
 				inf.route = pattern
-			} else {
-				inf.route = "unmatched"
 			}
 		}
 		mux.ServeHTTP(w, r)

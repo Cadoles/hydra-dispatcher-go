@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,8 @@ func TestRealIP(t *testing.T) {
 		{"trusted proxy", "10.0.5.5:80", []string{"198.51.100.1"}, "198.51.100.1"},
 		{"first untrusted hop from the right", "10.0.5.5:80", []string{"192.0.2.66, 198.51.100.1, 10.1.2.3"}, "198.51.100.1"},
 		{"several headers", "10.0.5.5:80", []string{"192.0.2.66", "198.51.100.1"}, "198.51.100.1"},
+		{"trusted hop in a header of its own", "10.0.5.5:80", []string{"192.0.2.66, 198.51.100.1", "10.1.2.3"}, "198.51.100.1"},
+		{"empty header right of the client", "10.0.5.5:80", []string{"198.51.100.1", ""}, "invalid IP"},
 		{"only trusted hops", "10.0.5.5:80", []string{"10.9.9.9, 10.1.1.1"}, "10.9.9.9"},
 		{"trusted proxy without header", "10.0.5.5:80", nil, "10.0.5.5"},
 		{"IPv6 proxy", "[fd00::1]:80", []string{"2001:db8::42"}, "2001:db8::42"},
@@ -68,6 +71,26 @@ func TestRealIP(t *testing.T) {
 				t.Errorf("client IP = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// Left of its address, the client writes as many entries as it likes: they
+// are neither read nor split, so they cost nothing.
+func TestRealIPLongHeader(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "10.0.5.5:80"
+	r.Header.Set("X-Forwarded-For", strings.Repeat(",", 60000)+"198.51.100.1")
+	const runs = 100
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		if got := clientIP(r, trustedProxies); got != netip.MustParseAddr("198.51.100.1") {
+			t.Fatalf("client IP = %s", got)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	if perRun := (after.TotalAlloc - before.TotalAlloc) / runs; perRun > 1<<10 {
+		t.Errorf("%d bytes allocated per request, want none for the entries left of the client", perRun)
 	}
 }
 
@@ -256,6 +279,21 @@ func TestAccessLogQuietPaths(t *testing.T) {
 	lines := logLines(t, buf)
 	if len(lines) != 2 || lines[0]["method"] != "POST" || lines[1]["method"] != "DELETE" || lines[0]["status"] != float64(405) {
 		t.Errorf("log lines = %v, want POST and DELETE only, in 405", lines)
+	}
+}
+
+// The mux names the trailing-slash redirect of a CONNECT by the path received:
+// the route is then unmatched, never that path.
+func TestRoutesConnect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/files/{id}/", func(http.ResponseWriter, *http.Request) {})
+	h, buf := stack(mux, 1, "none")
+	for _, m := range []string{http.MethodGet, http.MethodConnect} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(m, "/files/client-chosen", nil))
+	}
+	lines := logLines(t, buf)
+	if len(lines) != 2 || lines[0]["route"] != "/files/{id}/" || lines[1]["route"] != "unmatched" {
+		t.Errorf("log lines = %v, want the pattern for GET, unmatched for CONNECT", lines)
 	}
 }
 

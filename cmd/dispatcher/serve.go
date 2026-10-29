@@ -38,10 +38,20 @@ func serve(ctx context.Context, args []string) error {
 		}
 		return fmt.Errorf("configuration: %w", err)
 	}
-	logger, accessLogger := newLoggers(os.Stdout, cfg.Observability)
+	logger, accessLogger, startupLogger := newLoggers(os.Stdout, cfg.Observability)
 	slog.SetDefault(logger)
 	for _, w := range warnings {
-		logger.Warn("config.warning", "detail", w)
+		startupLogger.Warn("config.warning", "detail", w)
+	}
+	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
+	// given by -config alone may listen where the probe does not look.
+	if *configPath != os.Getenv(configEnv) {
+		switch probe, err := probeURL(); {
+		case err != nil:
+			startupLogger.Warn("config.warning", "detail", fmt.Sprintf("healthcheck without -url fails on %s: %v; give the file by %s rather than by -config", configEnv, err, configEnv))
+		case probe != healthURL(cfg.Server.Listen):
+			startupLogger.Warn("config.warning", "detail", fmt.Sprintf("server.listen is %q, but healthcheck without -url probes %s; give the file by %s rather than by -config", cfg.Server.Listen, probe, configEnv))
+		}
 	}
 
 	handler, err := newHandler(cfg, logger, accessLogger)
@@ -105,15 +115,18 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger) (http.Han
 	), nil
 }
 
-// newLoggers returns the application and access loggers. The access log has
-// its own level, info: access_log_sample sets its volume, and its errors and
-// aborted requests are written whatever log_level.
-func newLoggers(w io.Writer, o config.Observability) (app, access *slog.Logger) {
+// newLoggers returns the application, access and startup loggers. The access
+// log has its own level, info: access_log_sample sets its volume, and its
+// errors and aborted requests are written whatever log_level. The startup
+// logger, at warn, writes the configuration warnings whatever log_level too:
+// some warn of an allowlist open to every client.
+func newLoggers(w io.Writer, o config.Observability) (app, access, startup *slog.Logger) {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
 	app = slog.New(newLogHandler(w, o.LogFormat, level)).With("log_type", "app")
 	access = slog.New(newLogHandler(w, o.LogFormat, slog.LevelInfo)).With("log_type", "access")
-	return app, access
+	startup = slog.New(newLogHandler(w, o.LogFormat, slog.LevelWarn)).With("log_type", "app")
+	return app, access, startup
 }
 
 // newLogHandler writes one JSON (or text) line per record, stamped with the
