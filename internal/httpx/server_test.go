@@ -256,6 +256,13 @@ func TestInFlight(t *testing.T) {
 		_, err := f.Wait(context.Background())
 		waited <- err
 	}()
+	// Blocked on the running request: what follows wakes it, not the path
+	// of a Wait that finds none.
+	select {
+	case err := <-waited:
+		t.Fatalf("Wait = %v with a request running", err)
+	case <-time.After(10 * time.Millisecond):
+	}
 	close(release["/b"])
 	<-served
 	if err := <-waited; err != nil {

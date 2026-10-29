@@ -27,6 +27,9 @@ type fakeStore struct {
 	applied []string
 	changes []store.Change
 	pingErr error
+
+	// snapshotErr fails Snapshot, the first one of serve included.
+	snapshotErr error
 }
 
 func (f *fakeStore) record(call string) {
@@ -42,6 +45,9 @@ func (f *fakeStore) Calls() []string {
 }
 
 func (f *fakeStore) Snapshot(context.Context) (*store.Snapshot, error) {
+	if f.snapshotErr != nil {
+		return nil, f.snapshotErr
+	}
 	return &store.Snapshot{Settings: store.DefaultSettings()}, nil
 }
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
@@ -50,6 +51,11 @@ func (l *Live) Refresh(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if err != nil {
+		// Canceled by the caller (serve stopping), not past its deadline:
+		// the database is not at fault.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return err
+		}
 		if !l.failed && l.current.Load() != nil {
 			l.logger.WarnContext(ctx, "config.refresh_failed", "err", err)
 		}

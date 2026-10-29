@@ -72,6 +72,10 @@ func (m *Memory) Put(ctx context.Context, key string, val []byte, ttl time.Durat
 	if ttl <= 0 {
 		return ErrNoTTL
 	}
+	// Whole milliseconds, as Redis keeps them.
+	if r := ttl % time.Millisecond; r != 0 {
+		ttl += time.Millisecond - r
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {

@@ -73,6 +73,36 @@ func TestLive(t *testing.T) {
 	}
 }
 
+// A refresh canceled by its caller, as serve stops, says nothing of the
+// database: neither logged nor counted as a failure. One past its deadline
+// is.
+func TestLiveRefreshCanceled(t *testing.T) {
+	var logs bytes.Buffer
+	src := &fakeSource{snapshot: &Snapshot{}}
+	live, err := NewLive(context.Background(), src, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	src.set(nil, context.Canceled)
+	if err := live.Refresh(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Refresh = %v, want context.Canceled", err)
+	}
+	if strings.Contains(logs.String(), "config.refresh_failed") {
+		t.Errorf("canceled refresh logged:\n%s", logs.String())
+	}
+	expired, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	src.set(nil, context.DeadlineExceeded)
+	if err := live.Refresh(expired); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Refresh = %v, want context.DeadlineExceeded", err)
+	}
+	if !strings.Contains(logs.String(), "config.refresh_failed") {
+		t.Errorf("refresh past its deadline not logged:\n%s", logs.String())
+	}
+}
+
 func TestLiveRun(t *testing.T) {
 	src := &fakeSource{snapshot: &Snapshot{}}
 	live, err := NewLive(context.Background(), src, slog.New(slog.DiscardHandler))

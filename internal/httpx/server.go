@@ -74,6 +74,10 @@ type InFlight struct {
 }
 
 // Track counts the requests of h, outermost so as to cover every middleware.
+// No handler escapes it once Serve has returned: net/http runs none after
+// Shutdown begins (it checks after reading each request), and a handler
+// leaves the count before its connection turns idle. A goroutine a handler
+// leaves running is not counted.
 func (f *InFlight) Track(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()

@@ -143,8 +143,8 @@ const (
 )
 
 // newStateStore opens the store of the flows in progress: in memory while
-// state.redis_dsn is empty.
-func newStateStore(c config.State) (state.StateStore, error) {
+// state.redis_dsn is empty. The tests wrap it, to see it closed.
+var newStateStore = func(c config.State) (state.StateStore, error) {
 	if c.RedisDSN != "" {
 		return nil, errors.New("state.redis_dsn: the Redis store is not available yet; leave it empty for the in-memory store")
 	}

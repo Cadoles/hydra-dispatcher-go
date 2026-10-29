@@ -8,16 +8,20 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 )
 
 // requiredEnv is the least configuration serve accepts.
@@ -294,6 +298,71 @@ func TestServeRedisNotAvailable(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "state.redis_dsn") {
 		t.Errorf("serve = %v, want the Redis store refused", err)
 	}
+}
+
+// serve closes the stores it opened, whichever way it ends.
+func TestServeClosesStores(t *testing.T) {
+	keepLoggers(t)
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = busy.Close() }()
+	for _, tt := range []struct {
+		name, listen string
+		db           *fakeStore // nil: the database cannot be reached
+		fails        bool
+	}{
+		{"stopped", "127.0.0.1:0", &fakeStore{}, false},
+		{"database unreachable", "127.0.0.1:0", nil, true},
+		{"no first snapshot", "127.0.0.1:0", &fakeStore{snapshotErr: errors.New("relation \"app\" does not exist")}, true},
+		{"address in use", busy.Addr().String(), &fakeStore{}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			commandEnv(t, "DISPATCHER_SERVER_LISTEN="+tt.listen)
+			oldStore := openStore
+			openStore = func(context.Context, string) (configStore, error) {
+				if tt.db == nil {
+					return nil, errors.New("dial tcp postgres:5432: connection refused")
+				}
+				return tt.db, nil
+			}
+			t.Cleanup(func() { openStore = oldStore })
+			states := &closedState{}
+			oldStates := newStateStore
+			newStateStore = func(c config.State) (state.StateStore, error) {
+				s, err := oldStates(c)
+				states.StateStore = s
+				return states, err
+			}
+			t.Cleanup(func() { newStateStore = oldStates })
+			// Canceled: serve stops as soon as it listens.
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var err error
+			stdoutOf(t, func() { err = serve(ctx, nil) })
+			if (err != nil) != tt.fails {
+				t.Fatalf("serve = %v, want an error: %v", err, tt.fails)
+			}
+			if !states.closed.Load() {
+				t.Error("state store left open")
+			}
+			if tt.db != nil && !slices.Contains(tt.db.Calls(), "close") {
+				t.Error("configuration store left open")
+			}
+		})
+	}
+}
+
+// closedState tells whether serve closed its state store.
+type closedState struct {
+	state.StateStore
+	closed atomic.Bool
+}
+
+func (s *closedState) Close() error {
+	s.closed.Store(true)
+	return s.StateStore.Close()
 }
 
 // Configuration warnings are written whatever log_level: some warn of an
