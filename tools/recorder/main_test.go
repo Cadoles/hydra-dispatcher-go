@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -120,6 +121,98 @@ func TestRecorderClientHangsUp(t *testing.T) {
 	}
 	if ex.Response.Status != http.StatusOK || compact(t, ex.Response.Body) != `{"challenge":"abc"}` {
 		t.Errorf("recorded response = %d %s, want 200 with the full body", ex.Response.Status, ex.Response.Body)
+	}
+}
+
+// An upstream that never answers is given up after the timeout: the client gets
+// a 504 and the exchange is still recorded.
+func TestRecorderUpstreamTimeout(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer upstream.Close()
+	defer close(release)
+
+	dir := t.TempDir()
+	rec, err := newRecorder(dir, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.timeout = 100 * time.Millisecond
+	u, _ := url.Parse(upstream.URL)
+	front := httptest.NewServer(rec.handler(leg{name: "front", upstream: u}))
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/consent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Errorf("status = %d, want 504", resp.StatusCode)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "0001-front-GET-consent.json"))
+	if err != nil {
+		t.Fatalf("exchange not recorded: %v", err)
+	}
+	var ex exchange
+	if err := json.Unmarshal(data, &ex); err != nil {
+		t.Fatal(err)
+	}
+	if ex.Response.Status != http.StatusGatewayTimeout || !strings.Contains(string(ex.Response.Body), "deadline exceeded") {
+		t.Errorf("recorded response = %d %s, want 504 with the cause", ex.Response.Status, ex.Response.Body)
+	}
+}
+
+// A body over maxBody is refused, never relayed or recorded truncated.
+func TestRecorderBodyLimit(t *testing.T) {
+	var called atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called.Store(true)
+		// Chunked: a truncated body would reach the client without an error.
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(bytes.Repeat([]byte("x"), maxBody+1))
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	rec, err := newRecorder(dir, nil, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(upstream.URL)
+	front := httptest.NewServer(rec.handler(leg{name: "front", upstream: u}))
+	defer front.Close()
+
+	resp, err := http.Post(front.URL+"/upload", "text/plain", bytes.NewReader(make([]byte, maxBody+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge || called.Load() {
+		t.Errorf("request over maxBody = %d, upstream called %v; want 413, not forwarded", resp.StatusCode, called.Load())
+	}
+
+	resp, err = http.Get(front.URL + "/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway || len(got) != 0 {
+		t.Errorf("response over maxBody = %d with %d bytes, want 502 and no body", resp.StatusCode, len(got))
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "0001-front-GET-page.json"))
+	if err != nil {
+		t.Fatalf("exchange not recorded: %v", err)
+	}
+	var ex exchange
+	if err := json.Unmarshal(data, &ex); err != nil {
+		t.Fatal(err)
+	}
+	if ex.Response.Status != http.StatusBadGateway || !strings.Contains(string(ex.Response.Body), "over") {
+		t.Errorf("recorded response = %d %.80s, want 502 with the cause", ex.Response.Status, ex.Response.Body)
 	}
 }
 

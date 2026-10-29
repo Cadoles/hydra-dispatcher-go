@@ -31,6 +31,8 @@ import (
 	"time"
 )
 
+// maxBody bounds a recorded body. A larger one is refused rather than relayed
+// truncated.
 const maxBody = 10 << 20
 
 type leg struct {
@@ -74,6 +76,10 @@ type recorder struct {
 	skip   *regexp.Regexp
 	seq    atomic.Int64
 	logger *slog.Logger
+	// timeout bounds an upstream call, which outlives its client: without it,
+	// an upstream that never answers (Symfony on an Xdebug breakpoint) would
+	// hold the call open for good and its exchange would never be written.
+	timeout time.Duration
 }
 
 // newRecorder continues the numbering of files already in dir, so a restart
@@ -83,7 +89,7 @@ func newRecorder(dir string, skip *regexp.Regexp, logger *slog.Logger) (*recorde
 	if err != nil {
 		return nil, err
 	}
-	rec := &recorder{dir: dir, skip: skip, logger: logger}
+	rec := &recorder{dir: dir, skip: skip, logger: logger, timeout: time.Minute}
 	for _, e := range entries {
 		prefix, _, _ := strings.Cut(e.Name(), "-")
 		if n, err := strconv.ParseInt(prefix, 10, 64); err == nil && n > rec.seq.Load() {
@@ -103,10 +109,13 @@ func (rec *recorder) handler(l leg) http.Handler {
 	// The upstream response is read in full before it is relayed, so it is
 	// recorded whole even when the client hangs up early.
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 		_ = resp.Body.Close()
 		if err != nil {
 			return err
+		}
+		if len(body) > maxBody {
+			return fmt.Errorf("response body over %d bytes", maxBody)
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		if ex, ok := resp.Request.Context().Value(exchangeKey{}).(*exchange); ok {
@@ -115,19 +124,27 @@ func (rec *recorder) handler(l leg) http.Handler {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		if ex, ok := r.Context().Value(exchangeKey{}).(*exchange); ok {
-			ex.Response = message{Status: http.StatusBadGateway, Body: bodyJSON([]byte("recorder: " + err.Error()))}
+		status := http.StatusBadGateway
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
 		}
-		w.WriteHeader(http.StatusBadGateway)
+		if ex, ok := r.Context().Value(exchangeKey{}).(*exchange); ok {
+			ex.Response = message{Status: status, Body: bodyJSON([]byte("recorder: " + err.Error()))}
+		}
+		w.WriteHeader(status)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if rec.skip != nil && rec.skip.MatchString(r.URL.Path) {
 			proxy.ServeHTTP(w, r)
 			return
 		}
-		reqBody, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+		reqBody, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 		if err != nil {
 			http.Error(w, "recorder: read body: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		if len(reqBody) > maxBody {
+			http.Error(w, fmt.Sprintf("recorder: request body over %d bytes", maxBody), http.StatusRequestEntityTooLarge)
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(reqBody))
@@ -143,12 +160,16 @@ func (rec *recorder) handler(l leg) http.Handler {
 				Body:    bodyJSON(reqBody),
 			},
 		}
-		// Keep recorded response bodies readable.
+		// Keep recorded response bodies readable: without the client's
+		// Accept-Encoding, the transport asks for gzip itself and decompresses,
+		// dropping Content-Encoding and Content-Length from the response.
 		r.Header.Del("Accept-Encoding")
 
 		// Some clients (hydra-passwordless) hang up as soon as they have
 		// decoded the JSON: the upstream call must outlive them, and the
-		// proxy's ErrAbortHandler panic must not skip the recording.
+		// proxy's ErrAbortHandler panic must not skip the recording. The
+		// context has a deadline, so the proxy does not fall back to
+		// CloseNotify to cancel the call when the client goes.
 		defer func() {
 			ex.DurationMS = time.Since(ex.Time).Milliseconds()
 			if err := rec.save(*ex); err != nil {
@@ -158,16 +179,11 @@ func (rec *recorder) handler(l leg) http.Handler {
 				panic(p)
 			}
 		}()
-		ctx := context.WithValue(context.WithoutCancel(r.Context()), exchangeKey{}, ex)
-		proxy.ServeHTTP(noCloseNotify{w}, r.WithContext(ctx))
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), rec.timeout)
+		defer cancel()
+		proxy.ServeHTTP(w, r.WithContext(context.WithValue(ctx, exchangeKey{}, ex)))
 	})
 }
-
-// noCloseNotify hides http.CloseNotifier, which the proxy falls back to for
-// cancelling the upstream call when the request context cannot be cancelled.
-type noCloseNotify struct{ http.ResponseWriter }
-
-func (w noCloseNotify) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func (rec *recorder) save(ex exchange) error {
 	var data bytes.Buffer
@@ -225,6 +241,7 @@ func main() {
 func run() error {
 	out := flag.String("out", "", "directory receiving one JSON file per exchange")
 	skip := flag.String("skip", `\.(css|js|svg|png|jpg|ico|woff2?|map)$|^/_(wdt|profiler)/`, "paths proxied but not recorded (regexp)")
+	timeout := flag.Duration("timeout", time.Minute, "upstream call limit, recorded as a 504 (raise it to step through the upstream in a debugger)")
 	var legs []leg
 	flag.Func("leg", "name=listen=upstream, repeatable", func(s string) error {
 		l, err := parseLeg(s)
@@ -240,12 +257,16 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("-skip: %w", err)
 	}
+	if *timeout <= 0 {
+		return errors.New("-timeout must be positive")
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	rec, err := newRecorder(*out, skipRe, logger)
 	if err != nil {
 		return err
 	}
+	rec.timeout = *timeout
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
