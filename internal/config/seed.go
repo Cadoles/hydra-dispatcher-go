@@ -19,8 +19,9 @@ import (
 // database. It takes the Symfony dispatcher.yaml as is, apart from its
 // %env(VAR)% placeholders (write ${VAR}), and accepts a few more forms and
 // keys: app_id/position in steps, subject_check, plain-string title,
-// comma-separated lists, durations such as "1h", remember and remember_for,
-// and the fields the Go model adds to apps and flows.
+// comma-separated lists, durations such as "1h", remember,
+// login_remember_for and consent_remember_for, and the fields the Go model
+// adds to apps and flows.
 type Seed struct {
 	Apps          []SeedApp    `yaml:"apps"`
 	Flows         []SeedFlow   `yaml:"flows"`
@@ -31,10 +32,13 @@ type Seed struct {
 	// --force resets them, where it leaves an absent setting alone.
 	NullSettings []string `yaml:"-"`
 
+	// SessionTTL is the Symfony name of login_remember_for, the duration
+	// Symfony sent at the login accept: Load moves it there.
+	SessionTTL *Duration `yaml:"session_ttl"`
+
 	// Symfony keys with no Go counterpart: accepted, then ignored with a
 	// warning.
 	HydraPublicURL       ignored `yaml:"hydra_public_url"`
-	SessionTTL           ignored `yaml:"session_ttl"`
 	CacheProviders       ignored `yaml:"cache_providers"`
 	AdminAuthorizedHosts ignored `yaml:"admin_authorized_hosts"`
 	OAuth2Issuer         ignored `yaml:"oauth2_issuer"`
@@ -57,7 +61,8 @@ type SeedSettings struct {
 	AggregateAMRFromLoginRequest *bool     `yaml:"aggregate_amr_from_login_request"`
 	ChallengeTTL                 *Duration `yaml:"challenge_ttl"`
 	Remember                     *bool     `yaml:"remember"`
-	RememberFor                  *Duration `yaml:"remember_for"`
+	LoginRememberFor             *Duration `yaml:"login_remember_for"`
+	ConsentRememberFor           *Duration `yaml:"consent_remember_for"`
 	LoginAcceptWebhookURL        *string   `yaml:"login_accept_webhook_url"`
 	ConsentAcceptWebhookURL      *string   `yaml:"consent_accept_webhook_url"`
 	SupportedLocales             *List     `yaml:"supported_locales"`
@@ -187,8 +192,13 @@ type SeedClient struct {
 }
 
 // resolve applies the Symfony defaults of the entries: bootstrap writes an
-// app, a flow or a client whole, so they need no pointer semantics.
+// app, a flow or a client whole, so they need no pointer semantics. It moves
+// session_ttl to login_remember_for, unless both are set, which validate
+// refuses.
 func (s *Seed) resolve() {
+	if s.SessionTTL != nil && s.LoginRememberFor == nil {
+		s.LoginRememberFor, s.SessionTTL = s.SessionTTL, nil
+	}
 	for i := range s.Apps {
 		a := &s.Apps[i]
 		a.AuthMode = cmp.Or(a.AuthMode, "network")
@@ -304,9 +314,17 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	if s.ChallengeTTL != nil && *s.ChallengeTTL <= 0 {
 		fail("dispatcher.challenge_ttl", "must be positive")
 	}
+	if s.SessionTTL != nil {
+		fail("dispatcher.session_ttl", "is the Symfony name of login_remember_for, which is set too: keep login_remember_for")
+	}
 	// The cookie would expire at once, while Hydra reads 0 as no expiry.
-	if s.RememberFor != nil && *s.RememberFor <= 0 {
-		fail("dispatcher.remember_for", "must be positive")
+	for _, d := range []struct {
+		key   string
+		value *Duration
+	}{{"login_remember_for", s.LoginRememberFor}, {"consent_remember_for", s.ConsentRememberFor}} {
+		if d.value != nil && *d.value <= 0 {
+			fail("dispatcher."+d.key, "must be positive")
+		}
 	}
 	if s.SupportedLocales != nil && len(*s.SupportedLocales) == 0 {
 		fail("dispatcher.supported_locales", "is empty")
@@ -339,7 +357,6 @@ func (s *Seed) warnings() []string {
 		reason string
 	}{
 		{s.HydraPublicURL, "hydra_public_url", "never read by the Symfony app either"},
-		{s.SessionTTL, "session_ttl", "a flow lasts challenge_ttl, the skip memory remember_for"},
 		{s.CacheProviders, "cache_providers", "the flow state store is state.redis_dsn"},
 		{s.AdminAuthorizedHosts, "admin_authorized_hosts", "use security.admin_authorized_hosts"},
 		{s.OAuth2Issuer, "oauth2_issuer", "not supported yet"},

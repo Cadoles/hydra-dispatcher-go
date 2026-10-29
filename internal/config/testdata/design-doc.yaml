@@ -53,9 +53,7 @@ ui:
   theme_dir: ""                 # vide = thème embarqué
   reload: false                 # true en développement de thème
   remember_last_flow: true      # présélection du dernier flow
-  csp_extra: {}                 # ex. font-src: ["https://fonts.gstatic.com"]
-  default_locale: fr
-  supported_locales: [fr, en]
+  csp_extra: {}                 # ex. font-src: ["https://fonts.gstatic.com"] ; locales : settings de la graine
 observability:
   log_level: info
   log_format: json              # json | text (développement)
@@ -80,7 +78,10 @@ observability:
     endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
     protocol: grpc               # grpc | http/protobuf
     sampler_ratio: 0.01
-dispatcher:                      # graine au format Symfony ; session_ttl et cache_providers ignorés avec avertissement
+serve:
+  migrate: false                 # migrations au démarrage de serve
+  bootstrap: "off"               # off | missing | force : force en développement, job explicite en production
+dispatcher:                      # graine au format Symfony ; session_ttl lu comme login_remember_for, cache_providers ignoré avec avertissement
   apps: []
   flows: []
   oauth2_clients: []
@@ -88,6 +89,9 @@ dispatcher:                      # graine au format Symfony ; session_ttl et cac
   consent_auto_accept: false
   challenge_ttl: 3600
   remember: true
-  remember_for: 2629800
+  login_remember_for: 86400      # session de login Hydra et cookie de mémoire du skip
+  consent_remember_for: 2629800
+  default_locale: fr
+  supported_locales: [fr, en]
 logout:
   propagate_without_record: all  # all | none : apps à déconnecter sans cookie de mémoire

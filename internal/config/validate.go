@@ -159,11 +159,6 @@ func (c *Config) validate() (warnings []string, err error) {
 	positive("admin.session.idle_timeout", int64(c.Admin.Session.IdleTimeout))
 	positive("admin.session.max_age", int64(c.Admin.Session.MaxAge))
 
-	if len(c.UI.SupportedLocales) == 0 {
-		fail("ui.supported_locales", "is empty")
-	} else if !slices.Contains(c.UI.SupportedLocales, c.UI.DefaultLocale) {
-		fail("ui.default_locale", "%q is not in ui.supported_locales", c.UI.DefaultLocale)
-	}
 	for _, d := range slices.Sorted(maps.Keys(c.UI.CSPExtra)) {
 		path := "ui.csp_extra." + d
 		if !slices.Contains(cspDirectives, d) {
@@ -196,6 +191,7 @@ func (c *Config) validate() (warnings []string, err error) {
 	positive("webhooks.process_timeout", int64(c.Webhooks.ProcessTimeout))
 	positive("webhooks.max_processes", int64(c.Webhooks.MaxProcesses))
 	oneOf("logout.propagate_without_record", c.Logout.PropagateWithoutRecord, "all", "none")
+	oneOf("serve.bootstrap", c.Serve.Bootstrap, BootstrapOff, BootstrapMissing, BootstrapForce)
 
 	c.Seed.validate(fail)
 

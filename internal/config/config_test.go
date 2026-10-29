@@ -100,7 +100,10 @@ func TestDesignDocExample(t *testing.T) {
 		{"state.redis_dsn", c.State.RedisDSN, ""},
 		{"admin.api.private_key", c.Admin.API.PrivateKey, ""},
 		{"dispatcher.challenge_ttl", c.Seed.ChallengeTTL.Std(), time.Hour},
-		{"dispatcher.remember_for", c.Seed.RememberFor.Std(), 2629800 * time.Second},
+		{"dispatcher.login_remember_for", c.Seed.LoginRememberFor.Std(), 86400 * time.Second},
+		{"dispatcher.consent_remember_for", c.Seed.ConsentRememberFor.Std(), 2629800 * time.Second},
+		{"dispatcher.supported_locales", *c.Seed.SupportedLocales, List{"fr", "en"}},
+		{"serve.bootstrap", c.Serve.Bootstrap, "off"},
 		{"dispatcher.remember", *c.Seed.Remember, true},
 	} {
 		if !reflect.DeepEqual(check.got, check.want) {
@@ -151,7 +154,8 @@ dispatcher:
   aggregate_amr_from_login_request: true
   challenge_ttl: 1800
   remember: false
-  remember_for: 7d
+  login_remember_for: 12h
+  consent_remember_for: 7d
   login_accept_webhook_url: http://hooks/login
   consent_accept_webhook_url: http://hooks/consent
   supported_locales: [en, de]
@@ -180,7 +184,8 @@ dispatcher:
 		{"aggregate_amr_from_login_request", *s.AggregateAMRFromLoginRequest, true},
 		{"challenge_ttl", s.ChallengeTTL.Std(), 30 * time.Minute},
 		{"remember", *s.Remember, false},
-		{"remember_for", s.RememberFor.Std(), 7 * 24 * time.Hour},
+		{"login_remember_for", s.LoginRememberFor.Std(), 12 * time.Hour},
+		{"consent_remember_for", s.ConsentRememberFor.Std(), 7 * 24 * time.Hour},
 		{"login_accept_webhook_url", *s.LoginAcceptWebhookURL, "http://hooks/login"},
 		{"consent_accept_webhook_url", *s.ConsentAcceptWebhookURL, "http://hooks/consent"},
 		{"supported_locales", *s.SupportedLocales, List{"en", "de"}},
@@ -226,10 +231,15 @@ func checkHydraDevSeed(t *testing.T, path string) {
 		t.Errorf("oauth2_clients = %+v", s.OAuth2Clients)
 	}
 	// Set in the file, so bootstrap --force rewrites them; remember is absent.
-	if s.AppAutoSelect == nil || *s.AppAutoSelect || s.ConsentAutoAccept == nil || s.Remember != nil || len(s.NullSettings) != 0 {
+	// session_ttl is Symfony's login_remember_for.
+	if s.AppAutoSelect == nil || *s.AppAutoSelect || s.ConsentAutoAccept == nil || s.Remember != nil || len(s.NullSettings) != 0 ||
+		s.LoginRememberFor == nil || s.LoginRememberFor.Std() != 24*time.Hour || s.SessionTTL != nil {
 		t.Errorf("settings = %+v, null = %v", s.SeedSettings, s.NullSettings)
 	}
-	for _, key := range []string{"hydra_public_url", "cache_providers", "session_ttl"} {
+	if hasWarning(warnings, "dispatcher.session_ttl") {
+		t.Errorf("session_ttl warned of in %q", warnings)
+	}
+	for _, key := range []string{"hydra_public_url", "cache_providers"} {
 		if !hasWarning(warnings, "dispatcher."+key) {
 			t.Errorf("no warning for ignored dispatcher.%s in %q", key, warnings)
 		}
@@ -301,12 +311,11 @@ dispatcher:
   cache_providers:
     - { type: redis, dsn: "%env(REDIS_DSN)%" }
   oauth2_issuer: "%env(BASE_PATH)%"
-  session_ttl: "${TTL-86400}"
 `, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"cache_providers", "oauth2_issuer", "session_ttl"} {
+	for _, key := range []string{"cache_providers", "oauth2_issuer"} {
 		if !hasWarning(ignoredWarnings, "dispatcher."+key+" is ignored") {
 			t.Errorf("no warning for ignored dispatcher.%s in %q", key, ignoredWarnings)
 		}
@@ -319,7 +328,7 @@ dispatcher:
 	if s.Flows[0].IconURL != nil || s.Apps[1].LoginURL != "http://sql.hydra.test/" {
 		t.Errorf("flow = %+v, app = %+v", s.Flows[0], s.Apps[1])
 	}
-	for _, key := range []string{"hydra_public_url", "session_ttl", "admin_authorized_hosts"} {
+	for _, key := range []string{"hydra_public_url", "admin_authorized_hosts"} {
 		if !hasWarning(warnings, "dispatcher."+key) {
 			t.Errorf("no warning for ignored dispatcher.%s in %q", key, warnings)
 		}
@@ -532,8 +541,6 @@ func TestEnvKeys(t *testing.T) {
 		"DISPATCHER_UI_THEME_DIR",
 		"DISPATCHER_UI_RELOAD",
 		"DISPATCHER_UI_REMEMBER_LAST_FLOW",
-		"DISPATCHER_UI_DEFAULT_LOCALE",
-		"DISPATCHER_UI_SUPPORTED_LOCALES",
 		"DISPATCHER_OBSERVABILITY_LOG_LEVEL",
 		"DISPATCHER_OBSERVABILITY_LOG_FORMAT",
 		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE",
@@ -909,7 +916,7 @@ func TestValidation(t *testing.T) {
 		{"Redis DSN scheme", map[string]string{"DISPATCHER_STATE_REDIS_DSN": "http://redis:6379"}, "state.redis_dsn"},
 		{"short Hydra secret", map[string]string{"DISPATCHER_HYDRA_SYSTEM_SECRETS": "short"}, "hydra.system_secrets"},
 		{"Hydra version", map[string]string{"DISPATCHER_HYDRA_VERSION": "2.4"}, "hydra.version"},
-		{"default locale", map[string]string{"DISPATCHER_UI_DEFAULT_LOCALE": "de"}, "ui.default_locale"},
+		{"serve bootstrap", map[string]string{"DISPATCHER_SERVE_BOOTSTRAP": "true"}, `serve.bootstrap: "true" is not one of off, missing, force`},
 		{"log level", map[string]string{"DISPATCHER_OBSERVABILITY_LOG_LEVEL": "verbose"}, "observability.log_level"},
 		{"sample rate", map[string]string{"DISPATCHER_OBSERVABILITY_SENTRY_SAMPLE_RATE": "1.5"}, "observability.sentry.sample_rate"},
 		{"audit output", map[string]string{"DISPATCHER_OBSERVABILITY_AUDIT_OUTPUT": "stderr"}, "observability.audit.output"},
@@ -1167,7 +1174,10 @@ dispatcher:
 		"missing client secret":    {"dispatcher:\n  oauth2_clients:\n    - { id: c }\n", "dispatcher.oauth2_clients[0].secret: is required"},
 		"duplicate client":         {"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s }\n    - { id: c, secret: t }\n", "dispatcher.oauth2_clients[1].id"},
 		"challenge TTL":            {"dispatcher:\n  challenge_ttl: 0\n", "dispatcher.challenge_ttl: must be positive"},
-		"remember for":             {"dispatcher:\n  remember_for: 0\n", "dispatcher.remember_for: must be positive"},
+		"login remember for":       {"dispatcher:\n  login_remember_for: 0\n", "dispatcher.login_remember_for: must be positive"},
+		"session TTL":              {"dispatcher:\n  session_ttl: 0\n", "dispatcher.login_remember_for: must be positive"},
+		"consent remember for":     {"dispatcher:\n  consent_remember_for: 0\n", "dispatcher.consent_remember_for: must be positive"},
+		"session TTL twice":        {"dispatcher:\n  session_ttl: 1h\n  login_remember_for: 1h\n", "dispatcher.session_ttl: is the Symfony name of login_remember_for"},
 		"acr with a space":         {apps + "  flows:\n    - { id: f, title: T, description: D, acr: \"loa 2\", steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].acr: \"loa 2\" contains a space"},
 		"auth mode":                {app + "      auth_mode: token\n", "dispatcher.apps[0].auth_mode: \"token\" is not network or mtls"},
 		"source":                   {app + "      allowed_sources: [10.1.0.0/16, pod-a]\n", "dispatcher.apps[0].allowed_sources: \"pod-a\" is neither"},
@@ -1219,13 +1229,14 @@ dispatcher:
   fallback_locale: &none ~
   default_locale: *none
   consent_auto_accept: ~
+  session_ttl: ~
   apps: ~
 `, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := c.Seed
-	if !slices.Equal(s.NullSettings, []string{"consent_auto_accept", "remember", "login_accept_webhook_url", "supported_locales", "default_locale", "fallback_locale"}) ||
+	if !slices.Equal(s.NullSettings, []string{"consent_auto_accept", "remember", "login_remember_for", "login_accept_webhook_url", "supported_locales", "default_locale", "fallback_locale"}) ||
 		s.ConsentAcceptWebhookURL == nil || *s.ConsentAcceptWebhookURL != "" {
 		t.Errorf("null = %v, consent webhook = %v", s.NullSettings, s.ConsentAcceptWebhookURL)
 	}

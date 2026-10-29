@@ -57,8 +57,6 @@ ui:
   reload: true
   remember_last_flow: false
   csp_extra: { font-src: ["https://fonts.gstatic.com"] }
-  default_locale: en
-  supported_locales: [en]
 observability:
   log_level: debug
   log_format: text
@@ -86,4 +84,4 @@ logout:
   propagate_without_record: none
 serve:
   migrate: true
-  bootstrap: true
+  bootstrap: force

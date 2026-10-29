@@ -277,14 +277,19 @@ func isInteger(t reflect.Type) bool {
 	return slices.Contains(integerKinds, t.Kind()) && !reflect.PointerTo(t).Implements(unmarshalerType)
 }
 
-// nullSettings lists the seed settings the file sets to null (~).
+// nullSettings lists the seed settings the file sets to null (~), session_ttl
+// as login_remember_for.
 func nullSettings(doc *yaml.Node) []string {
 	seed := mappingValue(doc, "dispatcher")
+	isNull := func(k string) bool {
+		v := mappingValue(seed, k)
+		return v != nil && v.ShortTag() == nullTag
+	}
 	t := reflect.TypeFor[SeedSettings]()
 	var keys []string
 	for i := range t.NumField() {
 		k, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
-		if v := mappingValue(seed, k); v != nil && v.ShortTag() == nullTag {
+		if isNull(k) || (k == "login_remember_for" && isNull("session_ttl")) {
 			keys = append(keys, k)
 		}
 	}

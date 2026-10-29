@@ -141,8 +141,6 @@ type UI struct {
 	Reload           bool            `yaml:"reload"`
 	RememberLastFlow bool            `yaml:"remember_last_flow"`
 	CSPExtra         map[string]List `yaml:"csp_extra"`
-	DefaultLocale    string          `yaml:"default_locale"`
-	SupportedLocales List            `yaml:"supported_locales"`
 }
 
 type Observability struct {
@@ -188,9 +186,17 @@ type Logout struct {
 // Serve lets `dispatcher serve` migrate and bootstrap at startup, for
 // development; production prefers the explicit subcommands.
 type Serve struct {
-	Migrate   bool `yaml:"migrate"`
-	Bootstrap bool `yaml:"bootstrap"`
+	Migrate bool `yaml:"migrate"`
+	// Bootstrap is off, missing (bootstrap) or force (bootstrap --force).
+	Bootstrap string `yaml:"bootstrap"`
 }
+
+// Values of serve.bootstrap.
+const (
+	BootstrapOff     = "off"
+	BootstrapMissing = "missing"
+	BootstrapForce   = "force"
+)
 
 var privateNetworks = List{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 
@@ -223,8 +229,6 @@ func defaults() *Config {
 	c.Admin.HydraClients.Enabled = true
 	c.Admin.ClientSecretMaxAge = Duration(365 * 24 * time.Hour)
 	c.UI.RememberLastFlow = true
-	c.UI.DefaultLocale = "fr"
-	c.UI.SupportedLocales = List{"fr", "en"}
 	c.Observability.LogLevel = "info"
 	c.Observability.LogFormat = "json"
 	c.Observability.AccessLogSample = 1
@@ -240,6 +244,7 @@ func defaults() *Config {
 	c.Webhooks.ProcessTimeout = Duration(5 * time.Second)
 	c.Webhooks.MaxProcesses = 32
 	c.Logout.PropagateWithoutRecord = "all"
+	c.Serve.Bootstrap = BootstrapOff
 	return c
 }
 
