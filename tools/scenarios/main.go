@@ -25,6 +25,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -137,11 +138,25 @@ func run() error {
 	d.app = &http.Client{Timeout: 10 * time.Second, CheckRedirect: noRedirect}
 
 	names := flag.Args()
-	n := *first
+	type planned struct {
+		name string
+		run  func(*driver) error
+		dir  string
+	}
+	var plan []planned
 	for _, s := range scenarios {
 		if len(names) > 0 && !slices.Contains(names, s.name) {
 			continue
 		}
+		dir := filepath.Join(*into, fmt.Sprintf("%02d-%s", *first+len(plan), s.name))
+		// The recorder numbers from the files left in -capture, which this
+		// tool empties: a rerun's files would sit beside the earlier ones.
+		if err := ensureEmpty(dir); err != nil {
+			return err
+		}
+		plan = append(plan, planned{s.name, s.run, dir})
+	}
+	for _, s := range plan {
 		before, err := captured(*capture)
 		if err != nil {
 			return err
@@ -153,13 +168,26 @@ func run() error {
 		if err := s.run(d); err != nil {
 			return fmt.Errorf("%s: %w", s.name, err)
 		}
-		dir := filepath.Join(*into, fmt.Sprintf("%02d-%s", n, s.name))
-		moved, err := collect(*capture, before, dir)
+		moved, err := collect(*capture, before, s.dir)
 		if err != nil {
 			return err
 		}
-		slog.Info("captured", "dir", dir, "exchanges", moved)
-		n++
+		slog.Info("captured", "dir", s.dir, "exchanges", moved)
+	}
+	return nil
+}
+
+// ensureEmpty fails when dir already holds files.
+func ensureEmpty(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("%s is not empty: remove it to record the scenario again", dir)
 	}
 	return nil
 }
