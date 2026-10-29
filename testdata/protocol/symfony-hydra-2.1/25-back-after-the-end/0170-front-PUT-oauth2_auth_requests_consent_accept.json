@@ -1,0 +1,84 @@
+{
+  "seq": 170,
+  "leg": "front",
+  "time": "2026-10-29T10:12:50.789986083Z",
+  "duration_ms": 38,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/consent/accept?consent_challenge=01a18725e736762cac15ff2d1cec842f",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "153"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": {
+      "grant_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "remember": true,
+      "session": {
+        "id_token": {
+          "email": "test2@test.com",
+          "firstname": "Isabelle",
+          "lastname": "Durand"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Length": [
+        "111"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-e7ef-7cfa-8db3-81ae96b2a8d4"
+      ]
+    },
+    "body": {
+      "redirect_to": "http:\/\/dispatcher.hydra.test\/oauth2\/auth?login_challenge=cfef05c829084e149d2ac5a474445e82"
+    }
+  }
+}

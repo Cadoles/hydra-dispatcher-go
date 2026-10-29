@@ -1,0 +1,70 @@
+{
+  "seq": 166,
+  "leg": "front",
+  "time": "2026-10-29T10:12:50.695487619Z",
+  "duration_ms": 44,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth?login_challenge=cfef05c829084e149d2ac5a474445e82",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=b96507920afc750f3d872a66fecbe1cb7ff077c1ddbde71a47483cd825804e87; dispatcher=290cb9cd24f9d336fa04ff3eba637ba0"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Expires": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Location": [
+        "http://sql.hydra.test/consent?consent_challenge=01a18725e736762cac15ff2d1cec842f"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-e791-7808-aa74-a7c7775c5517"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='http://sql.hydra.test/consent?consent_challenge=01a18725e736762cac15ff2d1cec842f'\" />\n\n        <title>Redirecting to http://sql.hydra.test/consent?consent_challenge=01a18725e736762cac15ff2d1cec842f</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"http://sql.hydra.test/consent?consent_challenge=01a18725e736762cac15ff2d1cec842f\">http://sql.hydra.test/consent?consent_challenge=01a18725e736762cac15ff2d1cec842f</a>.\n    </body>\n</html>"
+  }
+}

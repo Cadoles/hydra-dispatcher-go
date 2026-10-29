@@ -1,0 +1,70 @@
+{
+  "seq": 172,
+  "leg": "front",
+  "time": "2026-10-29T10:12:50.829202978Z",
+  "duration_ms": 126,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth?login_challenge=cfef05c829084e149d2ac5a474445e82",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=b96507920afc750f3d872a66fecbe1cb7ff077c1ddbde71a47483cd825804e87; dispatcher=290cb9cd24f9d336fa04ff3eba637ba0"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Expires": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Location": [
+        "http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7&login_verifier=d78fa53e9ffa4dabb40057e38e101e72&nonce=capture-scenario-nonce-0001&redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&response_type=code&scope=openid+profile+email&state=capture-scenario-state-0001"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-e816-77aa-962b-72013b79ed4c"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7&amp;login_verifier=d78fa53e9ffa4dabb40057e38e101e72&amp;nonce=capture-scenario-nonce-0001&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=capture-scenario-state-0001'\" />\n\n        <title>Redirecting to http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7&amp;login_verifier=d78fa53e9ffa4dabb40057e38e101e72&amp;nonce=capture-scenario-nonce-0001&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=capture-scenario-state-0001</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7&amp;login_verifier=d78fa53e9ffa4dabb40057e38e101e72&amp;nonce=capture-scenario-nonce-0001&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=capture-scenario-state-0001\">http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7&amp;login_verifier=d78fa53e9ffa4dabb40057e38e101e72&amp;nonce=capture-scenario-nonce-0001&amp;redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid+profile+email&amp;state=capture-scenario-state-0001</a>.\n    </body>\n</html>"
+  }
+}

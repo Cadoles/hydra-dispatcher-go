@@ -1,0 +1,70 @@
+{
+  "seq": 50,
+  "leg": "front",
+  "time": "2026-10-29T10:12:39.814034761Z",
+  "duration_ms": 47,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth?login_challenge=97307e2347d445df8690ba4dfdba23bf",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=6bc4196df3c4eefbf4ce5190a6ec1a24e356a6a045f7571c0fc7ce323c0d215f; dispatcher=e1ce1a012ffef414913dd6fc03046f57"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:39 GMT"
+      ],
+      "Expires": [
+        "Thu, 29 Oct 2026 10:12:39 GMT"
+      ],
+      "Location": [
+        "http://2fa.hydra.test/login?login_challenge=01a18725bd2d798eaccc7a69b065cade"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-bd0e-7a4c-b06c-52b74bdc6f4e"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='http://2fa.hydra.test/login?login_challenge=01a18725bd2d798eaccc7a69b065cade'\" />\n\n        <title>Redirecting to http://2fa.hydra.test/login?login_challenge=01a18725bd2d798eaccc7a69b065cade</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"http://2fa.hydra.test/login?login_challenge=01a18725bd2d798eaccc7a69b065cade\">http://2fa.hydra.test/login?login_challenge=01a18725bd2d798eaccc7a69b065cade</a>.\n    </body>\n</html>"
+  }
+}

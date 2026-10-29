@@ -1,0 +1,73 @@
+{
+  "seq": 92,
+  "leg": "front",
+  "time": "2026-10-29T10:12:42.796136964Z",
+  "duration_ms": 35,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/login/reject?login_challenge=01a18725c883782b8e52f3517f45fd9e",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "85"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": {
+      "error": "access_denied",
+      "error_description": "The resource owner denied the request"
+    }
+  },
+  "response": {
+    "status": 410,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Length": [
+        "358"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:42 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-c8b6-7271-b625-3d2b79448198"
+      ]
+    },
+    "body": {
+      "redirect_to": "http:\/\/public.hydra.test\/oauth2\/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7\u0026login_verifier=4375eab82ff74d6ba9cc126575e62b9b\u0026nonce=capture-scenario-nonce-0001\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=capture-scenario-state-0001"
+    }
+  }
+}

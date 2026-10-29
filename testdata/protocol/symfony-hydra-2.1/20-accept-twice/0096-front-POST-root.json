@@ -1,0 +1,80 @@
+{
+  "seq": 96,
+  "leg": "front",
+  "time": "2026-10-29T10:12:43.921475544Z",
+  "duration_ms": 58,
+  "request": {
+    "method": "POST",
+    "host": "dispatcher.hydra.test",
+    "uri": "/?login_challenge=1ceef3b0e8ff401793251eb8faea1edc",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Content-Length": [
+        "124"
+      ],
+      "Content-Type": [
+        "application/x-www-form-urlencoded"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=9bbf3eea64e6d49cc64de60a1ef355ae6fc3c6458d7f8a3aa14c6547668a08c0; dispatcher=056283489a1a06bf34e89bc94cf6b6c2"
+      ],
+      "Origin": [
+        "http://dispatcher.hydra.test"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": "login%5B_token%5D=csrf-token&login%5Bflow%5D=1&login%5BloginChallenge%5D=1ceef3b0e8ff401793251eb8faea1edc&login%5Bsubmit%5D="
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Length": [
+        "490"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:43 GMT"
+      ],
+      "Expires": [
+        "Thu, 29 Oct 2026 10:12:43 GMT"
+      ],
+      "Location": [
+        "/oauth2/auth?login_challenge=1ceef3b0e8ff401793251eb8faea1edc"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-cd1b-76ae-8e25-00c6593fd4fb"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='/oauth2/auth?login_challenge=1ceef3b0e8ff401793251eb8faea1edc'\" />\n\n        <title>Redirecting to /oauth2/auth?login_challenge=1ceef3b0e8ff401793251eb8faea1edc</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"/oauth2/auth?login_challenge=1ceef3b0e8ff401793251eb8faea1edc\">/oauth2/auth?login_challenge=1ceef3b0e8ff401793251eb8faea1edc</a>.\n    </body>\n</html>"
+  }
+}

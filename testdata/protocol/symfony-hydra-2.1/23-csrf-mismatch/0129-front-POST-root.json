@@ -1,0 +1,83 @@
+{
+  "seq": 129,
+  "leg": "front",
+  "time": "2026-10-29T10:12:47.832277654Z",
+  "duration_ms": 67,
+  "request": {
+    "method": "POST",
+    "host": "dispatcher.hydra.test",
+    "uri": "/?login_challenge=eb2cea3b7df64be39c3bdd77c0c70ebf",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Content-Length": [
+        "124"
+      ],
+      "Content-Type": [
+        "application/x-www-form-urlencoded"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=0000000000000000000000000000000000000000000000000000000000000000; dispatcher=c0fb4feaa6a62e4ae8672c32da95e946"
+      ],
+      "Origin": [
+        "http://dispatcher.hydra.test"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": "login%5B_token%5D=csrf-token&login%5Bflow%5D=1&login%5BloginChallenge%5D=eb2cea3b7df64be39c3bdd77c0c70ebf&login%5Bsubmit%5D="
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=UTF-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:47 GMT"
+      ],
+      "Expires": [
+        "Thu, 29 Oct 2026 10:12:47 GMT"
+      ],
+      "Link": [
+        "</assets/styles/app-EbMxDij.css>; rel=\"preload\"; as=\"style\",</assets/theme/theme-dn537Zh.css>; rel=\"preload\"; as=\"style\""
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Set-Cookie": [
+        "dispatcher_flow_csrf=88bb5e7ff6dece1914346358ad6b9fb3a487481267e5dfc2b6dae65b1493d7ea; expires=Thu, 29 Oct 2026 11:12:47 GMT; Max-Age=3600; path=/; httponly; samesite=lax"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-dc60-7c8c-9be0-ea09e1056e63"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html class=\"h-full\">\n    <head>\n                    <title>Se connecter</title>\n            <meta charset=\"UTF-8\">\n            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n            </head>\n    <body class=\"min-h-screen bg-slate-50 text-slate-900 antialiased font-[var(--font-body)]\">\n                    <div class=\"relative min-h-screen overflow-hidden\">\n                <div class=\"pointer-events-none absolute inset-0\">\n                    <div class=\"absolute -top-24 -left-16 h-72 w-72 rounded-full bg-amber-200/60 blur-3xl\"></div>\n                    <div class=\"absolute top-1/3 -right-20 h-80 w-80 rounded-full bg-teal-200/60 blur-3xl\"></div>\n                    <div class=\"absolute bottom-0 left-1/3 h-64 w-64 rounded-full bg-rose-200/40 blur-3xl\"></div>\n                    <div class=\"absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.9),rgba(255,255,255,0.2))]\"></div>\n                </div>\n                <main class=\"relative min-h-screen py-10 lg:py-16\">\n                        <section class=\"mx-auto flex w-full max-w-5xl flex-col gap-8 px-6\">\n        <div class=\"flex flex-wrap items-center justify-center gap-3\">\n                            <a href=\"/locale/fr\" title=\"fr\" aria-label=\"fr\" class=\"rounded-full border border-white/60 bg-white/80 p-1 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md\">\n                    <img class=\"h-8 w-8\" src=\"/assets/images/flags/fr-DJ75OrS.svg\" alt=\"fr\" />\n                </a>\n                            <a href=\"/locale/en\" title=\"en\" aria-label=\"en\" class=\"rounded-full border border-white/60 bg-white/80 p-1 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md\">\n                    <img class=\"h-8 w-8\" src=\"/assets/images/flags/en-0AnOrDR.svg\" alt=\"en\" />\n                </a>\n                    </div>\n\n        <div class=\"rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-[0_20px_60px_-50px_rgba(15,23,42,0.6)] backdrop-blur sm:p-10 space-y-8\">\n            <div class=\"flex flex-col items-center gap-4 text-center\">\n                                <div class=\"space-y-2\">\n                    <h1 class=\"text-3xl font-semibold text-slate-900 sm:text-4xl font-[var(--font-display)]\">OIDC Test Client</h1>\n                    <p class=\"text-base text-slate-600 sm:text-lg\">Choisissez votre source d&#039;identité</p>\n                </div>\n            </div>\n\n                                                                                                                                                                                                                            \n            <form name=\"login\" method=\"post\">\n                \n            <div class=\"space-y-4\">\n                                                                                                <div>\n                        <input aria-labelledby=\"login[flow]-label-0\" type=\"radio\" class=\"peer sr-only\" id=\"login[flow][0]\" value=\"0\" name=\"login[flow]\" />\n                        <label for=\"login[flow][0]\" id=\"login[flow]-label-0\" class=\"app-item flex w-full cursor-pointer flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white px-5 py-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-teal-200 peer-checked:border-teal-600 peer-checked:bg-teal-50\">\n                            <div class=\"flex items-start gap-4\">\n                                                                <div>\n                                    <h5 class=\"text-lg font-semibold text-slate-900\">Hydra OIDC</h5>\n                                    <p class=\"mt-1 text-sm leading-relaxed text-slate-600\">Authentification via un fournisseur OIDC externe</p>\n                                </div>\n                            </div>\n                        </label>\n                    </div>\n                                                                                                <div>\n                        <input aria-labelledby=\"login[flow]-label-1\" type=\"radio\" class=\"peer sr-only\" id=\"login[flow][1]\" value=\"1\" name=\"login[flow]\" />\n                        <label for=\"login[flow][1]\" id=\"login[flow]-label-1\" class=\"app-item flex w-full cursor-pointer flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white px-5 py-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-teal-200 peer-checked:border-teal-600 peer-checked:bg-teal-50\">\n                            <div class=\"flex items-start gap-4\">\n                                                                <div>\n                                    <h5 class=\"text-lg font-semibold text-slate-900\">Hydra SQL</h5>\n                                    <p class=\"mt-1 text-sm leading-relaxed text-slate-600\">Authentification via SQL</p>\n                                </div>\n                            </div>\n                        </label>\n                    </div>\n                                                                                                <div>\n                        <input aria-labelledby=\"login[flow]-label-2\" type=\"radio\" class=\"peer sr-only\" id=\"login[flow][2]\" value=\"2\" name=\"login[flow]\" />\n                        <label for=\"login[flow][2]\" id=\"login[flow]-label-2\" class=\"app-item flex w-full cursor-pointer flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white px-5 py-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-teal-200 peer-checked:border-teal-600 peer-checked:bg-teal-50\">\n                            <div class=\"flex items-start gap-4\">\n                                                                <div>\n                                    <h5 class=\"text-lg font-semibold text-slate-900\">Hydra SQL 2FA</h5>\n                                    <p class=\"mt-1 text-sm leading-relaxed text-slate-600\">Authentification via SQL double facteur</p>\n                                </div>\n                            </div>\n                        </label>\n                    </div>\n                            </div>\n\n            \n            <div><button type=\"submit\" id=\"login_submit\" name=\"login[submit]\" class=\"w-full rounded-2xl bg-teal-600 px-6 py-4 text-sm font-semibold uppercase tracking-wider text-white transition duration-200 hover:bg-teal-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-300\">Continuer</button></div>\n\n            <input type=\"hidden\" id=\"login_loginChallenge\" name=\"login[loginChallenge]\" value=\"eb2cea3b7df64be39c3bdd77c0c70ebf\" /><input type=\"hidden\" id=\"login__token\" name=\"login[_token]\" data-controller=\"csrf-protection\" value=\"csrf-token\" />\n            </form>\n        </div>\n    </section>\n                </main>\n            </div>\n                            \n<link rel=\"stylesheet\" href=\"/assets/styles/app-EbMxDij.css\">\n<link rel=\"stylesheet\" href=\"/assets/theme/theme-dn537Zh.css\">\n<script type=\"importmap\">\n{\n    \"imports\": {\n        \"app\": \"/assets/app-xwrMSn7.js\",\n        \"jquery\": \"/assets/vendor/jquery/jquery.index-Mgzl231.js\",\n        \"/assets/styles/app.css\": \"data:application/javascript,\",\n        \"/assets/theme/entrypoint.js\": \"/assets/theme/entrypoint-ekd24Uo.js\",\n        \"/assets/theme/theme.js\": \"/assets/theme/theme-maoG0wF.js\",\n        \"/assets/theme/theme.css\": \"data:application/javascript,\",\n        \"tailwind\": \"/assets/vendor/tailwind/tailwind.index-XOC-3oC.js\"\n    }\n}\n</script><script>\nif (!HTMLScriptElement.supports || !HTMLScriptElement.supports('importmap')) (function () {\n    const script = document.createElement('script');\n    script.src = 'https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js';\n    if (document.currentScript?.nonce) script.nonce = document.currentScript.nonce;\n    script.setAttribute('crossorigin', 'anonymous');\n    script.setAttribute('integrity', 'sha384-ie1x72Xck445i0j4SlNJ5W5iGeL3Dpa0zD48MZopgWsjNB/lt60SuG1iduZGNnJn');\n    document.head.appendChild(script);\n})();\n</script>\n<link rel=\"modulepreload\" href=\"/assets/app-xwrMSn7.js\">\n<link rel=\"modulepreload\" href=\"/assets/vendor/jquery/jquery.index-Mgzl231.js\">\n<link rel=\"modulepreload\" href=\"/assets/theme/entrypoint-ekd24Uo.js\">\n<link rel=\"modulepreload\" href=\"/assets/theme/theme-maoG0wF.js\">\n<script type=\"module\">import 'app';</script>                        </body>\n</html>\n"
+  }
+}

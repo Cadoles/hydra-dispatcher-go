@@ -1,0 +1,70 @@
+{
+  "seq": 160,
+  "leg": "front",
+  "time": "2026-10-29T10:12:50.575956473Z",
+  "duration_ms": 45,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth?login_challenge=cfef05c829084e149d2ac5a474445e82",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=b96507920afc750f3d872a66fecbe1cb7ff077c1ddbde71a47483cd825804e87; dispatcher=290cb9cd24f9d336fa04ff3eba637ba0"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 302,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Expires": [
+        "Thu, 29 Oct 2026 10:12:50 GMT"
+      ],
+      "Location": [
+        "http://sql.hydra.test/login?login_challenge=01a18725e73675acac15ff2d1cc3e3ff"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-e718-7594-837e-a990058bbead"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html>\n    <head>\n        <meta charset=\"UTF-8\" />\n        <meta http-equiv=\"refresh\" content=\"0;url='http://sql.hydra.test/login?login_challenge=01a18725e73675acac15ff2d1cc3e3ff'\" />\n\n        <title>Redirecting to http://sql.hydra.test/login?login_challenge=01a18725e73675acac15ff2d1cc3e3ff</title>\n    </head>\n    <body>\n        Redirecting to <a href=\"http://sql.hydra.test/login?login_challenge=01a18725e73675acac15ff2d1cc3e3ff\">http://sql.hydra.test/login?login_challenge=01a18725e73675acac15ff2d1cc3e3ff</a>.\n    </body>\n</html>"
+  }
+}

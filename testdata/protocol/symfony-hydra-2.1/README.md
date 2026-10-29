@@ -1,11 +1,20 @@
 # Symfony dispatcher on Hydra 2.1: protocol captures
 
-Recorded on 2026-10-26 by `make capture` in hydra-dev: `tools/recorder` sat in
-front of the Symfony `hydra-dispatcher` and between it and the admin API of
-Hydra 2.1.2, and the scenarios were played by hand in a browser. They freeze
-what Symfony does today: the reference for behaviour (extensions, `[]`, `{}`
-and `null`, aggregation of the steps), not for the shape the Go dispatcher
-serves (Symfony serves the v1 paths and Hydra 2.1 models).
+Recorded by `make capture` in hydra-dev: `tools/recorder` sat in front of
+the Symfony `hydra-dispatcher` and between it and the admin API of Hydra
+2.1.2. They freeze what Symfony does today: the reference for behaviour
+(extensions, `[]`, `{}` and `null`, aggregation of the steps, error answers),
+not for the shape the Go dispatcher serves (Symfony serves the v1 paths and
+Hydra 2.1 models).
+
+- `01` to `15`, on 2026-10-26: played by hand in a browser, with the real
+  login apps, Symfony in `APP_ENV=dev`.
+- `16` to `25`, on 2026-10-29: played by `tools/scenarios`, Symfony in
+  `APP_ENV=prod` (`CAPTURE_APP_ENV=prod CAPTURE_APP_DEBUG=0 make capture`),
+  so that errors are Symfony's answers, not its debug page. The tool is the
+  browser and the login apps: their calls to the emulated API carry the
+  bodies hydra-sql-go and hydra-passwordless send (taken from `14`), but come
+  from the host through Caddy.
 
 `internal/hydra` tests read some of these files by name: renaming or removing
 a directory means updating `emulated_test.go` and `client_test.go`.
@@ -42,6 +51,16 @@ a directory means updating `emulated_test.go` and `client_test.go`.
 | `12-sql-consent-skipped` | sql, single step; Hydra consent skip. 13 Hydra calls, 10 of them reads of the login request. | |
 | `14-sql-2fa-consent-skipped` | sql-2fa, with hydra-passwordless's calls; Hydra consent skip. 21 Hydra calls, 18 reads. hydra-passwordless sends `"email": null`, which overwrites sql's email in the final `id_token`. | |
 | `15-login-skip-consent-screen-reject` | Login skip, `prompt=consent`, consent screen refused: `consent/reject` with `{"error":"access_denied"}`. | the session of `14` |
+| `16-consent-reject-first-step` | sql: the app accepts the login, then rejects its consent (hydra-sql-go's deny button). | |
+| `17-consent-reject-second-step` | sql-2fa: step 1 accepted, hydra-passwordless accepts its login and rejects its consent. | |
+| `18-login-reject-first-step` | sql: the app rejects the login. | |
+| `19-login-reject-second-step` | sql-2fa: step 1 accepted, the second app rejects its login. | |
+| `20-accept-twice` | sql: each accept of the step sent twice; stops at the dispatcher's consent screen. | |
+| `21-unknown-step-challenge` | The four reads and accepts of the emulated API with a well-formed challenge no flow issued. | |
+| `22-malformed-challenge` | `not-a-challenge` on the emulated API, `/`, `/oauth2/auth` and `/consent`. | |
+| `23-csrf-mismatch` | The choice posted with a `dispatcher_flow_csrf` cookie the page did not set. | |
+| `24-back-after-final-accept` | sql up to the dispatcher's consent screen, then back to `/oauth2/auth` and `/` with Hydra's login challenge. | |
+| `25-back-after-the-end` | sql completed (consent screen accepted), then back to `/oauth2/auth`, `/` and `/consent`. | |
 
 `INCOMPLETE`: hydra-passwordless hangs up as soon as it has decoded the JSON,
 and the recorder of the time lost those exchanges. Its calls are missing
@@ -67,6 +86,12 @@ Capture artifacts, never compared:
 - Values of a run: `Date`, `X-Trace-Id`, challenges, verifiers, session ids,
   cookies, CSRF tokens, `state`, `nonce`.
 
+Artifacts of `tools/scenarios` (`16` to `25`): `User-Agent`
+`hydra-dispatcher-go/tools/scenarios`; the apps' calls come from the host
+(`X-Forwarded-For` of the host's gateway, not a login app's address); one
+read of each login and consent request, where hydra-sql-go makes two and
+hydra-passwordless three.
+
 Symfony behaviour the Go dispatcher does not reproduce, on purpose: at the
 first step the emulated login request has `"subject": null` (Go: `""`) and
 `"x_dispatcher_claims": []` (Go: `{}`); Go omits the fields Symfony serves as
@@ -81,30 +106,44 @@ verifiers belonged to a dev stack since reset. There is no secret: no client
 secret, token, JWT or password, as the login apps' own forms are not behind
 the recorder. Never capture against a real identity provider or real accounts.
 
+## What `16` to `25` show
+
+- **A reject by an app** (login or consent, first or second step) reaches
+  Hydra as a login reject, with the app's body. Hydra answers 200; Symfony
+  answers the app **410** with Hydra's `redirect_to`, not Hydra's 200.
+- **An unknown step challenge**: **404**
+  `{"error":"missing_session_error","error_description":"Could not find session metadata in cache","status_code":404}`
+  on all four calls, no call to Hydra.
+- **A malformed challenge**: 404
+  `{"error":"invalid_request","error_description":"request_failed","status_code":404,"trace_id":…}`
+  on the emulated API, the HTML error page on the pages; no call to Hydra.
+- **An accept sent twice**: 200 both times, with the same `redirect_to`.
+- **A flow CSRF cookie mismatch** on the choice: the choice page again,
+  without a message.
+- **Back to `/oauth2/auth` or `/` after the final accept**: Symfony reads the
+  login request, Hydra answers 410, Symfony redirects (302) to Hydra's
+  `redirect_to`, which starts a new authorization.
+- **Back to `/consent` after the end**: Hydra answers 410 to the consent
+  request, Symfony answers with its error page in **500**.
+- In `APP_ENV=prod`, the consent screen's title is the untranslated key
+  `view.consent.title`.
+
 ## Not captured yet
 
 Needed by the contract tests of phase 1, most useful first:
 
-1. `PUT consent/reject` from an app (the deny button of hydra-sql-go's consent
-   screen), at the first and the second step.
-2. `PUT login/reject` from an app: no Go login app calls it, so curl it from
-   the backend network.
-3. Stale, unknown and expired challenges: back to `/oauth2/auth` after the
-   final accept, an unknown step challenge on the emulated API, a malformed
-   challenge (404), `challenge_ttl` lowered for the capture, an accept sent
-   twice (Hydra's 410).
-4. Consent after a login skip, with non-empty claims (sql or sql-2fa).
-5. sql-2fa with the consent screen accepted, complete and without going back,
+1. An expired step challenge (`challenge_ttl` lowered for the capture).
+2. Consent after a login skip, with non-empty claims (sql or sql-2fa).
+3. sql-2fa with the consent screen accepted, complete and without going back,
    to replace `05` and `09`.
-6. Hydra login skip without a valid Symfony session (another browser
-   profile): the choice page.
-7. Logout initiated by the client: `rp_initiated: true`, `client` set.
-8. Variants of `/` (auto-selection, preferred-app `acr_values`,
+4. Hydra login skip without a valid Symfony session: the choice page.
+5. Logout initiated by the client: `rp_initiated: true`, `client` set.
+6. Variants of `/` (auto-selection, preferred-app `acr_values`,
    `unmet_authentication_requirements`, `metadata.dispatcher.flows`,
    `ui_locales`) and of `/consent` (`skip_consent`, `consent_auto_accept`).
-9. Refusal by the emulated API's allowlist (403), flow CSRF cookie mismatch on
-   `/`.
-10. hydra-passwordless's calls to the emulated logout endpoints (404 today).
+7. Refusal by the emulated API's allowlist (403).
+8. hydra-passwordless's calls to the emulated logout endpoints (404 today).
 
 Capture the error scenarios with `APP_ENV=prod`: in dev, Symfony answers with
-its debug exception page.
+its debug exception page. Hydra's own answers, for 2.1, 2.2 and 2.3, are in
+`internal/hydra/testdata/errors`.

@@ -1,0 +1,61 @@
+{
+  "seq": 126,
+  "leg": "front",
+  "time": "2026-10-29T10:12:46.693234361Z",
+  "duration_ms": 52,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/consent?consent_challenge=not-a-challenge",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/tools/scenarios"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Cache-Control": [
+        "no-cache, private"
+      ],
+      "Content-Type": [
+        "text/html; charset=UTF-8"
+      ],
+      "Date": [
+        "Thu, 29 Oct 2026 10:12:46 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a18725-d7f0-796d-9020-cf19f5da3922"
+      ]
+    },
+    "body": "<!DOCTYPE html>\n<html class=\"h-full\">\n    <head>\n                    <title>Erreur</title>\n            <meta charset=\"UTF-8\">\n            <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n            </head>\n    <body class=\"min-h-screen bg-slate-50 text-slate-900 antialiased font-[var(--font-body)]\">\n                    <div class=\"relative min-h-screen overflow-hidden\">\n                <div class=\"pointer-events-none absolute inset-0\">\n                    <div class=\"absolute -top-24 -left-16 h-72 w-72 rounded-full bg-amber-200/60 blur-3xl\"></div>\n                    <div class=\"absolute top-1/3 -right-20 h-80 w-80 rounded-full bg-teal-200/60 blur-3xl\"></div>\n                    <div class=\"absolute bottom-0 left-1/3 h-64 w-64 rounded-full bg-rose-200/40 blur-3xl\"></div>\n                    <div class=\"absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.9),rgba(255,255,255,0.2))]\"></div>\n                </div>\n                <main class=\"relative min-h-screen py-10 lg:py-16\">\n                    <section class=\"mx-auto flex w-full max-w-2xl flex-col gap-6 px-6\">\n    <div class=\"rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-[0_20px_60px_-50px_rgba(15,23,42,0.6)] backdrop-blur sm:p-10 space-y-3 text-center\">\n        <h1 class=\"text-3xl font-semibold text-slate-900 sm:text-4xl font-[var(--font-display)]\">Erreur</h1>\n        <p class=\"text-base text-slate-600\">Une erreur est survenue. Veuillez reessayer.</p>\n        <p class=\"text-sm text-slate-500\">Code d&#039;erreur : E1000</p>\n    </div>\n</section>\n                </main>\n            </div>\n                            \n<link rel=\"stylesheet\" href=\"/assets/styles/app-EbMxDij.css\">\n<link rel=\"stylesheet\" href=\"/assets/theme/theme-dn537Zh.css\">\n<script type=\"importmap\">\n{\n    \"imports\": {\n        \"app\": \"/assets/app-xwrMSn7.js\",\n        \"jquery\": \"/assets/vendor/jquery/jquery.index-Mgzl231.js\",\n        \"/assets/styles/app.css\": \"data:application/javascript,\",\n        \"/assets/theme/entrypoint.js\": \"/assets/theme/entrypoint-ekd24Uo.js\",\n        \"/assets/theme/theme.js\": \"/assets/theme/theme-maoG0wF.js\",\n        \"/assets/theme/theme.css\": \"data:application/javascript,\",\n        \"tailwind\": \"/assets/vendor/tailwind/tailwind.index-XOC-3oC.js\"\n    }\n}\n</script><script>\nif (!HTMLScriptElement.supports || !HTMLScriptElement.supports('importmap')) (function () {\n    const script = document.createElement('script');\n    script.src = 'https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js';\n    if (document.currentScript?.nonce) script.nonce = document.currentScript.nonce;\n    script.setAttribute('crossorigin', 'anonymous');\n    script.setAttribute('integrity', 'sha384-ie1x72Xck445i0j4SlNJ5W5iGeL3Dpa0zD48MZopgWsjNB/lt60SuG1iduZGNnJn');\n    document.head.appendChild(script);\n})();\n</script>\n<link rel=\"modulepreload\" href=\"/assets/app-xwrMSn7.js\">\n<link rel=\"modulepreload\" href=\"/assets/vendor/jquery/jquery.index-Mgzl231.js\">\n<link rel=\"modulepreload\" href=\"/assets/theme/entrypoint-ekd24Uo.js\">\n<link rel=\"modulepreload\" href=\"/assets/theme/theme-maoG0wF.js\">\n<script type=\"module\">import 'app';</script>                        </body>\n</html>\n"
+  }
+}
