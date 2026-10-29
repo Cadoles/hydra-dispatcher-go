@@ -8,6 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # For the integration tests (tag integration): the major of production.
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+        env:
+          POSTGRES_PASSWORD: dispatcher
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -42,7 +51,7 @@ jobs:
         run: out=$(go fmt ./...); test -z "$out" || { echo "$out"; exit 1; }
 
       - name: Vet
-        run: go vet ./...
+        run: go vet ./... && go vet -tags integration ./...
 
       # Tool versions are pinned by the tool directive in go.mod.
       - name: Staticcheck
@@ -53,6 +62,13 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      # The job runs in a container, beside the service: its name is its
+      # host. Without DATABASE_URL, the tests fail rather than skip.
+      - name: Integration tests
+        env:
+          DATABASE_URL: postgres://postgres:dispatcher@postgres:5432/postgres?sslmode=disable
+        run: go test -race -tags integration ./internal/store/...
 
       # Built, never pushed: a Dockerfile or .dockerignore error shows here,
       # not at release. Same BuildKit pin as hydra-sql-go: the runner's

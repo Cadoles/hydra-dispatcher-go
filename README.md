@@ -58,6 +58,15 @@ go test -race ./...
 docker build --build-arg VERSION=dev -t hydra-dispatcher-go .
 ```
 
+The store's integration tests (tag `integration`) need a Postgres 17 where
+they may create databases; the tag without `DATABASE_URL` fails:
+
+```sh
+docker run -d --rm --name dispatcher-pg -e POSTGRES_PASSWORD=dispatcher -p 127.0.0.1:55432:5432 postgres:17-alpine
+DATABASE_URL='postgres://postgres:dispatcher@127.0.0.1:55432/postgres?sslmode=disable' \
+  go test -race -tags integration ./internal/store/...
+```
+
 The emulated API's golden files (`internal/hydra/testdata/emulated`) are
 rewritten with `go test ./internal/hydra -args -update`; review the diff.
 
