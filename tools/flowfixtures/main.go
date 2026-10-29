@@ -16,7 +16,7 @@
 //	go run ./tools/flowfixtures -client <client_id> -out internal/hydra/flowcodec/testdata
 //
 // Against a throwaway Hydra of another version, here with a request lifetime
-// short enough for -ttl to record the expired cases:
+// short enough for -ttl to record the expired cases (no -out before 2.2):
 //
 //	docker run --rm -d --name hydra -p 4444:4444 -p 4445:4445 -e DSN=memory \
 //	  -e SECRETS_SYSTEM=youReallyNeedToChangeThis -e URLS_SELF_ISSUER=http://127.0.0.1:4444 \
@@ -114,7 +114,9 @@ func run() error {
 		return err
 	}
 	if *out != "" {
-		if strings.HasPrefix(version, "v2.1.") {
+		var major, minor int
+		_, _ = fmt.Sscanf(version, "v%d.%d.", &major, &minor)
+		if major < 2 || (major == 2 && minor < 2) {
 			return fmt.Errorf("-out needs Hydra 2.2 or later: %s does not encrypt its challenges", version)
 		}
 		f.out = filepath.Join(*out, "hydra-"+version)

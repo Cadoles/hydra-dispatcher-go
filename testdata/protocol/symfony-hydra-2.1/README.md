@@ -87,7 +87,8 @@ Capture artifacts, never compared:
   cookies, CSRF tokens, `state`, `nonce`.
 
 Artifacts of `tools/scenarios` (`16` to `25`): `User-Agent`
-`hydra-dispatcher-go/tools/scenarios`; the apps' calls come from the host
+`hydra-dispatcher-go/tools/scenarios` on the browser's requests,
+`Go-http-client/1.1` on the apps' calls; the apps' calls come from the host
 (`X-Forwarded-For` of the host's gateway, not a login app's address); one
 read of each login and consent request, where hydra-sql-go makes two and
 hydra-passwordless three.

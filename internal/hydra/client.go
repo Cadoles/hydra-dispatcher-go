@@ -91,9 +91,10 @@ func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailab
 func (e *UnavailableError) Unwrap() error { return e.err }
 
 // RequestError is a 4xx answer: an unknown challenge (404), an expired one
-// (401, from Hydra 2.2 on), a request already handled (410, with
-// redirect_to), or a refused body. Body is Hydra's error document, forwarded
-// as is to login apps on the emulated API.
+// (401, from Hydra 2.2 on), a refused body (400), or, from Hydra 2.1 only, a
+// request already handled: 410 with redirect_to on a read, 409 on a second
+// accept or a reject. Body is Hydra's error document, forwarded as is to
+// login apps on the emulated API.
 type RequestError struct {
 	Op     string
 	Status int
@@ -104,8 +105,8 @@ func (e *RequestError) Error() string {
 	return fmt.Sprintf("hydra %s: status %d", e.Op, e.Status)
 }
 
-// RedirectTo returns where Hydra sends a request it already handled (410),
-// or "".
+// RedirectTo returns where Hydra 2.1 sends a request it already handled
+// (410), or "".
 func (e *RequestError) RedirectTo() string {
 	var doc map[string]json.RawMessage
 	if e.Status != http.StatusGone || json.Unmarshal(e.Body, &doc) != nil {

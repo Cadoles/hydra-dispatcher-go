@@ -6,7 +6,9 @@
 //
 // After each scenario, the exchanges the recorder wrote to -capture move to
 // -into/<NN>-<scenario>, NN counting from -first. With no scenario named, all
-// of them run, in order: Hydra remembers the consents of the earlier ones.
+// of them run, in order. Start from a new stack (make down): Hydra remembers
+// the consent back-after-the-end gives, and a second run would skip it in
+// accept-twice, back-after-final-accept and back-after-the-end.
 //
 //	go run ./tools/scenarios -client <client_id> -first 16 \
 //	  -capture testdata/capture -into testdata/protocol/symfony-hydra-2.1
@@ -47,7 +49,9 @@ const (
 
 // Bodies the login apps of hydra-dev send: recorded from hydra-sql-go and
 // hydra-passwordless in testdata/protocol/symfony-hydra-2.1/14-sql-2fa-consent-skipped,
-// or built as hydra-sql-go builds its deny button's.
+// or built as hydra-sql-go builds its deny button's. tfaConsentAccept waits
+// for sql-2fa completed through the consent screen (the README's "Not
+// captured yet").
 const (
 	sqlLoginAccept   = `{"amr":["pwd"],"context":{"email":"test2@test.com","firstname":"Isabelle","lastname":"Durand"},"remember":true,"subject":"test2@test.com"}`
 	sqlConsentAccept = `{"grant_scope":["openid","profile","email"],"remember":true,"session":{"id_token":{"email":"test2@test.com","firstname":"Isabelle","lastname":"Durand"}}}`
@@ -162,7 +166,8 @@ func run() error {
 			return err
 		}
 		jar, _ := cookiejar.New(nil)
-		// A new browser for each scenario: no Hydra session, no skip.
+		// A new browser for each scenario: no Hydra session, no login skip.
+		// Hydra remembers a consent by subject, whatever the browser.
 		d.browser = &http.Client{Jar: jar, Timeout: 10 * time.Second, CheckRedirect: noRedirect}
 		slog.Info("scenario", "name", s.name)
 		if err := s.run(d); err != nil {
