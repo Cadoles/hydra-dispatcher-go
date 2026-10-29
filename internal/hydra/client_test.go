@@ -152,13 +152,9 @@ func TestErrors(t *testing.T) {
 		wantStatus   int
 		wantRedirect string
 	}{
-		{"already handled", reply(410, `{"redirect_to":"http://oidc.client.test/cb?error=x"}`), false, 410, "http://oidc.client.test/cb?error=x"},
-		{"unknown challenge", reply(404, `{"error":"Not Found","error_description":"Unable to locate the resource"}`), false, 404, ""},
-		// Hydra 2.2 and later, on an expired login or consent request.
-		{"expired", reply(401, `{"error":"request_unauthorized","error_description":"The request could not be authorized.","error_hint":"The login request has expired, please try again.","status_code":401}`), false, 401, ""},
-		{"another subject", reply(403, `{"error":"request_forbidden","error_hint":"Field 'subject' does not match subject from previous authentication."}`), false, 403, ""},
-		{"conflict", reply(409, `{"error":"Conflict","error_description":"The login request was already used and can no longer be changed."}`), false, 409, ""},
-		{"refused body", reply(400, `{"error":"invalid_request"}`), false, 400, ""},
+		// Hydra's own 4xx (unknown, handled, expired, refused) are the
+		// recorded answers of TestRecordedHydraAnswers; these are the rest.
+		{"another Hydra 4xx", reply(403, `{"error":"request_forbidden"}`), false, 403, ""},
 		{"server error", reply(500, `{"error":"boom"}`), true, 500, ""},
 		// A gateway quoting the URL it was asked: the challenge stays out.
 		{"server error quoting the request", func(w http.ResponseWriter, r *http.Request) {

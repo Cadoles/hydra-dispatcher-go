@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/consent?consent_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 401,
+    "content_type": "application/json",
+    "body": {
+      "error": "request_unauthorized",
+      "error_description": "The request could not be authorized. The consent request has expired, please try again."
+    }
+  }
+}

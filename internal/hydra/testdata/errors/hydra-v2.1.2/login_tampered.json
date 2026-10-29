@@ -1,0 +1,14 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/login?login_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 404,
+    "content_type": "application/json",
+    "body": {
+      "error": "Not Found",
+      "error_description": "Unable to locate the requested resource"
+    }
+  }
+}

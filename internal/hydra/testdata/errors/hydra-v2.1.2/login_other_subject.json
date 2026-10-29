@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/login/accept?login_challenge=\u003cchallenge\u003e",
+    "body": {
+      "subject": "bob"
+    }
+  },
+  "response": {
+    "status": 400,
+    "content_type": "application/json",
+    "body": {
+      "error": "invalid_request",
+      "error_description": "The request is missing a required parameter, includes an invalid parameter value, includes a parameter more than once, or is otherwise malformed. Field 'subject' does not match subject from previous authentication."
+    }
+  }
+}

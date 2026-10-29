@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/login/accept?login_challenge=\u003cchallenge\u003e",
+    "body": {
+      "amr": [
+        "pwd"
+      ],
+      "remember": true,
+      "subject": "alice"
+    }
+  },
+  "response": {
+    "status": 401,
+    "content_type": "application/json",
+    "body": {
+      "error": "request_unauthorized",
+      "error_description": "The request could not be authorized. The login request has expired, please try again."
+    }
+  }
+}

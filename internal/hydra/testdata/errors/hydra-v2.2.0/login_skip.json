@@ -1,0 +1,72 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/login?login_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "nn7iw0iTYFcdqlbUMSH8-c3nF0fpCE3LK9nsTm3J1SGWdoNTonxnvavhPEd0ZO8f7pClT_inHEjNQpdiyxYG79QPgAbsfblgPYQqwkulrWHxQ6t3eOVu6NHANf8d8nQshJGReisaOIBT9S8AVMLEN8DRNJwdr2rh2tRawlAIQ4kpyzEnnUdxsBYFtc17kzTTz-aw6KIg-YFC_O3yDY1gTYJ8gejPXSi9zxznt1_OiVlllW6gl31dpX34W8nSMxPGmub27FgydG4rHhJzRWwCUODty_hbNK_Fy6fRyEUJ_FISrz9CJ8cmsVlJA3P3XyzYT-BUOKtoxuQ8_IO_s7Uz6NvmV1su4boCcjieXix6a7NnG1l-XQpXA3oCI4b-zHBc5SyTg03tPZCZZrzkCTRV1ivD-z79YGdK_d6ucwut5DT4FtogtzI-w4FySXh_iOESJUHZl4e7xntbkz0LoC64HbeE-o54jdjH1146XeTjyWAf_BuzsRFSgXKYTGS0C6OWzEIgdMT_05wBALDFbXl1flaeS6y1C1f4z7udB_fjlZF0YK5VVOuFWFiLzUWlkOI7UGCgn-8GNUMItzLLd7hsrwVlnheQtNCjTjRpDaJOhOHlCKpG_ot0Z68Hl8WS7E2a7vX-jNbCZbZIpKgLgDIXvEDVnzmxc-g5wFJBzfFHz5odm2GHzi8eUlOOwh-U71gw3fK22Ru4MnsCCIfYOLnDxs2UlxThXm7K3_2LYozz6FWIa4nmgR7tj6rAnMLUWRJNVk_CfRl8oRfOdrMTMzwqmq5eMEL-FW95vTZfU2GYfEGFO7M4Y_k6UY5fBiTe_e4EzIekw2-rcvEmSS4NzNtQnp8ediwvb0qRYBa_YuyphGKsV8i5qVicF-CqO3eX7CtTIEbvON3KIf2hJXpuXyZVfbO5pS8w0T2PiwafGPK8dG7r7daMWHOzTOMqSUFRf-FibPRkj6jd0FI_b23HwQXulxp71QyfPhPWEyrHaUolFK5Dv0m_vQzRocNih7mhK58Qv4G2TfZnKOJFVdaaQZ1kfH1Fd3cSnX8AA_aw8muBctaE9lH0bNs0LH4THU97CMF2uKhqsAeffealwbCdavFJeU-F6YdnS86tvi5JfIZgtzpQIq89EExI39MTggHQWELioMYH4TnmI1aW6dGhYoOKPwjHU0Tl7mq01cb3f8XHlyfWDAF4HgbI5_Dwa76TQtEmMiiIuHZVpBWYX28SQJ3ZLaWhihkiWsJC3ULi0kZ8XDozlVJnLvabeEOz3bHR1ShlVfM2sju_IN2D4-kHnIx2qVOl9QJeDwOH8I4VhdN5D_-3bcLH9IBPYeVDJnUDXd50eyrpOa637rG3MIvzTiLmV7JjXOr8zUOUTMdWGrM3f8PSo5k3uDRVoaGTpVdspMNpSgdf3COlzBAwnBIkscraklGHhjPrdaeD4oC45MyBB9FxVTnW5MsePvIh0Xe2MCk-sKxPpZ99uYkw-7t6SePC0rdiVxRgt766_lZkqApDfLkCTdg=",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": true,
+      "subject": "alice",
+      "oidc_context": {
+        "ui_locales": [
+          "fr",
+          "en"
+        ]
+      },
+      "client": {
+        "client_id": "e835e86e-c9a9-476e-a7a5-59f1d0585bc5",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-10-29T09:59:26Z",
+        "updated_at": "2026-10-29T09:59:25.567088Z",
+        "metadata": {},
+        "skip_consent": false,
+        "skip_logout_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      },
+      "request_url": "http://127.0.0.1:4444/oauth2/auth?client_id=e835e86e-c9a9-476e-a7a5-59f1d0585bc5\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "session_id": "7ae27fc1-5b98-495d-8e76-95d121d586bf"
+    }
+  }
+}

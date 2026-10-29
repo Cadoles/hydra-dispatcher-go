@@ -1,0 +1,78 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/consent?consent_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "xhFYST2L7GpSkfoE70nsMtjlb7IHWcTwht_0aXSloB3yhbRMgOs-HfgR87E0XNfxfVXU1s-ICvoktSZLNlD5PhKb9TkcdacO-jn0NfKmqoBVs6h7qhRLwfjtagnybFr_SR9iqNo69qDua4HyWnG1jRLKCKUSFcd0s_jGfKxBfKKB3cBHAKC7Hq9Lo1QksBmzIYvHH3_HU4R0C--PwtAZrhX3W4TrnYsYHSt5MCqlncOcMmUX5-xtrCHXsiHAZdAgcTCNRjQcxZ9Fqqj6tgbEg1G3an_dLYe99yimrIS5RCOpyjocDbtZkiWb2iey0vIPWAdJma-0DUq_Z4s6ltWa8d8fBC0UOmGJiJxt5F6w0MEEAwDCVF9ohVZdWF7_2AHBUDmMChsfeZAhCJhpL11WvYYI9Q19v12eNWbycjwr8Byfto7pocA0krum6SA9RSxIIfjUTkwhls2_CbxUWzQSpx5aQ-bj6g4qEXWO1oI7oL2lvDw8qLmiO3lYhXuhu_T2Ys2wKbNks-PeZUARquJWiVxlj9E46AqtwzHxjG1TCamJAGfMzLtomwMO88h7i8pT_DkOP5pbK9S4lDWkUFW5pfmMSLE6qKhi-MgTs1ImYwtEGgscoKQUErKVUyBEnW0wy3kIod9__NLSAeH5Y7DJzU59ZXvsjQ3N2VoSjMkdOwel1asWT6oO27I2B-WChum717k8m8gCNvwJiRnM4ePtOxLmTY4AWeAyJoas6nI2vtwxCyqoS1LZ1L7G-NkjoR6bkTtWJ7--XzMeJXPttRTrxwd4yGsbnjWWp0kMXVqNAtX0JjVMKSiMH8N6jKfmBn7eJfkZECdl9wG3SLaN9_zP2tA_X4x4Skc8h12Xt2o0Ha1yEniVpPnYFGs1Zu72UWK4LFWMSgrXHHyUxtbpr4859ZC2P27OKXePQRvtCVIrR03oc9BjyFTcYog2RLKmbf7eU8ZBhhGpTHB0cSY4IAwL_quzZlCJ56luB_BP16BmHBStSjq2-eKAs3DOk6QcPrfIA-JONJp0RfrpJxR6R3uuW1Iihwf9tnFhq67A0K3_HEcDHbgaEapw8mj8ziqXAHqBcfOq1TGKl78YgDCVY9wfBBPUvufygGhFr8J6RQgJiwCFnuxy6KfIFSFMQonIa7Qd9PpYXakg9vLavoAMNGxRuQTTl3WHvZcnynl9yRF4f4yUeO2C6_xYHeEQA7hKuiDXBmfDFvw4seCNfDuLUmDioV_Voz6iQdf5q96phUkvJ2vNXsIAwUDKympAib_r_XsPYqkRDRsg-hCFoeDm7SCzh6auNde4_Ze5YhcsxHE=",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": false,
+      "subject": "alice",
+      "oidc_context": {
+        "ui_locales": [
+          "fr",
+          "en"
+        ]
+      },
+      "client": {
+        "client_id": "28ff0255-76ed-4b45-96ea-0a43c91c27a7",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-10-29T09:59:35Z",
+        "updated_at": "2026-10-29T09:59:35.486657Z",
+        "metadata": {},
+        "skip_consent": false,
+        "skip_logout_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      },
+      "request_url": "http://127.0.0.1:4444/oauth2/auth?client_id=28ff0255-76ed-4b45-96ea-0a43c91c27a7\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "login_challenge": "d155c1f00c0b41618ec031cd30386dae",
+      "login_session_id": "4f2eaa3a-8ebb-4911-8f6b-8d9360cb06eb",
+      "acr": "",
+      "amr": [
+        "pwd"
+      ],
+      "context": null
+    }
+  }
+}

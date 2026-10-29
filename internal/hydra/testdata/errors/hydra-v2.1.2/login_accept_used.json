@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/login/accept?login_challenge=\u003cchallenge\u003e",
+    "body": {
+      "amr": [
+        "pwd"
+      ],
+      "remember": true,
+      "subject": "alice"
+    }
+  },
+  "response": {
+    "status": 409,
+    "content_type": "application/json",
+    "body": {
+      "error": "Conflict",
+      "error_description": "Unable to process the requested resource because of conflict in the current state The login request was already used and can no longer be changed."
+    }
+  }
+}

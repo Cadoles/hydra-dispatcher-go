@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/consent/reject?consent_challenge=\u003cchallenge\u003e",
+    "body": {
+      "error": "access_denied"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "redirect_to": "http://127.0.0.1:4444/oauth2/auth?client_id=28ff0255-76ed-4b45-96ea-0a43c91c27a7\u0026consent_verifier=CN0k1fTekWgwj6EKrHFNaQzAevHzFR62P-kXBivYVgoyaNb9JVhtHEL-K04IrlzO5IRhO9Cwm2AgfSaaKEHHs5J1-dqoAr4h8OZYMjb_CYQQLrp7fQD2PTeX26nnSxdfUdTjaNohze2AAv8VRHHhMJ9gFDwb9ZW0aSOamgB2-QsDzTDH38iO98AzMjZttXGpXPVnS1nqXJKIV7DsAuvB3EfRvXQbUGOT3cw46xOjkm52ZvF7YqQrdeqPX8SSuYhVA5F6fsds8tOO9kggQM0-LZR71xGH1HPxKFWDbp1EQ82zGjp0aQ6wsjC7DaRwq_6xXP-J78v7HjtO-y_fNiEYev-2eNpQ9Ukw3Y5UETMtW1ar7tzIZFhZYPo-BoZgVpAkwp-wmgYvNlqnyWA0WcuDjpYQI1HWRLnqaZAjgYhiG-JjQOhEj_M9kCXH5Ah_yWsLKcYVxm9DuujV4B2jT2znfaYPYGYCnEVfQ6KpKon5sYweumkr0wxGZZFVXMy-s4UlNZ0-BWr7bNtK-WG29t8NF4sGxiRyJfPTA9HlFM75IPd98KPaASPJ9BVMhS2Md-zMD8kTPe50_XyG4NdDW7BTOKEfWj8-EUCw25MQCZM1vfQi-Meh7fJSCAOa9RTnn9tFgOGPT67VTvCRWXa_rizBup3wHaroeMc495UqFLBBS6VUnuD8_Os_G3rhQf3G57UZ0P4WvReXlpuIa2iWbtnV-ZoKxEP8J8fFBulFFq6wwtXtwViKS2C3YfkijXmqb8MIhnjOjXdo2EvO6mtL4jQa6V43RzwzglLLxnXdzN_Df8TE4KbJR7a7FlPVfvk2K1L7A05gOd5z31Gv8pw8-s4qMoaQA8z8OOPDbMoZBUnCOuV9SM7a7wi7Msx5R_JF5LkN-9Jd2jkjpqRb4FoSyZ1z_NKj-u2pWqJtiAp8Aoki5A9nlWbEXtk7eQE_-XOcnMmNvqhYN_u6Rj0kgBDZ8WfY-2j69CAQX5LgFvasNLUqG1bY-eQVHbW751WUeyoXsF-QCtCZHhJsyHhTezfGxuk6DCI3tbjJUhkdGaJR7A741ooZmwsw3zu7Dmegcep7qB6ywROjtkCDu5sNUA1anxTvygYl3JMYLlER_1A3HfSko0XSM7A4hAfMJGWTYAhku1Z8uDEQJrahNreSo0PmEqwuoIfWkpioDlARuF9j44nyT0YzqDKwDo5kDyMWDSHfQZobFW2PFNV2siPn9zO8KvJfRmUuEdE7YU-g8urB5-0_RJnRECJuJ2m0XANPxTrTDGMMADu-jr8mu5o5wTt0gUhFKh88FGG3JhMqCnBWctALH5ufo7waLDkoExDaJHmuQzu4dgYhIW2pnAPX0YVPGNrnPYBrXwZZ_rQJtAEQj5dVDkizAUcq6UtjfSwnfJLK\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en"
+    }
+  }
+}

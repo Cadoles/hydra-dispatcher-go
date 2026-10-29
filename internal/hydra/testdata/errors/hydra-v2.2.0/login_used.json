@@ -1,0 +1,72 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/login?login_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "MbWoqiNlh0Oru43Mp9smMEN2hMRW-7j4jTm43rG-54REEk1ZH2A7TzZDzAcB5kQTAqnyN9ZvP9ZURjqV6SPQ380os6yYjER5p6mOcXOEIwoJYpqiQ7pkcMdAXXeDdnsQzBUISP3ISEayAH9aL5Um6-Mu58TWtGyorkjgBgLDKNTu7oX7E1dRARCoQrLw_vjYkBKsos4CA1qRCYNAkRYobnypwMNndnYKyR_DIveZldiNpFEMxG9EITDm81lM2AjKTbG4vMxzSfFPw7hZRG_ACz-8bER2zDW1l4ZCN_wFZeFHQkFx-Gqsien-AMfqHjaEW-9ByujiBKFN0mQ1QOeeYpkSPZlOVlqXZHCUVWP7Ln717O_qtRGG0rSygpXl3aUpxOcwGAWiFUkMQsDGFJ1W5aC1sYi5Cya402utFiab5oag0zd7CKKdJgLxHArQRbXIUdDn9kXXDmAwFENzXGIeX2tG7kT8HFgS4sf5Lut_c6sp505sywBy0NZsQlkVzzoGckfvDvM8HD2umzMFd_NiAZkcb6B1dR3KLAZmkxgYBS1IEaDzhaRGt3NOwLtzNh2D_1IYJona47u0jFGx6Qd3MQdl9zOUuGb7Gp9q3koUUUMHK9HCdIYiJg9xVvDqUzbsMKQfAYFYxGfvNPayK2Wp6s_E0cepiJXnZEbSR3w92BWWsIwn47K1QMfQMpQJIFl5sNrSv7mYtuWo0MPbWl1mgNSZ258XBjVw49vB8jkUQxVm1ab1Mg8sydedlpP_LK2bRPCehQ4BJZ6GQj0eIu_vN6egymNGQdWCLMDgUFJO4FzJbO5Zxrxci0aAVXMLqHeeXemwY9K_tjwRO3t2D8Xc-dSRIqYmyu_NSTnlRp_OxAYyhOntacT74vX7apTm2b99qZD69JuNVQeExD1nFuQlwzu56_sGRVr8TF-2uRQ6K0JpC9PFyPlPClclV6ElOLGIu1ZzMtlsHLGug_RWqfoJJHhKosnQpueBB4085oKCLp9icuEsY4SH8MhJYc6zoyj4GiJu20QSHYPlnBUn9RuBVPIpxHSGAxghD0twTrH1iLYeCB2MSmt6Hil00DUMeMOSllPkTCtJNyq2kbT3ZysB_rH1kM-g_Hv1uInnvNc-pX4bT2S8tpRBnYnS0VpmmT4FpG2SyhbhBdW88TTo8cKm1nivKfxBgJ_vnXLc2ovaO0_wqEV79hJdEU6RlxX81QsSbrV_6nxKMl4-MyhGgGixNJvbSfONbE3MqQ8Kpj-Nee6XOVzyp_RQJCrZCK8Jh2tp05kw4E24bFLACaQ5-QVitgl1NFpnFOFU1lj2TqemM9vsDrS-D-KMhisei-JgtvfAmkJTMfQ_RNmOWDlkwCYZzBCLadBXJiTTIUx3Gv4g6v47jXfhjdPLgoRcnefSAgEZhALLriXXfuq9ClvpFG1btRCZNPW0Iqx7GsLYryzSOLy0bxGU_iBV_EMtqWW6zIqJVu2X2ABOgj94oBT9Tout4DmiQ4ahYz_EStffseU=",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": false,
+      "subject": "",
+      "oidc_context": {
+        "ui_locales": [
+          "fr",
+          "en"
+        ]
+      },
+      "client": {
+        "client_id": "e835e86e-c9a9-476e-a7a5-59f1d0585bc5",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-10-29T09:59:26Z",
+        "updated_at": "2026-10-29T09:59:25.567088Z",
+        "metadata": {},
+        "skip_consent": false,
+        "skip_logout_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      },
+      "request_url": "http://127.0.0.1:4444/oauth2/auth?client_id=e835e86e-c9a9-476e-a7a5-59f1d0585bc5\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "session_id": "7ae27fc1-5b98-495d-8e76-95d121d586bf"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/consent/reject?consent_challenge=\u003cchallenge\u003e",
+    "body": {
+      "error": "access_denied"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "redirect_to": "http://127.0.0.1:4444/oauth2/auth?client_id=e835e86e-c9a9-476e-a7a5-59f1d0585bc5\u0026consent_verifier=3MEYcdGxuOMuPx47I_AlVq95aOMVAwMJKpdhJmj3Lm_SnbRLuWVHT-ALapSc4s8EA2eIEHyF1T5s_ZrxHyBE3MUbGhf10VClniwzbR6ZQrQLCzbFxP0RDZp6Lj3h66FTbdAnlVkQt6-nYmoS09XGUuidcof1ZqehyHjXQ9H6RYwVQWAgOC4OXR9KkOqTIBDlg3-ZT2H5dtC-4bmX64-duzQcIZGU49h6krq5p1nu8Wk6Wd-odE-slRfjvWQz4Bjhv9jgG2WivSs6OU3gaMBQ-d-ZtlsP5AkCHU48CG6nTRjgPPjBgq5QO-Pg-xyZk8mOwFeE2EtrnFJgOJ0FWWi2Af31lxzV7j8-V8yqzcb9sbTjiCyJPyMl82wOeaLhhiVkXsZh6f1wVwuK2h0axpYZm3wJ6epYfjHvTtMHE2WF_Fio62hAEsmLVcyJ9XBBTCpQiNfNXysJWI2uWBF5iIR5XYO48ZmQ9sbxkQOleSDYtvk0ilSh3yYNHUa-tckc2WqpQPfcobcgTMcG_eiPdv-9d_plGPYmQd-tCNeC1gJQojlOXotoKXSMCnsE1GIXs7oqSMWApUQuLVBVcz5LyGVzZgikMP868MHt0nzfst52IP9n3FlITqBB2UKOtw23h1KVmxdcLJTUSM8iPgICl7FtaQheebAuJAo4xALAXOFIQHwQjqjfCr7iNrrHIAPZdwbC2oIMyBnJTmwN4NM7BD9cs0gKcHfURVX1qT7X0mHvCC-VhWkYU9rA9X7ULN3EqUWzvlFKtzJLO5FYBHlMYEQlfMQpDB6mBtKDeP2rd3zhMMXmwrdy49fFXnoUVx_gdZsPkc0ale5BlqOmREbfLA7o4w8kbDDR9HZJKn70w1tOqMXBc3WYnlHW_sragG7wUlV9-C6NBhmKZFVWPVYrKHmCS1o2wiQdez39D6g4ua6fKaFnUAfS_Vi6MToCjKmbxT15ewIpIlZN4PfkP2ph2ZpV1PLUYOxQVqxICtHm5lPgz2HhiJbVnoJ8RkZDy6p68NmkwEHAZ6MLKDAl2d2R7ilPefF6K8rFDPsxkUiL5JCI5we8rrkfmufRyUpPpE_YWf8ZNruRw2S2xa78-yBwP7R2n44Tg4pNHisS2sjXamRGfBdNAoQhQEkVBeoqIz9NoZkjqwaiaGxL15jnNV1L4EcdeUAIottWxFWWGJB2STH4yM0a4-qWmAH25f61aYc1sPYU4qm8mdpKhGBY08WEeBtl8QLXRs-wNvfSVe46XhDQkRkYv0C_SR_SLvQtWkf2okgIoohoA6NRg6BB_LOT2r0bDy8LpvOWmxUubNRnH7FWmGGb_OXncppzgmqr46a8FdrCTIA_y28lBGO6cKIfd0ab855NEWKHBlY0Gummuno2uuPfdvkgjd9dG69uUF5k8WyNFFornHk0v3Raf2Kn0wUZB7YP4zr0VrIxOftWFk0GoXtIWYrYH4GBoZWCpeynd7vat8MgHILCnJmas-72ANLOsTvJDscW2vMCWR8GbirAj_QLWR_x6sDH6ZfbVH_ahB-tqdIsa7aEE1zdK9Nnl6CMlR9fcAHSGZzO5ceP7CCBhRgS7QpKDzFh01iI37qvqAbvBUSC76OUeZNKEkbLVBaInQMiydz3_QyHtIVXsmTWkO4WYPXQQU7iROcz_Tsxb07zle-yj6VpbZFWYv0R2D17zVR-cHm2tzlYetfLQQ%3D%3D\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en"
+    }
+  }
+}

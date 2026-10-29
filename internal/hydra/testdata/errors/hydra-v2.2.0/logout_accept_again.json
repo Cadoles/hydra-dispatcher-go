@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/logout/accept?logout_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "redirect_to": "http://127.0.0.1:4444/oauth2/sessions/logout?logout_verifier=79fc2c72-3482-4549-87cb-f35ef1f14cd7"
+    }
+  }
+}

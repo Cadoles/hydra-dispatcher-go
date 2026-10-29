@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/consent/reject?consent_challenge=\u003cchallenge\u003e",
+    "body": {
+      "error": "access_denied"
+    }
+  },
+  "response": {
+    "status": 409,
+    "content_type": "application/json",
+    "body": {
+      "error": "Conflict",
+      "error_description": "Unable to process the requested resource because of conflict in the current state The consent request was already used and can no longer be changed."
+    }
+  }
+}
