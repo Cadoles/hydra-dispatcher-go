@@ -36,6 +36,8 @@ type command struct {
 
 var commands = []command{
 	{"serve", "run the HTTP server", serve},
+	{"migrate", "apply the database migrations", migrate},
+	{"bootstrap", "write the seed of the configuration file to the database", bootstrap},
 	{"healthcheck", "probe /health of a local server (container HEALTHCHECK)", healthcheck},
 	{"version", "print the version", printVersion},
 }

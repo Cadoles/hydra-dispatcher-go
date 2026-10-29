@@ -5,24 +5,35 @@ chains several real login apps into a flow (MFA, identity provider choice,
 protocol choice) by replaying Hydra's login/consent protocol towards each of
 them.
 
-Go rewrite of the Symfony `hydra-dispatcher`. Work in progress: phase 0
-(skeleton), the binary only serves `/health` for now.
+Go rewrite of the Symfony `hydra-dispatcher`. Work in progress: phase 1, the
+binary serves `/health` and `/ready`, and keeps its configuration in Postgres.
 
 ## Commands
 
 ```
-dispatcher serve [-config dispatcher.yaml]   run the HTTP server
-dispatcher healthcheck [-url ...]            probe /health of a local server (container HEALTHCHECK)
-dispatcher version                           print the version
+dispatcher serve [-config dispatcher.yaml]          run the HTTP server
+dispatcher migrate [-config ...]                    apply the database migrations
+dispatcher bootstrap [-config ...] [-force] [-dry-run] [-yes]
+                                                    write the seed of the configuration file to the database
+dispatcher healthcheck [-url ...]                   probe /health of a local server (container HEALTHCHECK)
+dispatcher version                                  print the version
 ```
 
 `-config` defaults to `$DISPATCHER_CONFIG`, which `healthcheck` reads too for
 the `server.listen` to probe: in a container, give the file by the variable.
 
-`serve` exposes `/health` (liveness) and `/ready` (Hydra reachable, within
-2 s; 503 otherwise, details in the log). Logs are JSON lines on stdout,
-`log_type` `app` or `access`, with the request's `trace_id`; `log_level`
-applies to the application log only.
+`bootstrap` creates what the database lacks from the `dispatcher:` block (the
+seed); `-force` rewrites too what the database holds of it, and resets the
+settings the seed sets to `~`. Neither deletes. `-dry-run` prints the changes
+and writes nothing; in a terminal, `-force` prints them and asks, unless
+`-yes`. `serve` migrates at startup with `serve.migrate: true`, and
+bootstraps with `serve.bootstrap: missing` or `force`, logging the changes.
+
+`serve` exposes `/health` (liveness) and `/ready` (Hydra and the database
+reachable, within 2 s; 503 otherwise, details in the log). It reads the
+configuration from the database at startup, then every 60 s. Logs are JSON
+lines on stdout, `log_type` `app` or `access`, with the request's
+`trace_id`; `log_level` applies to the application log only.
 
 ## Configuration
 

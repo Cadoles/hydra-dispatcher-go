@@ -18,6 +18,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
 // configEnv names the configuration file when -config is not given: the
@@ -26,47 +27,64 @@ const configEnv = "DISPATCHER_CONFIG"
 
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	configPath := fs.String("config", os.Getenv(configEnv), "configuration file (default: $"+configEnv+", else DISPATCHER_* variables only)")
+	configPath := fs.String("config", os.Getenv(configEnv), configHelp)
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}
-
-	cfg, warnings, err := config.Load(*configPath, os.Environ())
+	cfg, logs, err := loadConfig(*configPath)
 	if err != nil {
-		// A warning may explain the error: a mistyped variable left a key unset.
-		for _, w := range warnings {
-			slog.Warn("config.warning", "detail", w)
-		}
-		return fmt.Errorf("configuration: %w", err)
+		return err
 	}
-	logger, accessLogger, startupLogger := newLoggers(os.Stdout, cfg.Observability)
-	slog.SetDefault(logger)
-	for _, w := range warnings {
-		startupLogger.Warn("config.warning", "detail", w)
-	}
+	logger := logs.app
 	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
 	// given by -config alone may listen where the probe does not look.
 	if *configPath != os.Getenv(configEnv) {
 		switch probe, err := probeURL(); {
 		case err != nil:
-			startupLogger.Warn("config.warning", "detail", fmt.Sprintf("healthcheck without -url fails on %s: %v; give the file by %s rather than by -config", configEnv, err, configEnv))
+			logs.startup.Warn("config.warning", "detail", fmt.Sprintf("healthcheck without -url fails on %s: %v; give the file by %s rather than by -config", configEnv, err, configEnv))
 		case probe != healthURL(cfg.Server.Listen):
-			startupLogger.Warn("config.warning", "detail", fmt.Sprintf("server.listen is %q, but healthcheck without -url probes %s; give the file by %s rather than by -config", cfg.Server.Listen, probe, configEnv))
+			logs.startup.Warn("config.warning", "detail", fmt.Sprintf("server.listen is %q, but healthcheck without -url probes %s; give the file by %s rather than by -config", cfg.Server.Listen, probe, configEnv))
 		}
 	}
 
-	handler, err := newHandler(cfg, logger, accessLogger)
-	if err != nil {
-		return err
-	}
 	states, err := newStateStore(cfg.State)
 	if err != nil {
 		return err
 	}
+	db, err := openStore(ctx, cfg.Store.DSN)
+	if err != nil {
+		_ = states.Close()
+		return err
+	}
 	var inFlight httpx.InFlight
+	refreshCtx, stopRefresh := context.WithCancel(ctx)
+	refreshed := make(chan struct{})
+	// The stores close once the configuration is no longer refreshed and no
+	// handler runs.
+	stop := func() {
+		stopRefresh()
+		<-refreshed
+		closeStores(logger, &inFlight, states, db)
+	}
+	live, err := startConfig(ctx, cfg, db, logger)
+	if err != nil {
+		close(refreshed)
+		stop()
+		return err
+	}
+	go func() {
+		defer close(refreshed)
+		live.Run(refreshCtx, store.RefreshEvery)
+	}()
+
+	handler, err := newHandler(cfg, logger, logs.access, db.Ping)
+	if err != nil {
+		stop()
+		return err
+	}
 	ln, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
-		closeStores(logger, &inFlight, states)
+		stop()
 		return err
 	}
 	logger.Info("server.started", "addr", ln.Addr().String())
@@ -75,12 +93,44 @@ func serve(ctx context.Context, args []string) error {
 		logger.Warn("server.shutdown_timeout", "grace", shutdownGrace.String())
 		err = nil
 	}
-	closeStores(logger, &inFlight, states)
+	stop()
 	if err != nil {
 		return err
 	}
 	logger.Info("server.stopped")
 	return nil
+}
+
+// loggers are the application, access and startup loggers of newLoggers.
+type loggers struct{ app, access, startup *slog.Logger }
+
+// loadConfig reads the configuration, makes its application logger the
+// default and logs its warnings.
+func loadConfig(path string) (*config.Config, loggers, error) {
+	cfg, warnings, err := config.Load(path, os.Environ())
+	if err != nil {
+		// A warning may explain the error: a mistyped variable left a key unset.
+		for _, w := range warnings {
+			slog.Warn("config.warning", "detail", w)
+		}
+		return nil, loggers{}, fmt.Errorf("configuration: %w", err)
+	}
+	var l loggers
+	l.app, l.access, l.startup = newLoggers(os.Stdout, cfg.Observability)
+	slog.SetDefault(l.app)
+	for _, w := range warnings {
+		l.startup.Warn("config.warning", "detail", w)
+	}
+	return cfg, l, nil
+}
+
+// startConfig applies serve.migrate and serve.bootstrap, then reads the first
+// snapshot of the configuration.
+func startConfig(ctx context.Context, cfg *config.Config, db configStore, logger *slog.Logger) (*store.Live, error) {
+	if err := prepareStore(ctx, cfg, db, logger); err != nil {
+		return nil, err
+	}
+	return store.NewLive(ctx, db, logger)
 }
 
 // shutdownGrace is how long in-flight requests may run after SIGTERM, and
@@ -102,8 +152,8 @@ func newStateStore(c config.State) (state.StateStore, error) {
 }
 
 // closeStores closes the stores once no handler runs, or once handlersGrace
-// is over: a handler still running then gets ErrClosed from them.
-func closeStores(logger *slog.Logger, inFlight *httpx.InFlight, states state.StateStore) {
+// is over: a handler still running then gets errors from them.
+func closeStores(logger *slog.Logger, inFlight *httpx.InFlight, states state.StateStore, db io.Closer) {
 	ctx, cancel := context.WithTimeout(context.Background(), handlersGrace)
 	defer cancel()
 	if n, err := inFlight.Wait(ctx); err != nil {
@@ -112,11 +162,14 @@ func closeStores(logger *slog.Logger, inFlight *httpx.InFlight, states state.Sta
 	if err := states.Close(); err != nil {
 		logger.Error("state.close_failed", "err", err)
 	}
+	if err := db.Close(); err != nil {
+		logger.Error("store.close_failed", "err", err)
+	}
 }
 
 // newHandler builds the routes behind the middleware chain every surface
-// shares.
-func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger) (http.Handler, error) {
+// shares. database is the check of the configuration store, for /ready.
+func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, database httpx.Check) (http.Handler, error) {
 	trusted, err := cfg.Server.TrustedProxies.Prefixes()
 	if err != nil {
 		return nil, err
@@ -134,7 +187,8 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger) (http.Han
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", httpx.Health())
 	mux.Handle("GET /ready", httpx.Ready(map[string]httpx.Check{
-		"hydra": hydraClient.Ready,
+		"hydra":    hydraClient.Ready,
+		"database": database,
 	}, 2*time.Second, logger))
 
 	return httpx.Chain(httpx.Routes(mux),

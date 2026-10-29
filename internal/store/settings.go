@@ -133,9 +133,19 @@ func (st setting) encode(s *Settings) []byte {
 }
 
 // settingsFrom assembles the rows of the setting table, by key, over the
-// defaults. An unknown key is a warning, so that an older version still
-// starts on the table of a newer one; a value of the wrong type is an error.
+// defaults, and validates them. An unknown key is a warning, so that an older
+// version still starts on the table of a newer one; a value of the wrong type
+// is an error.
 func settingsFrom(rows map[string][]byte) (Settings, []string, error) {
+	s, warnings, err := decodeSettings(rows)
+	if err != nil {
+		return Settings{}, warnings, err
+	}
+	return s, warnings, s.Validate()
+}
+
+// decodeSettings is settingsFrom without the validation.
+func decodeSettings(rows map[string][]byte) (Settings, []string, error) {
 	s := DefaultSettings()
 	var warnings []string
 	var errs []error
@@ -152,7 +162,7 @@ func settingsFrom(rows map[string][]byte) (Settings, []string, error) {
 	if err := errors.Join(errs...); err != nil {
 		return Settings{}, warnings, err
 	}
-	return s, warnings, s.Validate()
+	return s, warnings, nil
 }
 
 // Validate checks the settings as a whole: positive durations, webhook URLs,

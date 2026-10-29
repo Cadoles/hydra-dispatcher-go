@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"log/slog"
@@ -50,10 +51,13 @@ func TestHandler(t *testing.T) {
 	}))
 	defer hydra.Close()
 
+	var dbErr error
+	database := func(context.Context) error { return dbErr }
+
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	newServer := func() *httptest.Server {
-		h, err := newHandler(testConfig(t, hydra.URL), logger, logger)
+		h, err := newHandler(testConfig(t, hydra.URL), logger, logger, database)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -66,13 +70,15 @@ func TestHandler(t *testing.T) {
 	}
 
 	for _, tt := range []struct {
-		hydraStatus, want int
-		hydraState        string
+		hydraStatus, want   int
+		dbErr               error
+		hydraState, dbState string
 	}{
-		{http.StatusOK, http.StatusOK, "ok"},
-		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, "unavailable"},
+		{http.StatusOK, http.StatusOK, nil, "ok", "ok"},
+		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, nil, "unavailable", "ok"},
+		{http.StatusOK, http.StatusServiceUnavailable, errors.New("database: connection refused"), "ok", "unavailable"},
 	} {
-		hydraStatus = tt.hydraStatus
+		hydraStatus, dbErr = tt.hydraStatus, tt.dbErr
 		// One instance per case: the Hydra client reuses its readiness for a second.
 		probed := newServer()
 		resp, err := http.Get(probed.URL + "/ready")
@@ -85,8 +91,9 @@ func TestHandler(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		_ = resp.Body.Close()
 		probed.Close()
-		if resp.StatusCode != tt.want || body.Checks["hydra"] != tt.hydraState {
-			t.Errorf("Hydra %d: /ready = %d %v, want %d with hydra %s", tt.hydraStatus, resp.StatusCode, body.Checks, tt.want, tt.hydraState)
+		if resp.StatusCode != tt.want || body.Checks["hydra"] != tt.hydraState || body.Checks["database"] != tt.dbState {
+			t.Errorf("Hydra %d, database %v: /ready = %d %v, want %d with hydra %s, database %s",
+				tt.hydraStatus, tt.dbErr, resp.StatusCode, body.Checks, tt.want, tt.hydraState, tt.dbState)
 		}
 		if resp.Header.Get("X-Trace-ID") == "" {
 			t.Error("no X-Trace-ID on /ready")
@@ -163,7 +170,7 @@ func TestLoggersLevel(t *testing.T) {
 	logger, accessLogger, _ := newLoggers(&buf, cfg.Observability)
 	logger.Info("flow.started")
 	logger.Warn("challenge.invalid")
-	h, err := newHandler(cfg, logger, accessLogger)
+	h, err := newHandler(cfg, logger, accessLogger, func(context.Context) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +194,7 @@ func TestHandlerTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	h, err := newHandler(cfg, logger, logger)
+	h, err := newHandler(cfg, logger, logger, func(context.Context) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

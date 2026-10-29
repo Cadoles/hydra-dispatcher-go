@@ -118,9 +118,9 @@ type Flow struct {
 }
 
 type Step struct {
-	AppID        string
-	Position     int
-	SubjectCheck string // none, equal or claim:<name>
+	AppID        string `json:"app_id"`
+	Position     int    `json:"position"`
+	SubjectCheck string `json:"subject_check"` // none, equal or claim:<name>
 }
 
 // Snapshot is the configuration at one moment, read in one transaction.
