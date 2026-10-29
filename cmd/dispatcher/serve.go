@@ -17,6 +17,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 )
 
 // configEnv names the configuration file when -config is not given: the
@@ -58,29 +59,60 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", cfg.Server.Listen)
+	states, err := newStateStore(cfg.State)
 	if err != nil {
 		return err
 	}
-	logger.Info("server.started", "addr", ln.Addr().String())
-	err = httpx.Serve(ctx, httpx.NewServer(handler, logger), ln, shutdownGrace)
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		logger.Warn("server.shutdown_timeout", "grace", shutdownGrace.String())
-	case err != nil:
+	var inFlight httpx.InFlight
+	ln, err := net.Listen("tcp", cfg.Server.Listen)
+	if err != nil {
+		closeStores(logger, &inFlight, states)
 		return err
 	}
-	// Stores will be closed here. After server.shutdown_timeout, the handlers
-	// of the cut requests may still be running: they will have to be waited
-	// for (counted by a middleware) before a store closes under them.
+	logger.Info("server.started", "addr", ln.Addr().String())
+	err = httpx.Serve(ctx, httpx.NewServer(inFlight.Track(handler), logger), ln, shutdownGrace)
+	if errors.Is(err, context.DeadlineExceeded) {
+		logger.Warn("server.shutdown_timeout", "grace", shutdownGrace.String())
+		err = nil
+	}
+	closeStores(logger, &inFlight, states)
+	if err != nil {
+		return err
+	}
 	logger.Info("server.stopped")
 	return nil
 }
 
-// shutdownGrace is how long in-flight requests may run after SIGTERM. It
-// stays under the 10 s docker stop waits before SIGKILL, so the dispatcher
-// cuts them and says so.
-const shutdownGrace = 8 * time.Second
+// shutdownGrace is how long in-flight requests may run after SIGTERM, and
+// handlersGrace how long the handlers of the requests cut then may still run
+// before the stores close. Both stay under the 10 s docker stop waits before
+// SIGKILL, so the dispatcher cuts them and says so.
+const (
+	shutdownGrace = 8 * time.Second
+	handlersGrace = time.Second
+)
+
+// newStateStore opens the store of the flows in progress: in memory while
+// state.redis_dsn is empty.
+func newStateStore(c config.State) (state.StateStore, error) {
+	if c.RedisDSN != "" {
+		return nil, errors.New("state.redis_dsn: the Redis store is not available yet; leave it empty for the in-memory store")
+	}
+	return state.NewMemory(), nil
+}
+
+// closeStores closes the stores once no handler runs, or once handlersGrace
+// is over: a handler still running then gets ErrClosed from them.
+func closeStores(logger *slog.Logger, inFlight *httpx.InFlight, states state.StateStore) {
+	ctx, cancel := context.WithTimeout(context.Background(), handlersGrace)
+	defer cancel()
+	if n, err := inFlight.Wait(ctx); err != nil {
+		logger.Warn("server.handlers_running", "count", n, "grace", handlersGrace.String())
+	}
+	if err := states.Close(); err != nil {
+		logger.Error("state.close_failed", "err", err)
+	}
+}
 
 // newHandler builds the routes behind the middleware chain every surface
 // shares.

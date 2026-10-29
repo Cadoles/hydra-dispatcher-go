@@ -219,6 +219,100 @@ func TestServeShutdownTimeout(t *testing.T) {
 	}
 }
 
+func TestInFlight(t *testing.T) {
+	var f InFlight
+	if n, err := f.Wait(context.Background()); n != 0 || err != nil {
+		t.Fatalf("Wait with no request = %d, %v", n, err)
+	}
+	release := map[string]chan struct{}{"/a": make(chan struct{}), "/b": make(chan struct{})}
+	started := make(chan struct{})
+	h := f.Track(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		started <- struct{}{}
+		<-release[r.URL.Path]
+	}))
+	served := make(chan struct{})
+	for _, path := range []string{"/a", "/b"} {
+		go func() {
+			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+			served <- struct{}{}
+		}()
+		<-started
+	}
+	waitFor := func(d time.Duration) (int, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		return f.Wait(ctx)
+	}
+	if n, err := waitFor(10 * time.Millisecond); n != 2 || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Wait with two requests = %d, %v; want 2, the deadline", n, err)
+	}
+	close(release["/a"])
+	<-served
+	if n, err := waitFor(10 * time.Millisecond); n != 1 || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Wait with one request = %d, %v; want 1, the deadline", n, err)
+	}
+	waited := make(chan error, 1)
+	go func() {
+		_, err := f.Wait(context.Background())
+		waited <- err
+	}()
+	close(release["/b"])
+	<-served
+	if err := <-waited; err != nil {
+		t.Errorf("Wait = %v once the last request ended", err)
+	}
+
+	// A panic that goes through Track still ends its count.
+	p := f.Track(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }))
+	func() {
+		defer func() { _ = recover() }()
+		p.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+	if n, err := f.Wait(context.Background()); n != 0 || err != nil {
+		t.Errorf("Wait after a panic = %d, %v", n, err)
+	}
+}
+
+// What InFlight is for: past the grace, Serve returns while the handler of a
+// cut request still runs.
+func TestInFlightAfterShutdownTimeout(t *testing.T) {
+	var f InFlight
+	started, release := make(chan struct{}), make(chan struct{})
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /deaf", func(http.ResponseWriter, *http.Request) {
+		close(started)
+		<-release // deaf to the request's context
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() {
+		served <- Serve(ctx, NewServer(f.Track(mux), slog.New(slog.DiscardHandler)), ln, 50*time.Millisecond)
+	}()
+	go func() {
+		if resp, err := http.Get("http://" + ln.Addr().String() + "/deaf"); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-started
+	cancel()
+	if err := <-served; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Serve = %v, want the grace exceeded", err)
+	}
+	waitCtx, stop := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer stop()
+	if n, err := f.Wait(waitCtx); n != 1 || err == nil {
+		t.Errorf("Wait after Serve = %d, %v; want the cut handler still counted", n, err)
+	}
+	close(release)
+	if n, err := f.Wait(context.Background()); n != 0 || err != nil {
+		t.Errorf("Wait once released = %d, %v", n, err)
+	}
+}
+
 // net/http's own messages are error records with a stable name.
 func TestServerErrorLog(t *testing.T) {
 	var logs bytes.Buffer

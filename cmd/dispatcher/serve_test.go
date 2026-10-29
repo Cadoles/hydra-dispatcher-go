@@ -271,6 +271,24 @@ func TestServeHealthcheckWarning(t *testing.T) {
 	}
 }
 
+// Until the Redis store exists, serve refuses a configuration that asks for
+// it rather than keep the flows in memory unseen.
+func TestServeRedisNotAvailable(t *testing.T) {
+	keepLoggers(t)
+	for _, kv := range append(requiredEnv("http://127.0.0.1:1"),
+		"DISPATCHER_STATE_REDIS_DSN=redis://redis:6379", "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", configEnv+"=") {
+		k, v, _ := strings.Cut(kv, "=")
+		t.Setenv(k, v)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var err error
+	stdoutOf(t, func() { err = serve(ctx, nil) })
+	if err == nil || !strings.Contains(err.Error(), "state.redis_dsn") {
+		t.Errorf("serve = %v, want the Redis store refused", err)
+	}
+}
+
 // Configuration warnings are written whatever log_level: some warn of an
 // allowlist open to every client.
 func TestServeWarningsAtErrorLevel(t *testing.T) {

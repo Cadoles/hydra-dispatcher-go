@@ -63,6 +63,63 @@ func Serve(ctx context.Context, srv *http.Server, ln net.Listener, grace time.Du
 	return nil
 }
 
+// InFlight counts the handlers running, so that the stores close after the
+// last one: past Serve's grace, the connections are cut but the handlers may
+// still run. The zero value is ready to use.
+type InFlight struct {
+	mu sync.Mutex
+	n  int
+	// idle is closed when n drops to 0, for the Waits in progress.
+	idle chan struct{}
+}
+
+// Track counts the requests of h, outermost so as to cover every middleware.
+func (f *InFlight) Track(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.n++
+		f.mu.Unlock()
+		defer f.leave()
+		h.ServeHTTP(w, r)
+	})
+}
+
+func (f *InFlight) leave() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n--
+	if f.n == 0 && f.idle != nil {
+		close(f.idle)
+		f.idle = nil
+	}
+}
+
+// Wait returns once no handler runs. If ctx ends first, it returns ctx's
+// error and the number of handlers still running.
+func (f *InFlight) Wait(ctx context.Context) (int, error) {
+	f.mu.Lock()
+	if f.n == 0 {
+		f.mu.Unlock()
+		return 0, nil
+	}
+	if f.idle == nil {
+		f.idle = make(chan struct{})
+	}
+	idle := f.idle
+	f.mu.Unlock()
+	select {
+	case <-idle:
+		return 0, nil
+	case <-ctx.Done():
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.n == 0 {
+			return 0, nil
+		}
+		return f.n, ctx.Err()
+	}
+}
+
 // Check tells whether a dependency is usable.
 type Check func(ctx context.Context) error
 
