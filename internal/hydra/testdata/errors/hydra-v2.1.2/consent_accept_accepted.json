@@ -20,7 +20,7 @@
     "status": 200,
     "content_type": "application/json; charset=utf-8",
     "body": {
-      "redirect_to": "http://127.0.0.1:4444/oauth2/auth?client_id=6b0fc99a-2462-4a95-960f-6d248f8cf806\u0026consent_verifier=46eb2083a7f84107847cb21a262fcdff\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en"
+      "redirect_to": "http://127.0.0.1:4444/oauth2/auth?client_id=6531a945-72d8-4743-85de-f7fbc0762e37\u0026consent_verifier=7cbcb5c961eb44da8b5a3578bda95b52\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en"
     }
   }
 }

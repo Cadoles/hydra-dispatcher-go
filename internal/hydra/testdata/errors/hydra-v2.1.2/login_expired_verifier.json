@@ -1,0 +1,12 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/oauth2/auth?client_id=\u003cclient_id\u003e\u0026login_verifier=\u003clogin_verifier\u003e\u0026nonce=\u003cnonce\u003e\u0026redirect_uri=\u003credirect_uri\u003e\u0026response_type=\u003cresponse_type\u003e\u0026scope=\u003cscope\u003e\u0026state=\u003cstate\u003e\u0026ui_locales=\u003cui_locales\u003e"
+  },
+  "response": {
+    "status": 303,
+    "content_type": "",
+    "location": "/auth/callback?error=request_unauthorized\u0026error_description=The+request+could+not+be+authorized.+The+login+request+has+expired.+Please+try+again.\u0026state=\u003cstate\u003e",
+    "body": ""
+  }
+}

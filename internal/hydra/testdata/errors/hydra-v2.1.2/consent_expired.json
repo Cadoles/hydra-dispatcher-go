@@ -7,15 +7,15 @@
     "status": 200,
     "content_type": "application/json; charset=utf-8",
     "body": {
-      "challenge": "4cde731a22cc4403a0f39507706338b8",
+      "challenge": "1856f4d366a34ccbbf21a7172ac9f866",
       "requested_scope": [
         "openid",
         "profile",
         "email"
       ],
       "requested_access_token_audience": [],
-      "skip": true,
-      "subject": "alice",
+      "skip": false,
+      "subject": "carol",
       "oidc_context": {
         "ui_locales": [
           "fr",
@@ -23,7 +23,7 @@
         ]
       },
       "client": {
-        "client_id": "6b0fc99a-2462-4a95-960f-6d248f8cf806",
+        "client_id": "6531a945-72d8-4743-85de-f7fbc0762e37",
         "client_name": "OIDC Test Client",
         "redirect_uris": [
           "http://oidc.client.test/auth/callback"
@@ -49,8 +49,8 @@
         "token_endpoint_auth_method": "client_secret_basic",
         "request_object_signing_alg": "RS256",
         "userinfo_signed_response_alg": "none",
-        "created_at": "2026-10-29T09:59:15Z",
-        "updated_at": "2026-10-29T09:59:15.32569Z",
+        "created_at": "2026-10-29T12:25:45Z",
+        "updated_at": "2026-10-29T12:25:44.613315Z",
         "metadata": {},
         "skip_consent": false,
         "authorization_code_grant_access_token_lifespan": null,
@@ -64,9 +64,9 @@
         "refresh_token_grant_access_token_lifespan": null,
         "refresh_token_grant_refresh_token_lifespan": null
       },
-      "request_url": "http://127.0.0.1:4444/oauth2/auth?client_id=6b0fc99a-2462-4a95-960f-6d248f8cf806\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
-      "login_challenge": "c23ca903810947c0b37e35c5aec866ee",
-      "login_session_id": "d590f308-62ba-417c-82ff-1a2abd4260d0",
+      "request_url": "http://127.0.0.1:4444/oauth2/auth?client_id=6531a945-72d8-4743-85de-f7fbc0762e37\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "login_challenge": "edb2a2129a4f4ec5b40edd5d97bfa11c",
+      "login_session_id": "79e165eb-5db5-47bf-a32a-54182c239242",
       "acr": "",
       "amr": [
         "pwd"

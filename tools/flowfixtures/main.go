@@ -297,26 +297,49 @@ func (f *fixtures) recordErrors(auth string, ttl time.Duration) error {
 		slog.Info("expired cases skipped: no -ttl")
 		return nil
 	}
+	// Pending requests, not skips: two new browsers, as the session above
+	// outlives the logout (its verifier is not followed), each keeping the
+	// CSRF cookies its verifier needs; and the consent for another subject,
+	// as Hydra remembers alice's.
+	loginBrowser, _ := cookiejar.New(nil)
+	consentBrowser, _ := cookiejar.New(nil)
+	f.http.Jar = loginBrowser
 	pendingLogin, err := f.challengeFrom(auth, "login_challenge")
 	if err != nil {
 		return err
 	}
+	f.http.Jar = consentBrowser
 	second, err := f.challengeFrom(auth, "login_challenge")
 	if err != nil {
 		return err
 	}
-	pendingConsent, err := f.acceptLogin(second, loginAccept)
+	pendingConsent, err := f.acceptLogin(second, jsonBody(map[string]any{"subject": "carol", "amr": []string{"pwd"}}))
 	if err != nil {
 		return err
 	}
 	slog.Info("waiting for the requests to expire", "ttl", ttl)
 	time.Sleep(ttl + 2*time.Second)
-	return f.recordAll(
-		call{"login_expired", get, loginPath, "login_challenge", pendingLogin, nil},
-		call{"login_expired_accept", put, loginPath + "/accept", "login_challenge", pendingLogin, loginAccept},
-		call{"consent_expired", get, consentPath, "consent_challenge", pendingConsent, nil},
-		call{"consent_expired_accept", put, consentPath + "/accept", "consent_challenge", pendingConsent, consentAccept},
-	)
+	if err := f.recordAll(call{"login_expired", get, loginPath, "login_challenge", pendingLogin, nil}); err != nil {
+		return err
+	}
+	loginLate, err := f.record(call{"login_expired_accept", put, loginPath + "/accept", "login_challenge", pendingLogin, loginAccept})
+	if err != nil {
+		return err
+	}
+	if err := f.recordAll(call{"consent_expired", get, consentPath, "consent_challenge", pendingConsent, nil}); err != nil {
+		return err
+	}
+	consentLate, err := f.record(call{"consent_expired_accept", put, consentPath + "/accept", "consent_challenge", pendingConsent, consentAccept})
+	if err != nil {
+		return err
+	}
+	// Where Hydra stops an expired request, when the admin API accepts it.
+	f.http.Jar = loginBrowser
+	if err := f.recordReplay("login_expired_verifier", loginLate); err != nil {
+		return err
+	}
+	f.http.Jar = consentBrowser
+	return f.recordReplay("consent_expired_verifier", consentLate)
 }
 
 // call is one admin API exchange to record under name.

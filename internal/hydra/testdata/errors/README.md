@@ -14,7 +14,7 @@ rerun it for each Hydra release the dispatcher supports.
 
 One exchange per file: `request` (`method`, `uri` with the challenge left
 out, `body`) and `response` (`status`, `content_type`, `body`; `location` for
-a redirect, with only Hydra's error parameters kept). The two `*_verifier*`
+a redirect, with only Hydra's error parameters kept). The `*_verifier*`
 cases are a browser on Hydra's public port, not the admin API: the test
 skips them.
 
@@ -42,8 +42,9 @@ the accept.
 | `login_other_subject_verifier` | follow its verifier | — | 302 to a new login | 302 to a new login |
 | `login_bad_body` | `subject` as a number | 400 | 400 | 400 |
 | `logout_handled`, `logout_accept_again` | GET, accept again an accepted logout | 200 | 200 | 200 |
-| `login_expired`, `login_expired_accept` | GET, accept a login request past its lifetime | 200 | 401 `request_unauthorized` | 401 |
-| `consent_expired`, `consent_expired_accept` | the same for a consent | 200 | 401 | 401 |
+| `login_expired`, `login_expired_accept` | GET, accept a pending login request past its lifetime, from a new browser | 200 | 401 `request_unauthorized` | 401 |
+| `consent_expired`, `consent_expired_accept` | the same for a consent, of another subject than the remembered one | 200 | 401 | 401 |
+| `login_expired_verifier`, `consent_expired_verifier` | follow the verifier of that accept | 303 `request_unauthorized`, "request has expired" | — | — |
 
 ## What it means for the dispatcher
 
@@ -56,8 +57,11 @@ the accept.
 - A skip accepted with another subject fails in 2.1 (400). From 2.2 the
   accept succeeds and Hydra silently starts a new login: without its own
   subject check (E1003), the dispatcher would loop.
-- Hydra 2.1 does not expire a login or consent request on the admin API:
-  the dispatcher's own expiry is what ends it. From 2.2, an expired request is
-  a 401 `request_unauthorized`.
+- Hydra 2.1 reads and accepts an expired login or consent request on the
+  admin API, then refuses its verifier: the client gets
+  `request_unauthorized`, "The login request has expired". From 2.2, the
+  admin API itself answers 401 `request_unauthorized`. In every version the
+  dispatcher's flow must end before Hydra's `ttl.login_consent_request`: on
+  2.1, past it, the user goes through every step to an error at the client.
 - A logout request stays readable and acceptable once accepted, in every
   version.

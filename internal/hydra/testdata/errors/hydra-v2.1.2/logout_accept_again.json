@@ -7,7 +7,7 @@
     "status": 200,
     "content_type": "application/json; charset=utf-8",
     "body": {
-      "redirect_to": "http://127.0.0.1:4444/oauth2/sessions/logout?logout_verifier=ce7858f1-fd98-4655-b540-51e01f214b0a"
+      "redirect_to": "http://127.0.0.1:4444/oauth2/sessions/logout?logout_verifier=078030a4-1398-485f-9816-09a034c18372"
     }
   }
 }

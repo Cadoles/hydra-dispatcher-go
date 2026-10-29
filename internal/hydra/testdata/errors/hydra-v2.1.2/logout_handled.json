@@ -7,9 +7,9 @@
     "status": 200,
     "content_type": "application/json; charset=utf-8",
     "body": {
-      "challenge": "0608a0d4-0fc3-45f2-9dd6-ef6351bc9876",
+      "challenge": "b56f7346-ae49-44a5-bf51-5f4dcce05885",
       "subject": "alice",
-      "sid": "d590f308-62ba-417c-82ff-1a2abd4260d0",
+      "sid": "01ed8026-7b1f-4fdd-a1bc-e58fef8801d8",
       "request_url": "/oauth2/sessions/logout",
       "rp_initiated": false,
       "client": null
