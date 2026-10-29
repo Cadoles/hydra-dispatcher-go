@@ -15,9 +15,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # setup-go may install the go directive's version; the go command then
-      # switches to the toolchain directive's, the image's. Fail if another
-      # one runs (GOTOOLCHAIN=local on an older setup-go, say).
+      # setup-go may install the go directive's version and set
+      # GOTOOLCHAIN=local: name the toolchain directive's, the image's, which
+      # the go command then fetches. Fail if another one still runs.
+      - name: Toolchain
+        run: echo "GOTOOLCHAIN=$(sed -n 's/^toolchain //p' go.mod)" >> "$GITHUB_ENV"
+
       - name: Go version
         run: |
           go version
@@ -25,6 +28,11 @@ jobs:
 
       - name: Tidy
         run: go mod tidy -diff
+
+      # The go command checks a module against go.sum when it downloads it,
+      # not in the module cache setup-go restores.
+      - name: Verify modules
+        run: go mod verify
 
       - name: Build
         run: go build ./...
