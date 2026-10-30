@@ -3,6 +3,7 @@ package flow
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,8 +52,16 @@ func testEnv() Env {
 		LoginConsentTTL: 30 * time.Minute,
 		Keys:            testKeys,
 		Now:             testNow,
+		Draw:            Draw{Gen0: 5000, CSRF: newCSRF},
 	}
 }
+
+// cookie is the browser's dispatcher_flow_csrf; newCSRF the value drawn for
+// a browser without one.
+var (
+	cookie  = strings.Repeat("ab", 32)
+	newCSRF = strings.Repeat("cd", 32)
+)
 
 // loginRequest decodes the fixture as the admin client does: the client and
 // the oidc_context as served.

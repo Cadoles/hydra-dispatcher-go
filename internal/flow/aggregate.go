@@ -7,34 +7,12 @@ import (
 	"maps"
 	"strconv"
 	"strings"
-	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
-
-// Env is what a transition reads besides the flow and its event.
-type Env struct {
-	Config *store.Snapshot
-	// BaseURL is server.base_url, that of every URL served.
-	BaseURL string
-	// LoginConsentTTL is hydra.login_consent_ttl, Hydra's
-	// ttl.login_consent_request.
-	LoginConsentTTL time.Duration
-	Keys            Keys
-	Now             time.Time
-}
-
-// appIDs returns the ids of the snapshot's apps.
-func (e Env) appIDs() []string {
-	ids := make([]string, len(e.Config.Apps))
-	for i, a := range e.Config.Apps {
-		ids[i] = a.ID
-	}
-	return ids
-}
 
 var jsonNull = []byte("null")
 
