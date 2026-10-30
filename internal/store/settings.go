@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"net/url"
+	"reflect"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -64,8 +68,8 @@ var registry = []setting{
 	{"remember", "ask Hydra to remember the login and the consent", func(s *Settings) any { return &s.Remember }},
 	{"login_remember_for", "lifetime of Hydra's login session and of the skip memory, in seconds", func(s *Settings) any { return &s.LoginRememberFor }},
 	{"consent_remember_for", "how long Hydra remembers a consent, in seconds", func(s *Settings) any { return &s.ConsentRememberFor }},
-	{"login_accept_webhook_url", "webhook called before the login accept, empty for none", func(s *Settings) any { return &s.LoginAcceptWebhookURL }},
-	{"consent_accept_webhook_url", "webhook called before the consent accept, empty for none", func(s *Settings) any { return &s.ConsentAcceptWebhookURL }},
+	{"login_accept_webhook_url", "webhook called before the login accept: http(s) URL, file:// URL or command, empty for none", func(s *Settings) any { return &s.LoginAcceptWebhookURL }},
+	{"consent_accept_webhook_url", "webhook called before the consent accept: http(s) URL, file:// URL or command, empty for none", func(s *Settings) any { return &s.ConsentAcceptWebhookURL }},
 	{"supported_locales", "locales of the pages", func(s *Settings) any { return &s.SupportedLocales }},
 	{"default_locale", "locale of the pages when the browser asks for none of them", func(s *Settings) any { return &s.DefaultLocale }},
 	{"fallback_locale", "locale of a text missing from the page's locale", func(s *Settings) any { return &s.FallbackLocale }},
@@ -106,27 +110,58 @@ func (st setting) decode(raw []byte, s *Settings) error {
 			return err
 		}
 		n, ok := v.(json.Number)
-		secs, err := n.Int64()
-		if !ok || err != nil || secs > math.MaxInt64/int64(time.Second) || secs < math.MinInt64/int64(time.Second) {
+		if !ok {
 			return fmt.Errorf("%s is not a whole number of seconds", bytes.TrimSpace(raw))
+		}
+		secs, err := seconds(n)
+		if err != nil {
+			return fmt.Errorf("%s %w", n, err)
 		}
 		*p = time.Duration(secs) * time.Second
 	default:
+		// Into a zero value: over the default, a null element of a list
+		// would keep the default's element at its place.
+		reflect.ValueOf(p).Elem().SetZero()
 		if err := dec.Decode(p); err != nil {
 			return err
 		}
 	}
-	if dec.More() {
+	// Nothing after the value: More would let a ] or a } through.
+	if _, err := dec.Token(); err != io.EOF {
 		return errors.New("holds more than one value")
 	}
 	return nil
+}
+
+// maxSeconds is the most seconds a time.Duration holds, either way.
+const maxSeconds = math.MaxInt64 / int64(time.Second)
+
+// seconds reads a whole number of seconds. 3600.0, as Postgres keeps a
+// number written so, is whole too.
+func seconds(n json.Number) (int64, error) {
+	secs, err := n.Int64()
+	if err != nil {
+		// Past float64, ±Inf and an error: out of range below.
+		f, ferr := n.Float64()
+		if ferr == nil && f != math.Trunc(f) {
+			return 0, errors.New("is not a whole number of seconds")
+		}
+		if ferr != nil || math.Abs(f) > float64(maxSeconds) {
+			return 0, fmt.Errorf("is out of range: %d seconds at most", maxSeconds)
+		}
+		secs = int64(f)
+	}
+	if secs > maxSeconds || secs < -maxSeconds {
+		return 0, fmt.Errorf("is out of range: %d seconds at most", maxSeconds)
+	}
+	return secs, nil
 }
 
 // encode returns the JSON of the field of st in s.
 func (st setting) encode(s *Settings) []byte {
 	v := st.field(s)
 	if d, ok := v.(*time.Duration); ok {
-		v = int64(*d / time.Second)
+		v = int64(*d / time.Second) // whole: Validate refuses a fraction
 	}
 	b, _ := json.Marshal(v) // bools, numbers, strings and string lists
 	return b
@@ -134,14 +169,52 @@ func (st setting) encode(s *Settings) []byte {
 
 // settingsFrom assembles the rows of the setting table, by key, over the
 // defaults, and validates them. An unknown key is a warning, so that an older
-// version still starts on the table of a newer one; a value of the wrong type
-// is an error.
+// version still starts on the table of a newer one, and so is a locale it has
+// no catalog for (tolerate); a value of the wrong type is an error.
 func settingsFrom(rows map[string][]byte) (Settings, []string, error) {
 	s, warnings, err := decodeSettings(rows)
 	if err != nil {
 		return Settings{}, warnings, err
 	}
+	warnings = append(warnings, s.tolerate()...)
 	return s, warnings, s.Validate()
+}
+
+// tolerate sets aside the locales this version has no catalog for, which a
+// newer one may have written: they leave supported_locales, and
+// default_locale and fallback_locale fall back to a locale this version has.
+// Each is a warning, as an unknown key is, so that a rollback starts without
+// cleaning the table. What writes the table validates without it.
+func (s *Settings) tolerate() []string {
+	var warnings []string
+	unknown := func(l string) bool { return l != "" && !slices.Contains(catalogLocales, l) }
+	defaults := DefaultSettings()
+	var kept []string
+	for _, l := range s.SupportedLocales {
+		if unknown(l) {
+			warnings = append(warnings, fmt.Sprintf("setting supported_locales: %q has no catalog in this version: ignored", l))
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if len(kept) == 0 && len(s.SupportedLocales) > 0 {
+		kept = defaults.SupportedLocales
+		warnings = append(warnings, fmt.Sprintf("setting supported_locales: no locale left, %q used", kept))
+	}
+	s.SupportedLocales = kept
+	if unknown(s.DefaultLocale) && len(s.SupportedLocales) > 0 {
+		l := defaults.DefaultLocale
+		if !slices.Contains(s.SupportedLocales, l) {
+			l = s.SupportedLocales[0]
+		}
+		warnings = append(warnings, fmt.Sprintf("setting default_locale: %q has no catalog in this version: %q used", s.DefaultLocale, l))
+		s.DefaultLocale = l
+	}
+	if unknown(s.FallbackLocale) {
+		warnings = append(warnings, fmt.Sprintf("setting fallback_locale: %q has no catalog in this version: %q used", s.FallbackLocale, defaults.FallbackLocale))
+		s.FallbackLocale = defaults.FallbackLocale
+	}
+	return warnings
 }
 
 // decodeSettings is settingsFrom without the validation.
@@ -165,8 +238,8 @@ func decodeSettings(rows map[string][]byte) (Settings, []string, error) {
 	return s, warnings, nil
 }
 
-// Validate checks the settings as a whole: positive durations, webhook URLs,
-// locales that have a catalog.
+// Validate checks the settings as a whole: durations in whole positive
+// seconds, webhook locations, locales that have a catalog.
 func (s Settings) Validate() error {
 	var errs []error
 	fail := func(key, format string, args ...any) {
@@ -180,8 +253,11 @@ func (s Settings) Validate() error {
 		{"login_remember_for", s.LoginRememberFor},
 		{"consent_remember_for", s.ConsentRememberFor},
 	} {
-		if d.value <= 0 {
+		switch {
+		case d.value <= 0:
 			fail(d.key, "must be positive")
+		case d.value%time.Second != 0:
+			fail(d.key, "must be a whole number of seconds")
 		}
 	}
 	for _, u := range []struct{ key, value string }{
@@ -191,8 +267,8 @@ func (s Settings) Validate() error {
 		if u.value == "" {
 			continue
 		}
-		if p, err := url.Parse(u.value); err != nil || p.Host == "" || (p.Scheme != "http" && p.Scheme != "https") {
-			fail(u.key, "is not an absolute http(s) URL")
+		if err := checkWebhook(u.value); err != nil {
+			fail(u.key, "%v", err)
 		}
 	}
 	if len(s.SupportedLocales) == 0 {
@@ -200,6 +276,8 @@ func (s Settings) Validate() error {
 	}
 	for i, l := range s.SupportedLocales {
 		switch {
+		case l == "":
+			fail("supported_locales", "holds an empty locale")
 		case !slices.Contains(catalogLocales, l):
 			fail("supported_locales", "%q has no catalog, only %v do", l, catalogLocales)
 		case slices.Contains(s.SupportedLocales[:i], l):
@@ -213,4 +291,34 @@ func (s Settings) Validate() error {
 		fail("fallback_locale", "%q has no catalog, only %v do", s.FallbackLocale, catalogLocales)
 	}
 	return errors.Join(errs...)
+}
+
+// uriScheme is the scheme of a URL (RFC 3986), colon included.
+var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
+
+// checkWebhook checks a webhook location as Symfony reads it: an http(s) URL;
+// a file:// URL, the program to run without arguments; or, without a scheme,
+// a command line, split on spaces and run without a shell.
+func checkWebhook(location string) error {
+	scheme := strings.TrimSuffix(uriScheme.FindString(location), ":")
+	if scheme == "" {
+		if strings.TrimSpace(location) == "" {
+			return errors.New("is a blank command")
+		}
+		return nil
+	}
+	u, err := url.Parse(location)
+	switch strings.ToLower(scheme) {
+	case "http", "https":
+		if err != nil || u.Host == "" {
+			return errors.New("is not an absolute http(s) URL")
+		}
+	case "file":
+		if err != nil || u.Path == "" {
+			return errors.New("is a file:// URL without a path")
+		}
+	default:
+		return fmt.Errorf("has the scheme %q: http, https or file, or a command without a scheme", scheme)
+	}
+	return nil
 }

@@ -208,6 +208,35 @@ dispatcher:
 	}
 }
 
+// An older version bootstraps on the table of a newer one: the locales it has
+// no catalog for are tolerated there, as Snapshot tolerates them, and left as
+// they are. The seed's own are not.
+func TestBootstrapNewerLocales(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	exec(t, p, `INSERT INTO setting (key, value) VALUES ('supported_locales', '["fr", "en", "de"]'), ('default_locale', '"de"')`)
+	if _, err := p.Bootstrap(ctx, loadSeed(t, "dispatcher:\n  app_auto_select: true\n"), Force, true); err != nil {
+		t.Fatalf("Bootstrap = %v", err)
+	}
+	var locales string
+	if err := p.db.QueryRow(`SELECT value::text FROM setting WHERE key = 'supported_locales'`).Scan(&locales); err != nil || locales != `["fr", "en", "de"]` {
+		t.Errorf("supported_locales = %s, %v; want it left as it is", locales, err)
+	}
+	_, err := p.Bootstrap(ctx, loadSeed(t, "dispatcher:\n  supported_locales: [fr, de]\n"), Force, true)
+	if err == nil || !strings.Contains(err.Error(), `setting supported_locales: "de" has no catalog`) {
+		t.Errorf("Bootstrap of a locale without a catalog = %v", err)
+	}
+}
+
+// A duration of the seed that is not whole seconds is refused, not cut.
+func TestBootstrapFractionOfASecond(t *testing.T) {
+	p := migrated(t)
+	_, err := p.Bootstrap(context.Background(), loadSeed(t, "dispatcher:\n  challenge_ttl: 1500ms\n"), Missing, true)
+	if err == nil || !strings.Contains(err.Error(), "setting challenge_ttl: must be a whole number of seconds") {
+		t.Errorf("Bootstrap = %v", err)
+	}
+}
+
 // Replicas bootstrapping at once, as serve.bootstrap force has them: the
 // lock lets one write, the others find everything there.
 func TestBootstrapConcurrently(t *testing.T) {

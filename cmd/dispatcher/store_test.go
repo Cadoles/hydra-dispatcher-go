@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -30,6 +31,11 @@ type fakeStore struct {
 
 	// snapshotErr fails Snapshot, the first one of serve included.
 	snapshotErr error
+	// warnings are those of the snapshots.
+	warnings []string
+	// deadlines are the time left to the first migrate, bootstrap and
+	// snapshot, when their context has a deadline.
+	deadlines map[string]time.Duration
 }
 
 func (f *fakeStore) record(call string) {
@@ -38,17 +44,29 @@ func (f *fakeStore) record(call string) {
 	f.calls = append(f.calls, call)
 }
 
+func (f *fakeStore) deadline(ctx context.Context, call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if d, ok := ctx.Deadline(); ok && f.deadlines[call] == 0 {
+		if f.deadlines == nil {
+			f.deadlines = map[string]time.Duration{}
+		}
+		f.deadlines[call] = time.Until(d)
+	}
+}
+
 func (f *fakeStore) Calls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.calls)
 }
 
-func (f *fakeStore) Snapshot(context.Context) (*store.Snapshot, error) {
+func (f *fakeStore) Snapshot(ctx context.Context) (*store.Snapshot, error) {
+	f.deadline(ctx, "snapshot")
 	if f.snapshotErr != nil {
 		return nil, f.snapshotErr
 	}
-	return &store.Snapshot{Settings: store.DefaultSettings()}, nil
+	return &store.Snapshot{Settings: store.DefaultSettings(), Warnings: f.warnings}, nil
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -58,12 +76,14 @@ func (f *fakeStore) Close() error {
 	return nil
 }
 
-func (f *fakeStore) Migrate(context.Context) ([]string, error) {
+func (f *fakeStore) Migrate(ctx context.Context) ([]string, error) {
+	f.deadline(ctx, "migrate")
 	f.record("migrate")
 	return f.applied, nil
 }
 
-func (f *fakeStore) Bootstrap(_ context.Context, _ config.Seed, mode store.Mode, write bool) ([]store.Change, error) {
+func (f *fakeStore) Bootstrap(ctx context.Context, _ config.Seed, mode store.Mode, write bool) ([]store.Change, error) {
+	f.deadline(ctx, "bootstrap")
 	name := map[store.Mode]string{store.Missing: "missing", store.Force: "force"}[mode]
 	f.record("bootstrap " + name + " " + map[bool]string{true: "write", false: "dry"}[write])
 	return f.changes, nil
@@ -196,6 +216,27 @@ func TestServePreparesStore(t *testing.T) {
 	// A change left as it is logged, an unchanged one is not.
 	if strings.Contains(logs, `"action":"same"`) || strings.Index(logs, "bootstrap.done") > strings.Index(logs, "server.started") {
 		t.Errorf("logs:\n%s", logs)
+	}
+}
+
+// serve gives its migrations, its bootstrap and its first read a time limit:
+// a database that took the connection and no longer answers stops it.
+func TestServeStartupDeadlines(t *testing.T) {
+	keepLoggers(t)
+	commandEnv(t, "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", "DISPATCHER_SERVE_MIGRATE=true", "DISPATCHER_SERVE_BOOTSTRAP=missing")
+	f := &fakeStore{}
+	useStore(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var err error
+	_ = stdoutOf(t, func() { err = serve(ctx, nil) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for call, want := range map[string]time.Duration{"migrate": migrateTimeout, "bootstrap": startupTimeout, "snapshot": startupTimeout} {
+		if left := f.deadlines[call]; left <= want-5*time.Second || left > want {
+			t.Errorf("%s: %v left, want %v", call, left, want)
+		}
 	}
 }
 

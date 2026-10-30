@@ -41,9 +41,9 @@ func serve(ctx context.Context, args []string) error {
 	if *configPath != os.Getenv(configEnv) {
 		switch probe, err := probeURL(); {
 		case err != nil:
-			logs.startup.Warn("config.warning", "detail", fmt.Sprintf("healthcheck without -url fails on %s: %v; give the file by %s rather than by -config", configEnv, err, configEnv))
+			logs.warnings.Warn("config.warning", "detail", fmt.Sprintf("healthcheck without -url fails on %s: %v; give the file by %s rather than by -config", configEnv, err, configEnv))
 		case probe != healthURL(cfg.Server.Listen):
-			logs.startup.Warn("config.warning", "detail", fmt.Sprintf("server.listen is %q, but healthcheck without -url probes %s; give the file by %s rather than by -config", cfg.Server.Listen, probe, configEnv))
+			logs.warnings.Warn("config.warning", "detail", fmt.Sprintf("server.listen is %q, but healthcheck without -url probes %s; give the file by %s rather than by -config", cfg.Server.Listen, probe, configEnv))
 		}
 	}
 
@@ -66,7 +66,7 @@ func serve(ctx context.Context, args []string) error {
 		<-refreshed
 		closeStores(logger, &inFlight, states, db)
 	}
-	live, err := startConfig(ctx, cfg, db, logger)
+	live, err := startConfig(ctx, cfg, db, logs)
 	if err != nil {
 		close(refreshed)
 		stop()
@@ -101,8 +101,8 @@ func serve(ctx context.Context, args []string) error {
 	return nil
 }
 
-// loggers are the application, access and startup loggers of newLoggers.
-type loggers struct{ app, access, startup *slog.Logger }
+// loggers are the application, access and warnings loggers of newLoggers.
+type loggers struct{ app, access, warnings *slog.Logger }
 
 // loadConfig reads the configuration, makes its application logger the
 // default and logs its warnings.
@@ -116,21 +116,23 @@ func loadConfig(path string) (*config.Config, loggers, error) {
 		return nil, loggers{}, fmt.Errorf("configuration: %w", err)
 	}
 	var l loggers
-	l.app, l.access, l.startup = newLoggers(os.Stdout, cfg.Observability)
+	l.app, l.access, l.warnings = newLoggers(os.Stdout, cfg.Observability)
 	slog.SetDefault(l.app)
 	for _, w := range warnings {
-		l.startup.Warn("config.warning", "detail", w)
+		l.warnings.Warn("config.warning", "detail", w)
 	}
 	return cfg, l, nil
 }
 
 // startConfig applies serve.migrate and serve.bootstrap, then reads the first
 // snapshot of the configuration.
-func startConfig(ctx context.Context, cfg *config.Config, db configStore, logger *slog.Logger) (*store.Live, error) {
-	if err := prepareStore(ctx, cfg, db, logger); err != nil {
+func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs loggers) (*store.Live, error) {
+	if err := prepareStore(ctx, cfg, db, logs.app); err != nil {
 		return nil, err
 	}
-	return store.NewLive(ctx, db, logger)
+	readCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	return store.NewLive(readCtx, db, logs.app, logs.warnings)
 }
 
 // shutdownGrace is how long in-flight requests may run after SIGTERM, and
@@ -201,18 +203,19 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, database 
 	), nil
 }
 
-// newLoggers returns the application, access and startup loggers. The access
+// newLoggers returns the application, access and warnings loggers. The access
 // log has its own level, info: access_log_sample sets its volume, and its
-// errors and aborted requests are written whatever log_level. The startup
-// logger, at warn, writes the configuration warnings whatever log_level too:
-// some warn of an allowlist open to every client.
-func newLoggers(w io.Writer, o config.Observability) (app, access, startup *slog.Logger) {
+// errors and aborted requests are written whatever log_level. The warnings
+// logger, at warn, writes the configuration warnings whatever log_level too,
+// those of the file at startup and those of the database's snapshots: some
+// warn of an allowlist open to every client.
+func newLoggers(w io.Writer, o config.Observability) (app, access, warnings *slog.Logger) {
 	var level slog.Level
 	_ = level.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
 	app = slog.New(newLogHandler(w, o.LogFormat, level)).With("log_type", "app")
 	access = slog.New(newLogHandler(w, o.LogFormat, slog.LevelInfo)).With("log_type", "access")
-	startup = slog.New(newLogHandler(w, o.LogFormat, slog.LevelWarn)).With("log_type", "app")
-	return app, access, startup
+	warnings = slog.New(newLogHandler(w, o.LogFormat, slog.LevelWarn)).With("log_type", "app")
+	return app, access, warnings
 }
 
 // newLogHandler writes one JSON (or text) line per record, stamped with the

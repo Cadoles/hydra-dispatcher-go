@@ -97,10 +97,18 @@ func TestSettingsFrom(t *testing.T) {
 		`{"consent_auto_accept": null}`:           "setting consent_auto_accept: is null",
 		`{"challenge_ttl": 1.5}`:                  "setting challenge_ttl: 1.5 is not a whole number of seconds",
 		`{"challenge_ttl": "3600"}`:               `setting challenge_ttl: "3600" is not a whole number of seconds`,
-		`{"challenge_ttl": 10000000000000000000}`: "is not a whole number of seconds",
+		`{"challenge_ttl": 10000000000000000000}`: "setting challenge_ttl: 10000000000000000000 is out of range: 9223372036 seconds at most",
+		`{"challenge_ttl": 9223372036}`:           "", // the longest a time.Duration holds
+		`{"challenge_ttl": 9223372037}`:           "setting challenge_ttl: 9223372037 is out of range",
+		`{"challenge_ttl": 1e400}`:                "setting challenge_ttl: 1e400 is out of range",
+		`{"challenge_ttl": 3600.0}`:               "", // as Postgres keeps it
+		`{"challenge_ttl": 1e3}`:                  "",
 		`{"default_locale": "fr" }`:               "",
 		`{"supported_locales": ["fr", 1]}`:        "setting supported_locales: json: cannot unmarshal number",
 		`{"challenge_ttl": 0}`:                    "setting challenge_ttl: must be positive",
+		// A null element is empty, not the default's element at its place.
+		`{"supported_locales": [null]}`:       "setting supported_locales: holds an empty locale",
+		`{"supported_locales": ["fr", null]}`: "setting supported_locales: holds an empty locale",
 	} {
 		rows := map[string][]byte{}
 		// One key per case: split the object by hand.
@@ -114,8 +122,13 @@ func TestSettingsFrom(t *testing.T) {
 			t.Errorf("%s: err = %v, want %q", raw, err, want)
 		}
 	}
-	if _, _, err := settingsFrom(map[string][]byte{"remember": []byte("true false")}); err == nil || !strings.Contains(err.Error(), "more than one value") {
-		t.Errorf("two values: err = %v", err)
+	for _, raw := range []string{"true false", "true]", "true }"} {
+		if _, _, err := settingsFrom(map[string][]byte{"remember": []byte(raw)}); err == nil || !strings.Contains(err.Error(), "more than one value") {
+			t.Errorf("%q: err = %v", raw, err)
+		}
+	}
+	if s, _, err := settingsFrom(map[string][]byte{"challenge_ttl": []byte("3600.0")}); err != nil || s.ChallengeTTL != time.Hour {
+		t.Errorf("3600.0: %v, %v", s.ChallengeTTL, err)
 	}
 }
 
@@ -126,9 +139,14 @@ func TestSettingsValidate(t *testing.T) {
 	}{
 		"login lifetime":       {func(s *Settings) { s.LoginRememberFor = 0 }, "setting login_remember_for: must be positive"},
 		"consent lifetime":     {func(s *Settings) { s.ConsentRememberFor = -time.Second }, "setting consent_remember_for: must be positive"},
-		"relative webhook":     {func(s *Settings) { s.LoginAcceptWebhookURL = "/hook" }, "setting login_accept_webhook_url: is not an absolute http(s) URL"},
-		"webhook scheme":       {func(s *Settings) { s.ConsentAcceptWebhookURL = "ftp://hooks/consent" }, "setting consent_accept_webhook_url"},
+		"under a second":       {func(s *Settings) { s.ChallengeTTL = 500 * time.Millisecond }, "setting challenge_ttl: must be a whole number of seconds"},
+		"fraction of a second": {func(s *Settings) { s.LoginRememberFor = 1500 * time.Millisecond }, "setting login_remember_for: must be a whole number of seconds"},
+		"webhook without host": {func(s *Settings) { s.LoginAcceptWebhookURL = "http:///hook" }, "setting login_accept_webhook_url: is not an absolute http(s) URL"},
+		"webhook scheme":       {func(s *Settings) { s.ConsentAcceptWebhookURL = "ftp://hooks/consent" }, `setting consent_accept_webhook_url: has the scheme "ftp"`},
+		"file without path":    {func(s *Settings) { s.LoginAcceptWebhookURL = "file://" }, "setting login_accept_webhook_url: is a file:// URL without a path"},
+		"blank command":        {func(s *Settings) { s.LoginAcceptWebhookURL = "   " }, "setting login_accept_webhook_url: is a blank command"},
 		"no locale":            {func(s *Settings) { s.SupportedLocales = nil }, "setting supported_locales: is empty"},
+		"empty locale":         {func(s *Settings) { s.SupportedLocales = []string{"fr", ""} }, "setting supported_locales: holds an empty locale"},
 		"locale without texts": {func(s *Settings) { s.SupportedLocales = []string{"fr", "de"} }, `setting supported_locales: "de" has no catalog`},
 		"locale twice":         {func(s *Settings) { s.SupportedLocales = []string{"fr", "fr"} }, `"fr" is listed twice`},
 		"default unsupported":  {func(s *Settings) { s.SupportedLocales = []string{"en"} }, `setting default_locale: "fr" is not in supported_locales`},
@@ -139,5 +157,84 @@ func TestSettingsValidate(t *testing.T) {
 		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tt.want)
 		}
+	}
+}
+
+// A webhook is where Symfony found it: an http(s) URL, a file:// URL or a
+// command line without a scheme.
+func TestWebhookLocations(t *testing.T) {
+	for _, location := range []string{
+		"http://hooks/login",
+		"HTTPS://hooks/consent",
+		"file:///opt/hooks/login",
+		"/opt/hooks/login",
+		`/opt/hooks/login --at=10:00 "two words"`,
+		"login-hook",
+	} {
+		s := DefaultSettings()
+		s.LoginAcceptWebhookURL = location
+		if err := s.Validate(); err != nil {
+			t.Errorf("%q: %v", location, err)
+		}
+	}
+}
+
+// A locale this version has no catalog for, which a newer one may have
+// written, is set aside with a warning, so that a rollback starts on its
+// table. Validate, what writers call, still refuses it.
+func TestSettingsTolerate(t *testing.T) {
+	for name, tt := range map[string]struct {
+		rows     map[string]string
+		want     func(*Settings)
+		warnings []string
+	}{
+		"newer locales": {
+			rows: map[string]string{"supported_locales": `["fr", "de", "en"]`, "default_locale": `"de"`, "fallback_locale": `"es"`},
+			warnings: []string{
+				`setting supported_locales: "de" has no catalog in this version: ignored`,
+				`setting default_locale: "de" has no catalog in this version: "fr" used`,
+				`setting fallback_locale: "es" has no catalog in this version: "en" used`,
+			},
+		},
+		"none left": {
+			rows: map[string]string{"supported_locales": `["de"]`, "default_locale": `"de"`},
+			warnings: []string{
+				`setting supported_locales: "de" has no catalog in this version: ignored`,
+				`setting supported_locales: no locale left, ["fr" "en"] used`,
+				`setting default_locale: "de" has no catalog in this version: "fr" used`,
+			},
+		},
+		"default not supported": {
+			rows: map[string]string{"supported_locales": `["en", "de"]`, "default_locale": `"de"`},
+			want: func(s *Settings) { s.SupportedLocales, s.DefaultLocale = []string{"en"}, "en" },
+			warnings: []string{
+				`setting supported_locales: "de" has no catalog in this version: ignored`,
+				`setting default_locale: "de" has no catalog in this version: "en" used`,
+			},
+		},
+	} {
+		rows := map[string][]byte{}
+		for k, v := range tt.rows {
+			rows[k] = []byte(v)
+		}
+		got, warnings, err := settingsFrom(rows)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		want := DefaultSettings()
+		if tt.want != nil {
+			tt.want(&want)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: settings = %+v\nwant %+v", name, got, want)
+		}
+		if !slices.Equal(warnings, tt.warnings) {
+			t.Errorf("%s: warnings = %q\nwant %q", name, warnings, tt.warnings)
+		}
+	}
+	// What no version would write stays an error.
+	if _, _, err := settingsFrom(map[string][]byte{"supported_locales": []byte(`["fr", "de", "fr"]`)}); err == nil || !strings.Contains(err.Error(), "listed twice") {
+		t.Errorf("a locale twice: err = %v", err)
 	}
 }

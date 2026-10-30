@@ -365,8 +365,8 @@ func (s *closedState) Close() error {
 	return s.StateStore.Close()
 }
 
-// Configuration warnings are written whatever log_level: some warn of an
-// allowlist open to every client.
+// Configuration warnings are written whatever log_level, those of the file as
+// those of the database: some warn of an allowlist open to every client.
 func TestServeWarningsAtErrorLevel(t *testing.T) {
 	keepLoggers(t)
 	for _, kv := range append(requiredEnv("http://127.0.0.1:1"),
@@ -374,6 +374,7 @@ func TestServeWarningsAtErrorLevel(t *testing.T) {
 		k, v, _ := strings.Cut(kv, "=")
 		t.Setenv(k, v)
 	}
+	useStore(t, &fakeStore{warnings: []string{`setting "x" is unknown to this version: ignored`}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var err error
@@ -381,6 +382,9 @@ func TestServeWarningsAtErrorLevel(t *testing.T) {
 	// No server.started: log_level still applies to the rest.
 	if err != nil || !strings.Contains(logs, `"msg":"config.warning"`) || strings.Contains(logs, "server.started") {
 		t.Errorf("err = %v, logs:\n%s", err, logs)
+	}
+	if !strings.Contains(logs, `"detail":"setting \"x\" is unknown to this version: ignored"`) {
+		t.Errorf("the snapshot's warning is missing at log_level error:\n%s", logs)
 	}
 }
 

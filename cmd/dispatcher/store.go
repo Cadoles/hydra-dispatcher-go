@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -126,11 +127,24 @@ func bootstrapMode(setting string) (store.Mode, bool) {
 	return 0, false
 }
 
+// migrateTimeout bounds the migrations of serve: goose waits up to 5 min for
+// another replica's, then applies. startupTimeout bounds its bootstrap and
+// its first read of the configuration. Past them, serve stops: a database
+// that took the connection and no longer answers would otherwise hold it
+// without a word.
+const (
+	migrateTimeout = 10 * time.Minute
+	startupTimeout = 30 * time.Second
+)
+
 // prepareStore applies serve.migrate and serve.bootstrap: out of a terminal,
 // the changes are written without question, and logged.
 func prepareStore(ctx context.Context, cfg *config.Config, db configStore, logger *slog.Logger) error {
 	if cfg.Serve.Migrate {
-		if err := runMigrations(ctx, db, logger); err != nil {
+		migrateCtx, cancel := context.WithTimeout(ctx, migrateTimeout)
+		err := runMigrations(migrateCtx, db, logger)
+		cancel()
+		if err != nil {
 			return err
 		}
 	}
@@ -138,7 +152,9 @@ func prepareStore(ctx context.Context, cfg *config.Config, db configStore, logge
 	if !ok {
 		return nil
 	}
-	changes, err := db.Bootstrap(ctx, cfg.Seed, mode, true)
+	bootstrapCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	changes, err := db.Bootstrap(bootstrapCtx, cfg.Seed, mode, true)
 	if err != nil {
 		return err
 	}

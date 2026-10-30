@@ -4,25 +4,34 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/netip"
-	"slices"
-	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	_ "github.com/jackc/pgx/v5/stdlib" // the pgx driver of database/sql
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
+
+// versionTable is where goose notes the migrations applied, and migrateLock
+// the session lock of the replicas that migrate: the dispatcher's own, not
+// goose's defaults, which another application of the database may use.
+const (
+	versionTable = "dispatcher_schema_version"
+	migrateLock  = 0x646973706d696772 // "dispmigr"
+)
 
 // Postgres is the database of the configuration.
 type Postgres struct {
@@ -32,10 +41,13 @@ type Postgres struct {
 // Open connects to the database at dsn, a postgres:// URL or a pgx
 // connection string, and checks that it answers.
 func Open(ctx context.Context, dsn string) (*Postgres, error) {
-	db, err := sql.Open("pgx", dsn)
+	// Parsed here, not at the first connection: the error names the key.
+	// pgx masks the password in it.
+	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store.dsn: %w", err)
 	}
+	db := stdlib.OpenDB(*cfg)
 	// The configuration is read every 60 s and written by bootstrap and the
 	// admin: a few connections are plenty.
 	db.SetMaxOpenConns(4)
@@ -64,16 +76,7 @@ func (p *Postgres) Close() error { return p.db.Close() }
 // A session lock lets several replicas migrate at startup: one applies, the
 // others wait for it.
 func (p *Postgres) Migrate(ctx context.Context) ([]string, error) {
-	fsys, err := fs.Sub(migrations, "migrations")
-	if err != nil {
-		return nil, err
-	}
-	locker, err := lock.NewPostgresSessionLocker()
-	if err != nil {
-		return nil, err
-	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, p.db, fsys,
-		goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
+	provider, err := p.migrator()
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +89,21 @@ func (p *Postgres) Migrate(ctx context.Context) ([]string, error) {
 		return applied, fmt.Errorf("migrate: %w", err)
 	}
 	return applied, nil
+}
+
+// migrator gives the embedded migrations, their version table and their
+// session lock.
+func (p *Postgres) migrator() (*goose.Provider, error) {
+	fsys, err := fs.Sub(migrations, "migrations")
+	if err != nil {
+		return nil, err
+	}
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(migrateLock))
+	if err != nil {
+		return nil, err
+	}
+	return goose.NewProvider(goose.DialectPostgres, p.db, fsys, goose.WithTableName(versionTable),
+		goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
 }
 
 // App is a login app.
@@ -101,7 +119,9 @@ type App struct {
 	AuthMode              string
 	AllowedSources        []netip.Prefix
 	ClientCertFingerprint string
-	Options               map[string]any
+	// Options are free JSON, numbers as json.Number: a float64 would round
+	// an id of 20 digits.
+	Options map[string]any
 }
 
 // Flow is a sequence of apps the user may choose.
@@ -126,10 +146,13 @@ type Step struct {
 // Snapshot is the configuration at one moment, read in one transaction.
 // Nothing changes it: Live replaces it whole.
 type Snapshot struct {
-	Apps     []App  // by id
-	Flows    []Flow // by id, as the choice page lists them
+	// Apps and Flows are by id in byte order, whatever the collation of the
+	// database: the choice page lists the flows the same on every server.
+	Apps     []App
+	Flows    []Flow
 	Settings Settings
-	// Warnings are the unknown settings of the table.
+	// Warnings are what this version sets aside of the setting table:
+	// unknown keys, locales without a catalog.
 	Warnings []string
 	apps     map[string]int
 }
@@ -180,7 +203,7 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT id, login_url, consent_url, coalesce(logout_url, ''), method, auth_mode,
 		       allowed_sources::text[], coalesce(client_cert_fingerprint, ''), options
-		FROM app ORDER BY id`)
+		FROM app ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +225,7 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 			}
 			a.AllowedSources = append(a.AllowedSources, prefix)
 		}
-		if err := json.Unmarshal(options, &a.Options); err != nil {
+		if err := unmarshalNumbers(options, &a.Options); err != nil {
 			return nil, fmt.Errorf("app %s: options: %w", a.ID, err)
 		}
 		apps = append(apps, a)
@@ -210,8 +233,15 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 	return apps, rows.Err()
 }
 
+// unmarshalNumbers is json.Unmarshal with numbers as json.Number, exact.
+func unmarshalNumbers(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return dec.Decode(v)
+}
+
 func readFlows(ctx context.Context, q querier) ([]Flow, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, title, description, icon_url, enabled, coalesce(acr, '') FROM flow ORDER BY id`)
+	rows, err := q.QueryContext(ctx, `SELECT id, title, description, icon_url, enabled, coalesce(acr, '') FROM flow ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +264,12 @@ func readFlows(ctx context.Context, q querier) ([]Flow, error) {
 			if err := json.Unmarshal(l.raw, l.into); err != nil {
 				return nil, fmt.Errorf("flow %s: %s: %w", f.ID, l.name, err)
 			}
+			// A null or empty text is none, as internal/config drops it from
+			// the seed: the page falls back to another locale.
+			maps.DeleteFunc(*l.into, func(_, text string) bool { return text == "" })
+		}
+		if len(f.IconURL) == 0 {
+			f.IconURL = nil
 		}
 		flows = append(flows, f)
 	}
@@ -242,7 +278,11 @@ func readFlows(ctx context.Context, q querier) ([]Flow, error) {
 	}
 	_ = rows.Close()
 
-	steps, err := q.QueryContext(ctx, `SELECT flow_id, app_id, position, subject_check FROM flow_step ORDER BY flow_id, position`)
+	byID := make(map[string]int, len(flows))
+	for i, f := range flows {
+		byID[f.ID] = i
+	}
+	steps, err := q.QueryContext(ctx, `SELECT flow_id, app_id, position, subject_check FROM flow_step ORDER BY position`)
 	if err != nil {
 		return nil, err
 	}
@@ -253,8 +293,7 @@ func readFlows(ctx context.Context, q querier) ([]Flow, error) {
 		if err := steps.Scan(&flowID, &s.AppID, &s.Position, &s.SubjectCheck); err != nil {
 			return nil, err
 		}
-		// Both sorted by id: the flow is found by binary search.
-		i, ok := slices.BinarySearchFunc(flows, flowID, func(f Flow, id string) int { return strings.Compare(f.ID, id) })
+		i, ok := byID[flowID]
 		if !ok {
 			return nil, fmt.Errorf("step of an unknown flow %q", flowID) // the foreign key forbids it
 		}

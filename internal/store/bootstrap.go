@@ -10,7 +10,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/bcrypt"
@@ -169,7 +168,8 @@ func (b *bootstrap) settings(seed config.Seed) error {
 	}
 	values := seedSettings(seed.SeedSettings)
 	next := current
-	var write, reset []setting
+	// changed are the keys whose value the seed sets, or resets.
+	var write, reset, changed []setting
 	for _, st := range registry {
 		_, inDB := rows[st.key]
 		switch v, set := values[st.key]; {
@@ -182,6 +182,8 @@ func (b *bootstrap) settings(seed config.Seed) error {
 			if inDB && b.mode != Force {
 				// Left as it is.
 				reflect.ValueOf(st.field(&next)).Elem().Set(reflect.ValueOf(st.field(&current)).Elem())
+			} else {
+				changed = append(changed, st)
 			}
 		case slices.Contains(seed.NullSettings, st.key):
 			c := Change{Kind: "setting", ID: st.key, Action: Same}
@@ -191,6 +193,7 @@ func (b *bootstrap) settings(seed config.Seed) error {
 				defaults := DefaultSettings()
 				reflect.ValueOf(st.field(&next)).Elem().Set(reflect.ValueOf(st.field(&defaults)).Elem())
 				reset = append(reset, st)
+				changed = append(changed, st)
 			case inDB:
 				c.Action = Keep
 			}
@@ -201,7 +204,15 @@ func (b *bootstrap) settings(seed config.Seed) error {
 		_, set := values[key]
 		return set || slices.Contains(seed.NullSettings, key)
 	})
-	if err := next.Validate(); err != nil {
+	// What the seed sets is validated as it is; what the table keeps is
+	// tolerated as Snapshot tolerates it, so that the locales a newer
+	// version wrote do not refuse the bootstrap of an older one.
+	check := current
+	check.tolerate()
+	for _, st := range changed {
+		reflect.ValueOf(st.field(&check)).Elem().Set(reflect.ValueOf(st.field(&next)).Elem())
+	}
+	if err := check.Validate(); err != nil {
 		return err
 	}
 	if !b.write {
@@ -244,12 +255,6 @@ func seedSettings(s config.SeedSettings) map[string]any {
 	put("supported_locales", s.SupportedLocales != nil, func() any { return []string(*s.SupportedLocales) })
 	put("default_locale", s.DefaultLocale != nil, func() any { return *s.DefaultLocale })
 	put("fallback_locale", s.FallbackLocale != nil, func() any { return *s.FallbackLocale })
-	// A setting written in seconds: a duration under one would be lost.
-	for key, v := range values {
-		if d, ok := v.(time.Duration); ok && d%time.Second != 0 {
-			values[key] = d.Truncate(time.Second)
-		}
-	}
 	return values
 }
 
@@ -318,14 +323,14 @@ func appFromSeed(a config.SeedApp) (App, error) {
 	if len(sources) == 0 {
 		sources = nil
 	}
-	// Through JSON, as the database gives them back: numbers as float64.
+	// Through JSON, as the database gives them back: numbers as json.Number.
 	options := map[string]any{}
 	if len(a.Options) > 0 {
 		raw, err := json.Marshal(a.Options)
 		if err != nil {
 			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
 		}
-		if err := json.Unmarshal(raw, &options); err != nil {
+		if err := unmarshalNumbers(raw, &options); err != nil {
 			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
 		}
 	}
@@ -463,7 +468,7 @@ func (b *bootstrap) clients(seed config.Seed) error {
 }
 
 func readAPIClients(ctx context.Context, q querier) ([]apiClient, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, secret_hash, scopes FROM api_client ORDER BY id`)
+	rows, err := q.QueryContext(ctx, `SELECT id, secret_hash, scopes FROM api_client ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
