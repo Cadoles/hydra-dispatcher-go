@@ -361,7 +361,7 @@ func stringMember(doc map[string]json.RawMessage, name string) string {
 
 // answer decodes the body of a 2xx with decode, in place of the SDK's model:
 // the SDK refuses a client whose jwks has a key without alg, kid or use (see
-// decodeClient), and decodes an XML Content-Type as XML. The SDK leaves the
+// DecodeClient), and decodes an XML Content-Type as XML. The SDK leaves the
 // whole body in resp.Body, so its decoding error on a 2xx is moot; a body it
 // could not read stays an error.
 func answer[T any](resp *http.Response, err error, decode func([]byte) (*T, error)) (*T, *http.Response, error) {

@@ -203,7 +203,7 @@ func TestJWKSKeptAsServed(t *testing.T) {
 	}
 	var set ory.JsonWebKeySet
 	if json.Unmarshal(data, &set) == nil {
-		t.Error("the SDK's model takes a key without alg, kid or use: decodeClient may decode the jwks again")
+		t.Error("the SDK's model takes a key without alg, kid or use: DecodeClient may decode the jwks again")
 	}
 	for _, tt := range []struct {
 		path         string

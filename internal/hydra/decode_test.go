@@ -44,3 +44,28 @@ func TestDecodeLogoutClient(t *testing.T) {
 		t.Errorf("client = %+v, jwks %s", r.Client, jwks)
 	}
 }
+
+func TestDecodeOIDCContext(t *testing.T) {
+	for _, data := range []string{"", "null"} {
+		if o, err := DecodeOIDCContext(json.RawMessage(data)); o != nil || err != nil {
+			t.Errorf("DecodeOIDCContext(%q) = %v, %v; want nil, nil", data, o, err)
+		}
+	}
+	if _, err := DecodeOIDCContext(json.RawMessage(`[]`)); err == nil {
+		t.Error("an oidc_context that is not an object is decoded")
+	}
+	// The state store keeps it as JSON: decoded again, it is served as Hydra
+	// served it.
+	in := `{"acr_values":["a"],"id_token_hint_claims":{"n":123456789012345678901},"x":{"n":123456789012345678901}}`
+	o, err := DecodeOIDCContext(json.RawMessage(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != in {
+		t.Errorf("oidc_context\n got %s\nwant %s", out, in)
+	}
+}

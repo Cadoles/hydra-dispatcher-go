@@ -13,6 +13,8 @@ import (
 	"io/fs"
 	"maps"
 	"net/netip"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -157,6 +159,25 @@ type Snapshot struct {
 	apps     map[string]int
 }
 
+// NewSnapshot returns the snapshot of apps, flows and settings read
+// elsewhere, sorted by id in byte order (tests, other sources).
+func NewSnapshot(apps []App, flows []Flow, settings Settings) *Snapshot {
+	s := &Snapshot{
+		Apps:     slices.SortedFunc(slices.Values(apps), func(a, b App) int { return strings.Compare(a.ID, b.ID) }),
+		Flows:    slices.SortedFunc(slices.Values(flows), func(a, b Flow) int { return strings.Compare(a.ID, b.ID) }),
+		Settings: settings,
+	}
+	s.index()
+	return s
+}
+
+func (s *Snapshot) index() {
+	s.apps = make(map[string]int, len(s.Apps))
+	for i, a := range s.Apps {
+		s.apps[a.ID] = i
+	}
+}
+
 // App returns the app id.
 func (s *Snapshot) App(id string) (App, bool) {
 	i, ok := s.apps[id]
@@ -179,13 +200,11 @@ func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 		return nil, fmt.Errorf("read configuration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // read-only: nothing to commit
-	s := &Snapshot{apps: map[string]int{}}
+	s := &Snapshot{}
 	if s.Apps, err = readApps(ctx, tx); err != nil {
 		return nil, fmt.Errorf("read apps: %w", err)
 	}
-	for i, a := range s.Apps {
-		s.apps[a.ID] = i
-	}
+	s.index()
 	if s.Flows, err = readFlows(ctx, tx); err != nil {
 		return nil, fmt.Errorf("read flows: %w", err)
 	}

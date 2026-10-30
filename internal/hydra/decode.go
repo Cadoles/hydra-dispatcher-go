@@ -72,7 +72,7 @@ func decodeLogoutRequest(body []byte) (*ory.OAuth2LogoutRequest, error) {
 }
 
 // decodeRequest decodes a login, consent or logout request into the SDK's
-// model. keep then sets its client, decoded by decodeClient (nil for null or
+// model. keep then sets its client, decoded by DecodeClient (nil for null or
 // nothing), and puts back from the request's members the values the model
 // holds in an interface{} (see keepRaw).
 func decodeRequest[T any](body []byte, keep func(*T, *ory.OAuth2Client, map[string]json.RawMessage)) (*T, error) {
@@ -86,7 +86,7 @@ func decodeRequest[T any](body []byte, keep func(*T, *ory.OAuth2Client, map[stri
 	if members == nil {
 		return nil, errEmptyAnswer
 	}
-	client, err := decodeClient(members["client"])
+	client, err := DecodeClient(members["client"])
 	if err != nil {
 		return nil, fmt.Errorf("client: %w", err)
 	}
@@ -105,14 +105,15 @@ func decodeRequest[T any](body []byte, keep func(*T, *ory.OAuth2Client, map[stri
 	return v, nil
 }
 
-// decodeClient decodes a client Hydra serves, nil for null or nothing. The
-// SDK requires alg, kid and use on every key of a jwks, where RFC 7517 only
+// DecodeClient decodes a client Hydra serves, nil for null or nothing: the
+// client of a request the admin API answers, or the one the state store kept
+// as JSON. The SDK requires alg, kid and use on every key of a jwks, where RFC 7517 only
 // requires kty and Hydra checks the key material alone: one such key would
 // fail the whole request. The jwks is therefore kept as Hydra served it, in
 // AdditionalProperties, which the SDK serialises over its own fields; GetJwks
 // is empty. Its metadata and unknown members are kept as served too (see
 // keepRaw).
-func decodeClient(data json.RawMessage) (*ory.OAuth2Client, error) {
+func DecodeClient(data json.RawMessage) (*ory.OAuth2Client, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
@@ -139,6 +140,21 @@ func decodeClient(data json.RawMessage) (*ory.OAuth2Client, error) {
 		c.AdditionalProperties["jwks"] = jwks
 	}
 	return &c, nil
+}
+
+// DecodeOIDCContext decodes an oidc_context as Hydra serves it, nil for null
+// or nothing, its unknown members and id_token_hint_claims kept as served
+// (see keepRaw).
+func DecodeOIDCContext(data json.RawMessage) (*ory.OAuth2ConsentRequestOpenIDConnectContext, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return nil, nil
+	}
+	var o ory.OAuth2ConsentRequestOpenIDConnectContext
+	if err := json.Unmarshal(data, &o); err != nil {
+		return nil, err
+	}
+	keepRawOIDCContext(&o, data)
+	return &o, nil
 }
 
 // keepRaw sets the values of props back to the JSON Hydra served, taken

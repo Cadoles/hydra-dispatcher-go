@@ -21,3 +21,16 @@ func TestOpenErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestNewSnapshot(t *testing.T) {
+	s := NewSnapshot([]App{{ID: "b"}, {ID: "a"}, {ID: "B"}}, []Flow{{ID: "y"}, {ID: "x"}}, DefaultSettings())
+	if s.Apps[0].ID != "B" || s.Apps[1].ID != "a" || s.Flows[0].ID != "x" {
+		t.Errorf("not in byte order: %v, %v", s.Apps, s.Flows)
+	}
+	if a, ok := s.App("b"); !ok || a.ID != "b" {
+		t.Errorf("App(b) = %v, %v", a, ok)
+	}
+	if _, ok := s.App("c"); ok {
+		t.Error("App(c) found")
+	}
+}
