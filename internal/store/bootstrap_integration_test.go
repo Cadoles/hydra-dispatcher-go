@@ -4,6 +4,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/url"
 	"os"
 	"reflect"
 	"slices"
@@ -135,7 +138,7 @@ dispatcher:
 		t.Fatal(err)
 	}
 	want := []string{
-		"keep setting consent_auto_accept: value", "keep setting remember", "absent setting old_key",
+		"keep setting consent_auto_accept: value", "keep setting remember: value", "absent setting old_key",
 		"keep app a: login_url,options",
 		"create flow f", "absent flow legacy",
 		"keep api_client c: secret,scopes",
@@ -154,7 +157,7 @@ dispatcher:
 		t.Fatal(err)
 	}
 	want = []string{
-		"update setting consent_auto_accept: value", "reset setting remember", "absent setting old_key",
+		"update setting consent_auto_accept: value", "reset setting remember: value", "absent setting old_key",
 		"update app a: login_url,options",
 		"same flow f", "absent flow legacy",
 		"update api_client c: secret,scopes",
@@ -164,6 +167,10 @@ dispatcher:
 	}
 	if f := changes[0].Fields[0]; f.Old != "true" || f.New != "false" {
 		t.Errorf("consent_auto_accept: %s -> %s", f.Old, f.New)
+	}
+	// A reset shows the value it drops and the default it gives.
+	if f := changes[1].Fields[0]; f.Old != "false" || f.New != "true" {
+		t.Errorf("remember: %s -> %s", f.Old, f.New)
 	}
 	if f := changes[6].Fields[0]; !f.Secret || f.Old != "" || f.New != "" {
 		t.Errorf("secret change = %+v, want no value", f)
@@ -237,25 +244,241 @@ func TestBootstrapFractionOfASecond(t *testing.T) {
 	}
 }
 
-// Replicas bootstrapping at once, as serve.bootstrap force has them: the
-// lock lets one write, the others find everything there.
+// Replicas bootstrapping at once, as serve.bootstrap force has them, each on
+// its pool: the lock lets one write, the others find everything there.
+// Without it, they would all announce the creations, ON CONFLICT hiding the
+// race. In repeatable read, the default of some databases, the snapshot of a
+// replica that waited would predate the writes of the first.
 func TestBootstrapConcurrently(t *testing.T) {
-	p := migrated(t)
 	data, err := os.ReadFile("../config/testdata/hydra-dev-dispatcher.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	seed := loadSeed(t, string(data))
-	errs := make(chan error, 3)
-	for range 3 {
-		go func() {
-			_, err := p.Bootstrap(context.Background(), seed, Force, true)
-			errs <- err
-		}()
+	for _, isolation := range []string{"read committed", "repeatable read"} {
+		t.Run(isolation, func(t *testing.T) {
+			p := migrated(t)
+			exec(t, p, fmt.Sprintf(`ALTER DATABASE %s SET default_transaction_isolation = '%s'`, databaseName(t, p), isolation))
+			type result struct {
+				changes []Change
+				err     error
+			}
+			results := make(chan result, 3)
+			for range 3 {
+				r := replica(t, p)
+				go func() {
+					changes, err := r.Bootstrap(context.Background(), seed, Force, true)
+					results <- result{changes, err}
+				}()
+			}
+			writers := 0
+			for range 3 {
+				res := <-results
+				if res.err != nil {
+					t.Fatal(res.err)
+				}
+				lines := actions(res.changes)
+				if slices.ContainsFunc(lines, func(l string) bool { return strings.HasPrefix(l, "create ") }) {
+					writers++
+				} else if slices.ContainsFunc(lines, func(l string) bool { return !strings.HasPrefix(l, "same ") }) {
+					t.Errorf("a replica after the first: %q", lines)
+				}
+			}
+			if writers != 1 {
+				t.Errorf("%d replicas created the seed, want 1", writers)
+			}
+		})
 	}
-	for range 3 {
-		if err := <-errs; err != nil {
-			t.Error(err)
+}
+
+func databaseName(t *testing.T, p *Postgres) string {
+	t.Helper()
+	var name string
+	if err := p.db.QueryRow(`SELECT current_database()`).Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
+// replica opens another pool on the database of p, as another replica does:
+// its connections take the settings the database has now.
+func replica(t *testing.T, p *Postgres) *Postgres {
+	t.Helper()
+	u, err := url.Parse(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + databaseName(t, p)
+	r, err := Open(context.Background(), u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
+
+// Every kind of field comes back as written: a second pass, with or without
+// force, finds it the same. The numbers of the options too, which jsonb
+// writes without exponent.
+func TestBootstrapRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	fingerprint := strings.Repeat("AB:", 31) + "CD"
+	seed := loadSeed(t, `
+dispatcher:
+  apps:
+    - id: a
+      login_url: http://a/login
+      consent_url: http://a/consent
+      method: pwd
+      allowed_sources: ["10.0.0.1", "::ffff:10.1.0.0/112", "2001:DB8::/32", "10.2.0.1/16"]
+      options: { tolerance: 0.0000001, big: 1e21, zero: -0.0, uint: 12345678901234567890, scale: 1.50, nested: { list: [1, "x", ~, true] } }
+    - { id: m, login_url: http://m/login, consent_url: http://m/consent, logout_url: http://m/logout, method: otp, auth_mode: mtls, client_cert_fingerprint: "`+fingerprint+`" }
+  flows:
+    - id: f
+      title: F
+      description: { fr: D, en: "" }
+      icon_url: http://i/f.svg
+      acr: gold
+      enabled: false
+      steps: [{ id: a, order: 0, subject_check: equal }, { id: m, order: 1, subject_check: "claim:email" }]
+  oauth2_clients:
+    - { id: c, secret: s3cret, scopes: [] }
+`)
+	if _, err := p.Bootstrap(ctx, seed, Missing, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []Mode{Missing, Force} {
+		changes, err := p.Bootstrap(ctx, seed, mode, true)
+		if err != nil {
+			t.Fatal(err)
 		}
+		for _, c := range changes {
+			if c.Action != Same {
+				t.Errorf("mode %d, second pass: %s %s %s: %+v", mode, c.Action, c.Kind, c.ID, c.Fields)
+			}
+		}
+	}
+
+	s, err := p.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.App("a")
+	var sources []string
+	for _, src := range a.AllowedSources {
+		sources = append(sources, src.String())
+	}
+	if !slices.Equal(sources, []string{"10.0.0.1/32", "10.1.0.0/16", "2001:db8::/32", "10.2.0.0/16"}) ||
+		a.Options["tolerance"] != json.Number("0.0000001") || a.Options["big"] != json.Number("1000000000000000000000") ||
+		a.Options["zero"] != json.Number("0") || a.Options["uint"] != json.Number("12345678901234567890") {
+		t.Errorf("app a: sources %q, options %v", sources, a.Options)
+	}
+	if m, _ := s.App("m"); m.AuthMode != "mtls" || m.ClientCertFingerprint != strings.ToLower(strings.ReplaceAll(fingerprint, ":", "")) ||
+		m.AllowedSources != nil || m.LogoutURL != "http://m/logout" {
+		t.Errorf("app m = %+v", m)
+	}
+	want := Flow{
+		ID: "f", Title: map[string]string{"": "F"}, Description: map[string]string{"fr": "D"}, IconURL: map[string]string{"": "http://i/f.svg"},
+		ACR: "gold", Steps: []Step{{"a", 0, "equal"}, {"m", 1, "claim:email"}},
+	}
+	if !reflect.DeepEqual(s.Flows, []Flow{want}) {
+		t.Errorf("flows = %+v\nwant %+v", s.Flows, want)
+	}
+}
+
+// Force rewrites the steps of a flow whole, and the scopes of a client while
+// it keeps the hash of its unchanged secret. A setting reset takes its
+// default, which the next pass finds the same.
+func TestBootstrapRewrites(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	const content = `
+dispatcher:
+  apps:
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd }
+    - { id: b, login_url: http://b/login, consent_url: http://b/consent, method: otp }
+    - { id: c, login_url: http://c/login, consent_url: http://c/consent, method: oidc }
+  flows:
+    - { id: f, title: F, description: D, steps: %s }
+  oauth2_clients:
+    - { id: client, secret: s3cret, scopes: %s }
+  remember: %s
+`
+	first := fmt.Sprintf(content, "[{ id: a, order: 0 }, { id: b, order: 1, subject_check: equal }, { id: c, order: 2 }]", "[admin:flows]", "false")
+	if _, err := p.Bootstrap(ctx, loadSeed(t, first), Missing, true); err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := clientHash(t, p, "client")
+
+	second := loadSeed(t, fmt.Sprintf(content, "[{ id: b, order: 0 }, { id: a, order: 1 }]", "[admin:apps]", "~"))
+	changes, err := p.Bootstrap(ctx, second, Force, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"reset setting remember: value", "same app a", "same app b", "same app c",
+		"update flow f: steps", "update api_client client: scopes",
+	}
+	if got := actions(changes); !slices.Equal(got, want) {
+		t.Errorf("changes = %q\nwant %q", got, want)
+	}
+	s, _ := p.Snapshot(ctx)
+	if !reflect.DeepEqual(s.Flows[0].Steps, []Step{{"b", 0, "none"}, {"a", 1, "none"}}) || !s.Settings.Remember {
+		t.Errorf("steps = %+v, remember = %v", s.Flows[0].Steps, s.Settings.Remember)
+	}
+	if again, scopes := clientHash(t, p, "client"); again != hash || !slices.Equal(scopes, []string{"admin:apps"}) {
+		t.Errorf("client: hash kept %v, scopes %q", again == hash, scopes)
+	}
+
+	changes, err = p.Bootstrap(ctx, second, Force, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range actions(changes) {
+		if !strings.HasPrefix(line, "same ") {
+			t.Errorf("third pass: %s", line)
+		}
+	}
+}
+
+// A failure after the first writes leaves nothing behind.
+func TestBootstrapRollback(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	exec(t, p, `CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$`)
+	exec(t, p, `CREATE TRIGGER refuse BEFORE INSERT ON api_client FOR EACH ROW EXECUTE FUNCTION refuse()`)
+	data, err := os.ReadFile("../config/testdata/hydra-dev-dispatcher.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Bootstrap(ctx, loadSeed(t, string(data)), Missing, true); err == nil || !strings.Contains(err.Error(), "API client test: ERROR: refused") {
+		t.Fatalf("Bootstrap = %v, want the client refused", err)
+	}
+	var rows int
+	if err := p.db.QueryRow(`SELECT (SELECT count(*) FROM setting) + (SELECT count(*) FROM app) + (SELECT count(*) FROM flow) + (SELECT count(*) FROM flow_step)`).Scan(&rows); err != nil || rows != 0 {
+		t.Errorf("%d rows left, %v", rows, err)
+	}
+}
+
+// A secret past the 72 bytes bcrypt reads is hashed first, as Symfony does:
+// the next pass finds it the same, as it does against a hash Symfony made.
+func TestBootstrapLongSecret(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	seed := loadSeed(t, "dispatcher:\n  oauth2_clients:\n    - { id: c, secret: "+symfonySecret+" }\n")
+	if _, err := p.Bootstrap(ctx, seed, Missing, true); err != nil {
+		t.Fatal(err)
+	}
+	if hash, _ := clientHash(t, p, "c"); bcrypt.CompareHashAndPassword([]byte(hash), bcryptInput(symfonySecret)) != nil {
+		t.Errorf("hash %q does not check", hash)
+	}
+	exec(t, p, `UPDATE api_client SET secret_hash = $1`, symfonyHash)
+	changes, err := p.Bootstrap(ctx, seed, Force, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actions(changes); !slices.Equal(got, []string{"same api_client c"}) {
+		t.Errorf("changes = %q", got)
 	}
 }

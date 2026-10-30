@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"reflect"
 	"regexp"
 	"slices"
@@ -35,6 +36,9 @@ type Seed struct {
 	// SessionTTL is the Symfony name of login_remember_for, the duration
 	// Symfony sent at the login accept: Load moves it there.
 	SessionTTL *Duration `yaml:"session_ttl"`
+	// bothLoginTTLs records that the file has session_ttl and
+	// login_remember_for both, null or not: validate refuses it.
+	bothLoginTTLs bool
 
 	// Symfony keys with no Go counterpart: accepted, then ignored with a
 	// warning.
@@ -295,6 +299,9 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 			if positions[step.Position] {
 				fail(stepPath, "position %d is already taken in this flow", step.Position)
 			}
+			if step.Position < math.MinInt32 || step.Position > math.MaxInt32 {
+				fail(stepPath, "position %d is out of range: the database keeps 32-bit integers", step.Position)
+			}
 			stepApps[step.AppID], positions[step.Position] = true, true
 			if c := step.SubjectCheck; c != "" && c != "none" && c != "equal" && (!strings.HasPrefix(c, "claim:") || c == "claim:") {
 				fail(stepPath+".subject_check", "%q is not none, equal or claim:<name>", c)
@@ -314,7 +321,8 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	if s.ChallengeTTL != nil && *s.ChallengeTTL <= 0 {
 		fail("dispatcher.challenge_ttl", "must be positive")
 	}
-	if s.SessionTTL != nil {
+	// Null included: session_ttl: ~ would reset what login_remember_for sets.
+	if s.SessionTTL != nil || s.bothLoginTTLs {
 		fail("dispatcher.session_ttl", "is the Symfony name of login_remember_for, which is set too: keep login_remember_for")
 	}
 	// The cookie would expire at once, while Hydra reads 0 as no expiry.

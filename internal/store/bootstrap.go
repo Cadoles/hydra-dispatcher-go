@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha512"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/bcrypt"
@@ -51,7 +54,7 @@ type Change struct {
 	Kind   string // setting, app, flow or api_client
 	ID     string
 	Action Action
-	// Fields are those an Update or a Keep changes, or would change.
+	// Fields are those an Update, a Reset or a Keep changes, or would change.
 	Fields []FieldChange
 }
 
@@ -77,7 +80,11 @@ const bootstrapBy = "bootstrap"
 // the seed; the settings it gives are validated as a whole before anything
 // is written.
 func (p *Postgres) Bootstrap(ctx context.Context, seed config.Seed, mode Mode, write bool) ([]Change, error) {
-	tx, err := p.db.BeginTx(ctx, nil)
+	// Read committed, whatever the default of the database: each statement
+	// then sees what the replica that held the lock committed. In repeatable
+	// read, the snapshot would date from the lock statement, before the wait,
+	// and the insert of a row that replica wrote would fail.
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
@@ -187,15 +194,17 @@ func (b *bootstrap) settings(seed config.Seed) error {
 			}
 		case slices.Contains(seed.NullSettings, st.key):
 			c := Change{Kind: "setting", ID: st.key, Action: Same}
-			switch {
-			case inDB && b.mode == Force:
-				c.Action = Reset
+			if inDB {
+				// The value the row holds, and the default it gives way to.
 				defaults := DefaultSettings()
-				reflect.ValueOf(st.field(&next)).Elem().Set(reflect.ValueOf(st.field(&defaults)).Elem())
-				reset = append(reset, st)
-				changed = append(changed, st)
-			case inDB:
-				c.Action = Keep
+				fc, _ := field{name: "value", old: json.RawMessage(st.encode(&current)), new: json.RawMessage(st.encode(&defaults))}.change()
+				c.Action, c.Fields = Keep, []FieldChange{fc}
+				if b.mode == Force {
+					c.Action = Reset
+					reflect.ValueOf(st.field(&next)).Elem().Set(reflect.ValueOf(st.field(&defaults)).Elem())
+					reset = append(reset, st)
+					changed = append(changed, st)
+				}
 			}
 			b.changes = append(b.changes, c)
 		}
@@ -264,7 +273,7 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		return fmt.Errorf("read apps: %w", err)
 	}
 	for _, sa := range seed.Apps {
-		a, err := appFromSeed(sa)
+		a, err := b.appFromSeed(sa)
 		if err != nil {
 			return err
 		}
@@ -315,7 +324,7 @@ func (b *bootstrap) apps(seed config.Seed) error {
 }
 
 // appFromSeed gives a seed app the form readApps reads.
-func appFromSeed(a config.SeedApp) (App, error) {
+func (b *bootstrap) appFromSeed(a config.SeedApp) (App, error) {
 	sources, err := a.AllowedSources.Prefixes()
 	if err != nil {
 		return App{}, fmt.Errorf("app %s: %w", a.ID, err)
@@ -323,11 +332,16 @@ func appFromSeed(a config.SeedApp) (App, error) {
 	if len(sources) == 0 {
 		sources = nil
 	}
-	// Through JSON, as the database gives them back: numbers as json.Number.
+	// Through jsonb, as the database gives them back: it keeps a number as a
+	// numeric, written without exponent and never -0, where encoding/json
+	// writes 1e-07 for 0.0000001. Numbers as json.Number.
 	options := map[string]any{}
 	if len(a.Options) > 0 {
 		raw, err := json.Marshal(a.Options)
 		if err != nil {
+			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
+		}
+		if err := b.tx.QueryRowContext(b.ctx, `SELECT $1::jsonb::text`, string(raw)).Scan(&raw); err != nil {
 			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
 		}
 		if err := unmarshalNumbers(raw, &options); err != nil {
@@ -434,7 +448,7 @@ func (b *bootstrap) clients(seed config.Seed) error {
 			old = current[i]
 		}
 		// Once: bcrypt is slow on purpose.
-		sameSecret := i >= 0 && bcrypt.CompareHashAndPassword([]byte(old.secretHash), []byte(sc.Secret)) == nil
+		sameSecret := i >= 0 && bcrypt.CompareHashAndPassword([]byte(old.secretHash), bcryptInput(sc.Secret)) == nil
 		if !b.decide("api_client", sc.ID, i >= 0, []field{
 			{name: "secret", secret: func() bool { return sameSecret }},
 			{name: "scopes", old: old.scopes, new: scopes},
@@ -444,7 +458,7 @@ func (b *bootstrap) clients(seed config.Seed) error {
 		// An unchanged secret keeps its hash: a new salt would show as a change.
 		hash := old.secretHash
 		if !sameSecret {
-			h, err := bcrypt.GenerateFromPassword([]byte(sc.Secret), bcrypt.DefaultCost)
+			h, err := bcrypt.GenerateFromPassword(bcryptInput(sc.Secret), bcrypt.DefaultCost)
 			if err != nil {
 				return fmt.Errorf("API client %s: %w", sc.ID, err)
 			}
@@ -465,6 +479,19 @@ func (b *bootstrap) clients(seed config.Seed) error {
 		return slices.ContainsFunc(seed.OAuth2Clients, func(c config.SeedClient) bool { return c.ID == id })
 	})
 	return nil
+}
+
+// bcryptInput is what bcrypt hashes of a client secret, the secret itself up
+// to the 72 bytes bcrypt reads. A longer one, or one holding a NUL, is hashed
+// first, as Symfony's NativePasswordHasher does: SHA-512 in base64, of which
+// bcrypt reads 72 bytes too. Whatever checks a secret against its hash goes
+// through it.
+func bcryptInput(secret string) []byte {
+	if len(secret) <= 72 && !strings.ContainsRune(secret, 0) {
+		return []byte(secret)
+	}
+	sum := sha512.Sum512([]byte(secret))
+	return []byte(base64.StdEncoding.EncodeToString(sum[:])[:72])
 }
 
 func readAPIClients(ctx context.Context, q querier) ([]apiClient, error) {

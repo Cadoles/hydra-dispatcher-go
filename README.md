@@ -26,7 +26,8 @@ the `server.listen` to probe: in a container, give the file by the variable.
 seed); `-force` rewrites too what the database holds of it, and resets the
 settings the seed sets to `~`. Neither deletes. `-dry-run` prints the changes
 and writes nothing; in a terminal, `-force` prints them and asks, unless
-`-yes`. `serve` migrates at startup with `serve.migrate: true`, and
+`-yes`. The changes go to stdout alone, the log lines to stderr. `serve`
+migrates at startup with `serve.migrate: true`, and
 bootstraps with `serve.bootstrap: missing` or `force`, logging the changes.
 
 `serve` exposes `/health` (liveness) and `/ready` (Hydra and the database

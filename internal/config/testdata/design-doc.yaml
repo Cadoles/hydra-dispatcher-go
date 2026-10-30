@@ -1,10 +1,12 @@
-# Example configuration of "Conception Dispatcher Go.md" v1.1.0, section
-# "Configuration et deploiement", copied verbatim: it must keep loading.
+# Example configuration of "Conception Dispatcher Go.md" v1.3.5, section
+# "Configuration et deploiement", copied verbatim but for the sections not
+# implemented yet (emulated_api, consent): it must keep loading.
 server:
   listen: ":8080"
   base_url: "http://dispatcher.hydra.test"
   trusted_proxies: ["10.0.0.10"]  # obligatoire : les reverse proxies seulement, [] sans proxy
   cookie_path: "/"
+  replicas_hint: 1              # > 1 refuse le store d'état en mémoire
 hydra:
   admin_url: "http://hydra:4445"
   timeout: 5s
@@ -14,7 +16,7 @@ hydra:
   login_consent_ttl: 30m        # = ttl.login_consent_request d'Hydra
 security:
   admin_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]   # /admin et /admin/v1
-  emulated_api_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]   # login apps
+  emulated_api_authorized_hosts: ["10.0.1.0/24"]   # obligatoire, sans défaut : réseaux d'où appellent les login apps
   failure_rate_limit: { max: 20, per: 1m, block: 5m }
   metrics_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 secrets:
@@ -32,6 +34,8 @@ tls:
   hsts_include_subdomains: false
 state:
   redis_dsn: "${REDIS_DSN}"     # renseigné = Redis (voie privilégiée) ; vide = mémoire, instance unique
+  key_prefix: ""                # préfixe des clés, distinct pendant une cohabitation sur le même Redis
+  redis_pool_size: 0            # 0 = 10 connexions par cœur
 remember:
   backend: cookie               # cookie | postgres
 store:
@@ -78,6 +82,9 @@ observability:
     endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
     protocol: grpc               # grpc | http/protobuf
     sampler_ratio: 0.01
+webhooks:
+  process_timeout: 5s            # sous-processus
+  max_processes: 32              # sous-processus simultanés
 serve:
   migrate: false                 # migrations au démarrage de serve
   bootstrap: "off"               # off | missing | force : force en développement, job explicite en production

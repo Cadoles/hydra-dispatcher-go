@@ -43,10 +43,7 @@ var commands = []command{
 }
 
 func main() {
-	// The lines written before serve reads the configuration (its warnings,
-	// a fatal error) and those of the other commands keep the format of the
-	// design document, at the default level.
-	slog.SetDefault(slog.New(newLogHandler(os.Stdout, "json", slog.LevelInfo)).With("log_type", "app"))
+	slog.SetDefault(startLogger(os.Stdout))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// After the first signal, a second one kills at once.
 	context.AfterFunc(ctx, stop)
@@ -59,6 +56,13 @@ func main() {
 		slog.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+// startLogger writes to w the lines written before serve reads the
+// configuration (its warnings, a fatal error) and those of the other
+// commands: the format of the design document, at the default level.
+func startLogger(w io.Writer) *slog.Logger {
+	return slog.New(newLogHandler(w, "json", slog.LevelInfo)).With("log_type", "app")
 }
 
 func run(ctx context.Context, args []string, stderr io.Writer) error {

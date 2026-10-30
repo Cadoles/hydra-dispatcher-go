@@ -197,6 +197,17 @@ func TestMainProcess(t *testing.T) {
 		}
 	})
 
+	// bootstrap keeps stdout for its changes: its fatal error goes to stderr.
+	t.Run("bootstrap failure", func(t *testing.T) {
+		cmd := child("bootstrap -config /nonexistent/dispatcher.yaml")
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if code := exitCode(err); code != 1 || len(out) > 0 || !strings.Contains(stderr.String(), `"msg":"fatal"`) {
+			t.Errorf("exit code %d, stdout %q, stderr %q", code, out, stderr.String())
+		}
+	})
+
 	t.Run("SIGTERM", func(t *testing.T) {
 		cmd := child("serve", append(requiredEnv("http://127.0.0.1:1"), "DISPATCHER_SERVER_LISTEN=127.0.0.1:0")...)
 		stdout, err := cmd.StdoutPipe()

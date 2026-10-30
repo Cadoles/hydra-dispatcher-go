@@ -308,18 +308,22 @@ func TestServeClosesStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = busy.Close() }()
+	prepare := []string{"DISPATCHER_SERVE_MIGRATE=true", "DISPATCHER_SERVE_BOOTSTRAP=force"}
 	for _, tt := range []struct {
 		name, listen string
+		env          []string
 		db           *fakeStore // nil: the database cannot be reached
 		fails        bool
 	}{
-		{"stopped", "127.0.0.1:0", &fakeStore{}, false},
-		{"database unreachable", "127.0.0.1:0", nil, true},
-		{"no first snapshot", "127.0.0.1:0", &fakeStore{snapshotErr: errors.New("relation \"app\" does not exist")}, true},
-		{"address in use", busy.Addr().String(), &fakeStore{}, true},
+		{"stopped", "127.0.0.1:0", prepare, &fakeStore{}, false},
+		{"database unreachable", "127.0.0.1:0", nil, nil, true},
+		{"migration failed", "127.0.0.1:0", prepare, &fakeStore{migrateErr: errors.New("migrate: 00002_checks.sql: syntax error")}, true},
+		{"bootstrap failed", "127.0.0.1:0", prepare, &fakeStore{bootstrapErr: errors.New("bootstrap: lock: context deadline exceeded")}, true},
+		{"no first snapshot", "127.0.0.1:0", nil, &fakeStore{snapshotErr: errors.New("relation \"app\" does not exist")}, true},
+		{"address in use", busy.Addr().String(), nil, &fakeStore{}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			commandEnv(t, "DISPATCHER_SERVER_LISTEN="+tt.listen)
+			commandEnv(t, append(tt.env, "DISPATCHER_SERVER_LISTEN="+tt.listen)...)
 			oldStore := openStore
 			openStore = func(context.Context, string) (configStore, error) {
 				if tt.db == nil {
@@ -401,14 +405,26 @@ func keepLoggers(t *testing.T) {
 // stdoutOf returns what f writes to os.Stdout, where serve logs.
 func stdoutOf(t *testing.T, f func()) string {
 	t.Helper()
+	return outputOf(t, &os.Stdout, f)
+}
+
+// stderrOf returns what f writes to os.Stderr, where bootstrap logs.
+func stderrOf(t *testing.T, f func()) string {
+	t.Helper()
+	return outputOf(t, &os.Stderr, f)
+}
+
+// outputOf returns what f writes to *file.
+func outputOf(t *testing.T, file **os.File, f func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	stdout := os.Stdout
-	os.Stdout = w
+	old := *file
+	*file = w
 	func() {
-		defer func() { os.Stdout = stdout }()
+		defer func() { *file = old }()
 		f()
 	}()
 	_ = w.Close()

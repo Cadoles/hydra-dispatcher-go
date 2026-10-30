@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,6 +106,9 @@ func TestDesignDocExample(t *testing.T) {
 		{"dispatcher.supported_locales", *c.Seed.SupportedLocales, List{"fr", "en"}},
 		{"serve.bootstrap", c.Serve.Bootstrap, "off"},
 		{"dispatcher.remember", *c.Seed.Remember, true},
+		{"server.replicas_hint", c.Server.ReplicasHint, 1},
+		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts, List{"10.0.1.0/24"}},
+		{"webhooks.max_processes", c.Webhooks.MaxProcesses, 32},
 	} {
 		if !reflect.DeepEqual(check.got, check.want) {
 			t.Errorf("%s = %#v, want %#v", check.name, check.got, check.want)
@@ -1178,6 +1182,14 @@ dispatcher:
 		"session TTL":              {"dispatcher:\n  session_ttl: 0\n", "dispatcher.login_remember_for: must be positive"},
 		"consent remember for":     {"dispatcher:\n  consent_remember_for: 0\n", "dispatcher.consent_remember_for: must be positive"},
 		"session TTL twice":        {"dispatcher:\n  session_ttl: 1h\n  login_remember_for: 1h\n", "dispatcher.session_ttl: is the Symfony name of login_remember_for"},
+		"session TTL null twice":   {"dispatcher:\n  session_ttl: ~\n  login_remember_for: 1h\n", "dispatcher.session_ttl: is the Symfony name of login_remember_for"},
+		"login TTL null twice":     {"dispatcher:\n  login_remember_for: ~\n  session_ttl: 1h\n", "dispatcher.session_ttl: is the Symfony name of login_remember_for"},
+		"position out of range":    {apps + flow + "        - { id: a, order: 3000000000 }\n", "position 3000000000 is out of range"},
+		"NUL in a title":           {apps + "  flows:\n    - { id: f, title: \"a\\0b\", description: D, steps: [{ id: a, order: 0 }] }\n", "line 7: dispatcher.flows[0].title: contains a NUL character"},
+		"NUL in a locale":          {apps + "  flows:\n    - { id: f, title: { \"fr\\0\": F }, description: D, steps: [{ id: a, order: 0 }] }\n", "line 7: dispatcher.flows[0].title: key \"fr\\x00\" contains a NUL character"},
+		"NUL in an option key":     {app + "      options: { \"k\\0\": 1 }\n", "dispatcher.apps[0].options: key \"k\\x00\" contains a NUL character"},
+		"NUL in an option":         {app + "      options: { k: [\"\\0\"] }\n", "dispatcher.apps[0].options.k[0]: contains a NUL character"},
+		"NUL in a method":          {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: \"m\\0\" }\n", "dispatcher.apps[0].method: contains a NUL character"},
 		"acr with a space":         {apps + "  flows:\n    - { id: f, title: T, description: D, acr: \"loa 2\", steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].acr: \"loa 2\" contains a space"},
 		"auth mode":                {app + "      auth_mode: token\n", "dispatcher.apps[0].auth_mode: \"token\" is not network or mtls"},
 		"source":                   {app + "      allowed_sources: [10.1.0.0/16, pod-a]\n", "dispatcher.apps[0].allowed_sources: \"pod-a\" is neither"},
@@ -1191,6 +1203,59 @@ dispatcher:
 		if _, _, err := load(t, tt.content, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tt.want)
 		}
+	}
+}
+
+// A number of the options is kept as written, or refused: yaml.v3 reads an
+// integer past 64 bits as a float64, and a float64 rounds what it cannot hold.
+func TestExactOptions(t *testing.T) {
+	c, _, err := load(t, `
+dispatcher:
+  apps:
+    - id: a
+      login_url: http://a/login
+      consent_url: http://a/consent
+      method: pwd
+      options:
+        uint: 12345678901234567890
+        tolerance: 0.0000001
+        big: 1e21
+        scale: 1.50
+        under: 1_000.5
+        negative: -0.0
+        quoted: "123456789012345678901"
+        id: ${ID}
+`, map[string]string{"ID": "18446744073709551615"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]any{
+		"uint": uint64(12345678901234567890), "tolerance": 1e-7, "big": 1e21, "scale": 1.5, "under": 1000.5,
+		"negative": math.Copysign(0, -1), "quoted": "123456789012345678901", "id": uint64(18446744073709551615),
+	}; !reflect.DeepEqual(c.Seed.Apps[0].Options, want) {
+		t.Errorf("options = %#v", c.Seed.Apps[0].Options)
+	}
+	const app = "dispatcher:\n  apps:\n    - { id: a, login_url: http://a, consent_url: http://a, method: m, options: %s }\n"
+	for options, want := range map[string]string{
+		"{ id: 123456789012345678901 }":        "line 3: dispatcher.apps[0].options.id: 123456789012345678901 would be rounded to 1.2345678901234568e+20: quote it",
+		"{ x: [0.12345678901234567890] }":      "dispatcher.apps[0].options.x[0]: 0.12345678901234567890 would be rounded to 0.12345678901234568",
+		"{ x: { y: .inf } }":                   "dispatcher.apps[0].options.x.y: .inf is not a JSON number",
+		"{ x: -.Inf }":                         "dispatcher.apps[0].options.x: -.Inf is not a JSON number",
+		"{ x: .nan }":                          "dispatcher.apps[0].options.x: .nan is not a JSON number",
+		"{ x: !!float 123456789012345678901 }": "dispatcher.apps[0].options.x: 123456789012345678901 would be rounded",
+		// Not a number at all: the decoder says so.
+		"{ x: !!float abc }": "cannot decode !!str `abc` as a !!float",
+	} {
+		if _, _, err := load(t, fmt.Sprintf(app, options), nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", options, err, want)
+		}
+	}
+	// A variable is typed by what it holds, unless quoted.
+	_, _, err = load(t, "dispatcher:\n  apps:\n    - id: a\n      login_url: http://a\n      consent_url: http://a\n      method: m\n      options:\n        quoted: \"${BIG}\"\n        plain: ${BIG}\n",
+		map[string]string{"BIG": "99999999999999999999"})
+	if err == nil || !strings.Contains(err.Error(), "line 9: dispatcher.apps[0].options.plain: 99999999999999999999 would be rounded") ||
+		strings.Contains(err.Error(), "options.quoted") {
+		t.Errorf("variables: err = %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -45,7 +46,7 @@ func migrate(ctx context.Context, args []string) error {
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}
-	cfg, logs, err := loadConfig(*configPath)
+	cfg, logs, err := loadConfig(*configPath, os.Stdout)
 	if err != nil {
 		return err
 	}
@@ -78,7 +79,10 @@ func bootstrap(ctx context.Context, args []string) error {
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}
-	cfg, _, err := loadConfig(*configPath)
+	// stdout holds the changes alone: the log lines, a fatal error included,
+	// go to stderr.
+	slog.SetDefault(startLogger(os.Stderr))
+	cfg, _, err := loadConfig(*configPath, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -94,6 +98,7 @@ func bootstrap(ctx context.Context, args []string) error {
 
 	// -force rewrites: in a terminal, the changes are shown and confirmed.
 	ask := *force && !*yes && stdinIsTerminal()
+	var confirmed []store.Change
 	if *dryRun || ask {
 		changes, err := db.Bootstrap(ctx, cfg.Seed, mode, false)
 		if err != nil {
@@ -107,12 +112,23 @@ func bootstrap(ctx context.Context, args []string) error {
 			fmt.Fprintln(os.Stderr, "Nothing written.")
 			return nil
 		}
+		confirmed = changes
 	}
 	changes, err := db.Bootstrap(ctx, cfg.Seed, mode, true)
 	if err != nil {
 		return err
 	}
-	printChanges(os.Stdout, changes)
+	switch {
+	case confirmed == nil:
+		printChanges(os.Stdout, changes)
+	case reflect.DeepEqual(changes, confirmed):
+		fmt.Fprintln(os.Stderr, "Written.")
+	default:
+		// Another replica, or the admin, wrote in between: the lock is not
+		// held while the question waits.
+		fmt.Fprintln(os.Stderr, "The database changed after the question; written instead:")
+		printChanges(os.Stdout, changes)
+	}
 	return nil
 }
 
@@ -164,11 +180,16 @@ func prepareStore(ctx context.Context, cfg *config.Config, db configStore, logge
 		if c.Action == store.Same {
 			continue
 		}
-		var fields []string
-		for _, f := range c.Fields {
-			fields = append(fields, f.Name)
+		// The names of the fields only: options may hold an app's secrets.
+		attrs := []any{"kind", c.Kind, "id", c.ID, "action", string(c.Action)}
+		if len(c.Fields) > 0 {
+			var fields []string
+			for _, f := range c.Fields {
+				fields = append(fields, f.Name)
+			}
+			attrs = append(attrs, "fields", fields)
 		}
-		logger.InfoContext(ctx, "bootstrap.change", "kind", c.Kind, "id", c.ID, "action", string(c.Action), "fields", fields)
+		logger.InfoContext(ctx, "bootstrap.change", attrs...)
 	}
 	logger.InfoContext(ctx, "bootstrap.done", "mode", cfg.Serve.Bootstrap, "summary", summary(counts))
 	return nil
@@ -187,13 +208,14 @@ func writes(changes []store.Change) bool {
 
 // notes explain the actions that do not speak for themselves.
 var notes = map[store.Action]string{
-	store.Keep:   " (left as it is: -force rewrites it)",
+	store.Keep:   " (left as it is without -force)",
 	store.Reset:  " (back to its default)",
 	store.Absent: " (in the database only: kept)",
 }
 
-// printChanges writes one line per change, then the fields of the updates and
-// keeps, then a summary. Secrets show as changed, never their value.
+// printChanges writes one line per change, then the fields of the updates,
+// resets and keeps, then a summary. Secrets show as changed, never their
+// value.
 func printChanges(w io.Writer, changes []store.Change) {
 	counts := map[store.Action]int{}
 	for _, c := range changes {

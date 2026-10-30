@@ -31,7 +31,7 @@ func serve(ctx context.Context, args []string) error {
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
 	}
-	cfg, logs, err := loadConfig(*configPath)
+	cfg, logs, err := loadConfig(*configPath, os.Stdout)
 	if err != nil {
 		return err
 	}
@@ -104,9 +104,9 @@ func serve(ctx context.Context, args []string) error {
 // loggers are the application, access and warnings loggers of newLoggers.
 type loggers struct{ app, access, warnings *slog.Logger }
 
-// loadConfig reads the configuration, makes its application logger the
-// default and logs its warnings.
-func loadConfig(path string) (*config.Config, loggers, error) {
+// loadConfig reads the configuration, makes its application logger, writing
+// to w, the default and logs its warnings.
+func loadConfig(path string, w io.Writer) (*config.Config, loggers, error) {
 	cfg, warnings, err := config.Load(path, os.Environ())
 	if err != nil {
 		// A warning may explain the error: a mistyped variable left a key unset.
@@ -116,7 +116,7 @@ func loadConfig(path string) (*config.Config, loggers, error) {
 		return nil, loggers{}, fmt.Errorf("configuration: %w", err)
 	}
 	var l loggers
-	l.app, l.access, l.warnings = newLoggers(os.Stdout, cfg.Observability)
+	l.app, l.access, l.warnings = newLoggers(w, cfg.Observability)
 	slog.SetDefault(l.app)
 	for _, w := range warnings {
 		l.warnings.Warn("config.warning", "detail", w)

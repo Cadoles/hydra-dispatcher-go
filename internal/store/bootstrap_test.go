@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 )
 
@@ -74,6 +76,29 @@ dispatcher:
 	}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("settings = %+v\nwant %+v", s, want)
+	}
+}
+
+// symfonyHash is the hash Symfony's NativePasswordHasher (bcrypt, cost 4)
+// gave symfonySecret, 100 bytes long.
+const symfonyHash = "$2y$04$iuml1FnUXrHaDd/Sxqt9UOniJuDi.W.KCQHk3.1uwFwFUwQmLYt5W"
+
+var symfonySecret = strings.Repeat("0123456789", 10)
+
+// A secret past 72 bytes is hashed first, as Symfony does: its first 72 bytes
+// are another secret. A shorter one is hashed as is.
+func TestBcryptInput(t *testing.T) {
+	if err := bcrypt.CompareHashAndPassword([]byte(symfonyHash), bcryptInput(symfonySecret)); err != nil {
+		t.Errorf("Symfony's hash: %v", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(symfonyHash), bcryptInput(symfonySecret[:72])) == nil {
+		t.Error("the first 72 bytes check too")
+	}
+	if got := string(bcryptInput("s3cret")); got != "s3cret" {
+		t.Errorf("short secret: %q", got)
+	}
+	if got := bcryptInput("s3\x00cret"); len(got) != 72 || strings.Contains(string(got), "cret") {
+		t.Errorf("secret with a NUL: %q", got)
 	}
 }
 
