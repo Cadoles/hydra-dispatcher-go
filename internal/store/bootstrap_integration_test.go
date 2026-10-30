@@ -116,15 +116,15 @@ func TestBootstrapHydraDev(t *testing.T) {
 func TestBootstrapModes(t *testing.T) {
 	ctx := context.Background()
 	p := migrated(t)
-	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method) VALUES ('a', 'http://old/login', 'http://a/consent', 'pwd')`)
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, options) VALUES ('a', 'http://old/login', 'http://a/consent', 'pwd', '{"client_secret": "old-secret", "gone": 1}')`)
 	exec(t, p, `INSERT INTO flow (id, title, description) VALUES ('legacy', '{"fr": "L"}', '{"fr": "L"}')`)
 	exec(t, p, `INSERT INTO flow_step (flow_id, app_id, position) VALUES ('legacy', 'a', 0)`)
 	exec(t, p, `INSERT INTO setting (key, value) VALUES ('consent_auto_accept', 'true'), ('remember', 'false'), ('old_key', '1')`)
-	exec(t, p, `INSERT INTO api_client (id, secret_hash) VALUES ('c', 'not-a-hash')`)
+	exec(t, p, `INSERT INTO api_client (id, secret_hash) VALUES ('c', 'not-a-hash'), ('legacy', 'not-a-hash')`)
 	seed := loadSeed(t, `
 dispatcher:
   apps:
-    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd, options: { theme: dark } }
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd, options: { theme: dark, client_secret: new-secret } }
   flows:
     - { id: f, title: F, description: D, steps: [{ id: a, order: 0 }] }
   oauth2_clients:
@@ -141,7 +141,7 @@ dispatcher:
 		"keep setting consent_auto_accept: value", "keep setting remember: value", "absent setting old_key",
 		"keep app a: login_url,options",
 		"create flow f", "absent flow legacy",
-		"keep api_client c: secret,scopes",
+		"keep api_client c: secret,scopes", "absent api_client legacy",
 	}
 	if got := actions(changes); !slices.Equal(got, want) {
 		t.Errorf("missing: changes = %q\nwant %q", got, want)
@@ -160,7 +160,7 @@ dispatcher:
 		"update setting consent_auto_accept: value", "reset setting remember: value", "absent setting old_key",
 		"update app a: login_url,options",
 		"same flow f", "absent flow legacy",
-		"update api_client c: secret,scopes",
+		"update api_client c: secret,scopes", "absent api_client legacy",
 	}
 	if got := actions(changes); !slices.Equal(got, want) {
 		t.Errorf("dry run: changes = %q\nwant %q", got, want)
@@ -174,6 +174,10 @@ dispatcher:
 	}
 	if f := changes[6].Fields[0]; !f.Secret || f.Old != "" || f.New != "" {
 		t.Errorf("secret change = %+v, want no value", f)
+	}
+	// Options may hold an app's secrets: the keys that change, no value.
+	if f := changes[3].Fields[1]; !slices.Equal(f.Keys, []string{"client_secret", "gone", "theme"}) || f.Old != "" || f.New != "" {
+		t.Errorf("options change = %+v, want the keys only", f)
 	}
 	if s, _ := p.Snapshot(ctx); !s.Settings.ConsentAutoAccept {
 		t.Error("the dry run wrote")
@@ -291,6 +295,33 @@ func TestBootstrapConcurrently(t *testing.T) {
 	}
 }
 
+// A dry run waits for the bootstrap in progress, as a write does: it shows
+// the database that bootstrap leaves, not the one it found.
+func TestBootstrapDryRunWaits(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	seed := loadSeed(t, "dispatcher:\n  app_auto_select: true\n")
+	other, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Rollback() }()
+	if _, err := other.Exec(`SELECT pg_advisory_xact_lock($1)`, int64(bootstrapLock)); err != nil {
+		t.Fatal(err)
+	}
+	short, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	if _, err := p.Bootstrap(short, seed, Force, false); err == nil || !strings.Contains(err.Error(), "bootstrap: lock:") {
+		t.Fatalf("dry run under the lock of another bootstrap = %v, want it to wait", err)
+	}
+	if err := other.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if changes, err := p.Bootstrap(ctx, seed, Force, false); err != nil || !slices.Equal(actions(changes), []string{"create setting app_auto_select"}) {
+		t.Errorf("dry run once the lock is free = %q, %v", actions(changes), err)
+	}
+}
+
 func databaseName(t *testing.T, p *Postgres) string {
 	t.Helper()
 	var name string
@@ -342,6 +373,7 @@ dispatcher:
       acr: gold
       enabled: false
       steps: [{ id: a, order: 0, subject_check: equal }, { id: m, order: 1, subject_check: "claim:email" }]
+    - { id: g, title: { fr: G, en: G }, description: D, icon_url: { fr: http://i/fr.svg, en: http://i/en.svg }, steps: [{ id: a, order: 0 }] }
   oauth2_clients:
     - { id: c, secret: s3cret, scopes: [] }
 `)
@@ -378,11 +410,14 @@ dispatcher:
 		m.AllowedSources != nil || m.LogoutURL != "http://m/logout" {
 		t.Errorf("app m = %+v", m)
 	}
-	want := Flow{
+	want := []Flow{{
 		ID: "f", Title: map[string]string{"": "F"}, Description: map[string]string{"fr": "D"}, IconURL: map[string]string{"": "http://i/f.svg"},
 		ACR: "gold", Steps: []Step{{"a", 0, "equal"}, {"m", 1, "claim:email"}},
-	}
-	if !reflect.DeepEqual(s.Flows, []Flow{want}) {
+	}, {
+		ID: "g", Title: map[string]string{"fr": "G", "en": "G"}, Description: map[string]string{"": "D"},
+		IconURL: map[string]string{"fr": "http://i/fr.svg", "en": "http://i/en.svg"}, Enabled: true, Steps: []Step{{"a", 0, "none"}},
+	}}
+	if !reflect.DeepEqual(s.Flows, want) {
 		t.Errorf("flows = %+v\nwant %+v", s.Flows, want)
 	}
 }
@@ -412,11 +447,27 @@ dispatcher:
 	hash, _ := clientHash(t, p, "client")
 
 	second := loadSeed(t, fmt.Sprintf(content, "[{ id: b, order: 0 }, { id: a, order: 1 }]", "[admin:apps]", "~"))
-	changes, err := p.Bootstrap(ctx, second, Force, true)
+	// Without force, all of it is left as it is.
+	changes, err := p.Bootstrap(ctx, second, Missing, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
+		"keep setting remember: value", "same app a", "same app b", "same app c",
+		"keep flow f: steps", "keep api_client client: scopes",
+	}
+	if got := actions(changes); !slices.Equal(got, want) {
+		t.Errorf("missing: changes = %q\nwant %q", got, want)
+	}
+	if s, _ := p.Snapshot(ctx); len(s.Flows[0].Steps) != 3 || s.Settings.Remember {
+		t.Errorf("missing wrote: steps = %+v, remember = %v", s.Flows[0].Steps, s.Settings.Remember)
+	}
+
+	changes, err = p.Bootstrap(ctx, second, Force, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{
 		"reset setting remember: value", "same app a", "same app b", "same app c",
 		"update flow f: steps", "update api_client client: scopes",
 	}

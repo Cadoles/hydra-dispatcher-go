@@ -117,7 +117,10 @@ func commandEnv(t *testing.T, extra ...string) {
 
 var someChanges = []store.Change{
 	{Kind: "setting", ID: "remember", Action: store.Reset, Fields: []store.FieldChange{{Name: "value", Old: "false", New: "true"}}},
-	{Kind: "app", ID: "hydra-sql", Action: store.Update, Fields: []store.FieldChange{{Name: "login_url", Old: `"http://old"`, New: `"http://new"`}}},
+	{Kind: "app", ID: "hydra-sql", Action: store.Update, Fields: []store.FieldChange{
+		{Name: "login_url", Old: `"http://old"`, New: `"http://new"`},
+		{Name: "options", Keys: []string{"client_secret", "theme"}},
+	}},
 	{Kind: "api_client", ID: "test", Action: store.Keep, Fields: []store.FieldChange{{Name: "secret", Secret: true}}},
 	{Kind: "flow", ID: "hydra-sql", Action: store.Same},
 	{Kind: "flow", ID: "legacy", Action: store.Absent},
@@ -130,6 +133,7 @@ func TestPrintChanges(t *testing.T) {
           value: false -> true
 update  app hydra-sql
           login_url: "http://old" -> "http://new"
+          options: client_secret, theme changed
 keep    api_client test (left as it is without -force)
           secret: changed
 same    flow hydra-sql
@@ -256,7 +260,7 @@ func TestServePreparesStore(t *testing.T) {
 		t.Fatalf("err = %v, calls = %q", err, f.Calls())
 	}
 	for _, want := range []string{
-		`"msg":"bootstrap.change"`, `"kind":"app","id":"hydra-sql","action":"update","fields":["login_url"]`,
+		`"msg":"bootstrap.change"`, `"kind":"app","id":"hydra-sql","action":"update","fields":["login_url","options"]`,
 		`"msg":"bootstrap.done"`, `"mode":"force","summary":"update 1, reset 1, keep 1, same 1, absent 1"`,
 	} {
 		if !strings.Contains(logs, want) {

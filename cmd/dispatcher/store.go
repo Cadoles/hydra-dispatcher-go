@@ -215,18 +215,22 @@ var notes = map[store.Action]string{
 
 // printChanges writes one line per change, then the fields of the updates,
 // resets and keeps, then a summary. Secrets show as changed, never their
-// value.
+// value, and options by the keys that change: they may hold an app's
+// secrets, and out of a terminal the changes end up in the logs.
 func printChanges(w io.Writer, changes []store.Change) {
 	counts := map[store.Action]int{}
 	for _, c := range changes {
 		counts[c.Action]++
 		fmt.Fprintf(w, "%-7s %s %s%s\n", c.Action, c.Kind, c.ID, notes[c.Action])
 		for _, f := range c.Fields {
-			if f.Secret {
+			switch {
+			case f.Secret:
 				fmt.Fprintf(w, "          %s: changed\n", f.Name)
-				continue
+			case f.Keys != nil:
+				fmt.Fprintf(w, "          %s: %s changed\n", f.Name, strings.Join(f.Keys, ", "))
+			default:
+				fmt.Fprintf(w, "          %s: %s -> %s\n", f.Name, f.Old, f.New)
 			}
-			fmt.Fprintf(w, "          %s: %s -> %s\n", f.Name, f.Old, f.New)
 		}
 	}
 	fmt.Fprintln(w, summary(counts))
