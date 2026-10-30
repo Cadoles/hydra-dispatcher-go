@@ -67,6 +67,8 @@ func Decide(in Input) Outcome {
 		out = r.loop(ev)
 	case Consent:
 		out = r.consent(ev)
+	case AppCall:
+		out = r.appCall(ev)
 	default:
 		out = r.page().fail(E1000)
 	}
@@ -159,6 +161,9 @@ const (
 	ErrorPage
 	// AppJSON: the emulated API's answer, Response.Status and Response.Body.
 	AppJSON
+	// AppForbidden: the emulated API refuses the caller, as its allowlist
+	// does (EMU-4), in the form P4 gives that refusal.
+	AppForbidden
 )
 
 // Response is the answer the handler gives.
@@ -444,22 +449,48 @@ func withQuery(raw, key, value string) string {
 	return u.String()
 }
 
-// surface answers in the forms of the pages.
-type surface struct{}
+// surface answers in the forms of the pages or of the emulated API.
+type surface struct {
+	api bool
+	// get is a read of the emulated API, answered 410 where a PUT gets 200
+	// (Q25): no app follows a 410 on a PUT.
+	get bool
+	// loop is the redirect_to of the flow's ref, on the emulated API.
+	loop string
+}
 
 func (r *run) page() surface { return surface{} }
 
 // surface is the one of the event.
-func (r *run) surface() surface { return r.page() }
-
-// redirect sends to a URL.
-func (s surface) redirect(to string) Outcome {
-	return Outcome{Response: Response{Kind: Redirect, URL: to}}
+func (r *run) surface() surface {
+	ev, ok := r.Event.(AppCall)
+	if !ok {
+		return r.page()
+	}
+	ref, _ := ChallengeRef(ev.Challenge)
+	return surface{api: true, get: ev.Op.get(), loop: LoopURL(r.Env.BaseURL, ref)}
 }
 
-// fail is an error the user cannot fix by going on.
+// redirect sends to a URL: a page redirects (303), the emulated API answers
+// it as redirect_to, in 410 to a GET and in 200 to a PUT.
+func (s surface) redirect(to string) Outcome {
+	if !s.api {
+		return Outcome{Response: Response{Kind: Redirect, URL: to}}
+	}
+	status := http.StatusOK
+	if s.get {
+		status = http.StatusGone
+	}
+	return Outcome{Response: Response{Kind: AppJSON, Status: status, Body: ory.OAuth2RedirectTo{RedirectTo: to}}}
+}
+
+// fail is an error the user cannot fix by going on: an error page, or on the
+// emulated API a 500 server_error that names the code.
 func (s surface) fail(code Code) Outcome {
 	o := Outcome{Response: Response{Kind: ErrorPage, Code: code}}
+	if s.api {
+		o = appError(http.StatusInternalServerError, "server_error", string(code))
+	}
 	switch code {
 	case E1000, E1004, E1005, E1006, E1007:
 		o = o.report(Report{Event: "flow.error", Detail: string(code), Sentry: true})
@@ -468,11 +499,20 @@ func (s surface) fail(code Code) Outcome {
 }
 
 // absent answers for a flow absent, or gone past HydraExpiresAt: E1002
-// without a link.
-func (s surface) absent() Outcome { return s.fail(E1002) }
+// without a link, or the emulated API's unknown challenge (EXP-1, T5).
+func (s surface) absent() Outcome {
+	if s.api {
+		return appError(http.StatusNotFound, missingSession, missingSessionText)
+	}
+	return s.fail(E1002)
+}
 
-// ended answers for the flow f, finished: E1002 linked to the client.
+// ended answers for the flow f, finished: E1002 linked to the client, or on
+// the emulated API the redirect_to of the ref, which leads there (EMU-5).
 func (s surface) ended(f *Flow) Outcome {
+	if s.api {
+		return s.redirect(s.loop)
+	}
 	o := s.fail(E1002)
 	o.Response.Link = f.ClientURI()
 	return o

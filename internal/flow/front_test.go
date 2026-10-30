@@ -77,7 +77,10 @@ func choiceFlow(t *testing.T) *Flow {
 // it accepted.
 func atStep(t *testing.T, k int, lok, cok bool) *Flow {
 	f := choiceFlow(t)
-	f.FlowID, f.Current, f.Subject = "hydra-sql-2fa", k, "alice"
+	f.FlowID, f.Current = "hydra-sql-2fa", k
+	if k > 1 || lok {
+		f.Subject = "alice" // the first step's, once accepted
+	}
 	f.Steps = []Step{{App: "sql"}, {App: "2fa", Check: "equal"}}
 	for i := range f.Steps {
 		s := &f.Steps[i]
