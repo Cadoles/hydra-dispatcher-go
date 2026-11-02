@@ -406,6 +406,18 @@ func TestChoiceRules(t *testing.T) {
 		{name: "CHX-2, a restriction that is not a list", ev: entry,
 			says: hydraSays{GetLogin: {login: withClient(t, `{"metadata":{"dispatcher":{"flows":"hydra-sql"}}}`)}, RejectLogin: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished},
+		{name: "CHX-2, a dispatcher member that is a list", ev: entry,
+			says: hydraSays{GetLogin: {login: withClient(t, `{"metadata":{"dispatcher":["hydra-sql-2fa"]}}`)}, RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished},
+		{name: "CHX-2, a dispatcher member that is a string", ev: entry,
+			says: hydraSays{GetLogin: {login: withClient(t, `{"metadata":{"dispatcher":"hydra-sql"}}`)}, RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished},
+		{name: "CHX-2, metadata that is no object restricts nothing", ev: entry,
+			says: hydraSays{GetLogin: {login: withClient(t, `{"metadata":"hydra-sql"}`)}},
+			kind: ChoicePage, calls: []Op{GetLogin}, check: offered("hydra-oidc", "hydra-sql", "hydra-sql-2fa"), write: inChoice(5000, cookie)},
+		{name: "CHX-2, a dispatcher member without flows restricts nothing", ev: entry,
+			says: hydraSays{GetLogin: {login: withClient(t, `{"metadata":{"dispatcher":{}}}`)}},
+			kind: ChoicePage, calls: []Op{GetLogin}, check: offered("hydra-oidc", "hydra-sql", "hydra-sql-2fa"), write: inChoice(5000, cookie)},
 		{name: "CHX-2, a disabled flow is not left", env: func(e *Env) { e.Config.Flows[1].Enabled = false }, ev: entry,
 			says: hydraSays{GetLogin: {login: withClient(t, `{"metadata":{"dispatcher":{"flows":["hydra-sql"]}}}`)}, RejectLogin: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished},
@@ -458,6 +470,11 @@ func TestChoose(t *testing.T) {
 	post := func(flow string) Choose {
 		return Choose{FlowID: flow, LoginChallenge: hydraL, Token: cookie, Cookie: cookie, SameOrigin: true}
 	}
+	// preferred is f with acr_values preferring hydra-sql, a candidate.
+	preferred := func(f *Flow) *Flow {
+		f.Hydra.OIDCContext = json.RawMessage(`{"acr_values":["` + preferredPrefix + `hydra-sql"]}`)
+		return f
+	}
 	restricted := func() *Flow {
 		f := choiceFlow(t)
 		snap, _, _ := SnapshotOf(withClient(t, `{"metadata":{"dispatcher":{"flows":["hydra-sql"]}}}`))
@@ -499,9 +516,20 @@ func TestChoose(t *testing.T) {
 				}
 			}},
 		{name: "POS-3, cookie other than the flow's", ev: Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: otherCSRF, Cookie: otherCSRF, SameOrigin: true},
-			stored: atStep(t, 1, false, false), kind: ChoicePage, write: inChoice(1001, otherCSRF)},
+			stored: atStep(t, 1, false, false), kind: ChoicePage, write: inChoice(1001, otherCSRF),
+			check: func(t *testing.T, p played) {
+				if p.Response.SetCSRF != otherCSRF {
+					t.Errorf("Q7, cookie %q", p.Response.SetCSRF)
+				}
+			}},
 		{name: "POS-4 Q8", ev: post("hydra-sql"), stored: atStep(t, 2, true, false),
 			kind: Redirect, url: loginURL("sql", 1001), write: started("hydra-sql", 1001, false)},
+		{name: "POS-4 Q29, the preferred flow chosen again is imposed", ev: post("hydra-sql"), stored: preferred(atStep(t, 1, false, false)),
+			kind: Redirect, url: loginURL("sql", 1001), write: started("hydra-sql", 1001, true)},
+		{name: "POS-1 Q29, the preferred flow is imposed", ev: post("hydra-sql"), stored: preferred(choiceFlow(t)),
+			kind: Redirect, url: loginURL("sql", 1000), write: started("hydra-sql", 1000, true)},
+		{name: "POS-1 Q29, another candidate is not", ev: post("hydra-oidc"), stored: preferred(choiceFlow(t)),
+			kind: Redirect, url: loginURL("oidc", 1000), write: started("hydra-oidc", 1000, false)},
 		{name: "POS-5", ev: post("hydra-sql"), stored: acceptedFlow(t), kind: Redirect, url: hydraDone},
 		{name: "POS-6", ev: Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: cookie, Cookie: otherCSRF, SameOrigin: true},
 			stored: acceptedFlow(t), kind: ErrorPage, code: E1008},
@@ -699,6 +727,9 @@ func TestFinalAccept(t *testing.T) {
 			kind: ErrorPage, code: E1007, calls: []Op{AcceptLogin}},
 		{name: "FIN-7, 403", ev: loop, stored: lastDone(t), says: hydraSays{AcceptLogin: {err: err403}},
 			kind: ErrorPage, code: E1007, calls: []Op{AcceptLogin}},
+		{name: "FIN-7 Q11, 400, accepted by a concurrent request", ev: loop, stored: lastDone(t), says: hydraSays{AcceptLogin: {err: err400}},
+			reread: func() *Flow { f := acceptedFlow(t); f.HydraRedirect = "http://hydra/theirs"; return f }(),
+			kind:   Redirect, url: "http://hydra/theirs", calls: []Op{AcceptLogin}},
 		{name: "FIN-8", ev: loop, stored: lastDone(t), says: hydraSays{AcceptLogin: {err: errDown}},
 			kind: ErrorPage, code: E1004, calls: []Op{AcceptLogin}},
 		{name: "FIN-8, 2xx without redirect_to", ev: loop, stored: lastDone(t), says: hydraSays{AcceptLogin: {}},
@@ -861,6 +892,9 @@ func TestConsent(t *testing.T) {
 			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, AcceptConsent}},
 		{name: "CST-20, 403", ev: post(false), stored: acceptedFlow(t), says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err403}},
 			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}},
+		{name: "CST-20 Q11, 400, finished by a concurrent request", ev: post(true), stored: acceptedFlow(t), reread: finishedFlow(t, "http://hydra/theirs", 0),
+			says: hydraSays{GetConsent: read(nil), AcceptConsent: {err: err400}},
+			kind: Redirect, url: "http://hydra/theirs", calls: []Op{GetConsent, AcceptConsent}},
 		{name: "CST-21", ev: Consent{Challenge: hydraC, Cookie: cookie, Post: true, Token: cookie}, kind: ErrorPage, code: E1008},
 		{name: "EXP-2, on /consent", ev: get, stored: expired(acceptedFlow(t)), says: hydraSays{GetConsent: read(nil), RejectLogin: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectLogin}, write: finished},
@@ -882,6 +916,8 @@ func TestPageRejects(t *testing.T) {
 			says: hydraSays{RejectLogin: {err: err409}}, kind: ErrorPage, code: E1007, calls: []Op{RejectLogin}},
 		{name: "EXP-4, 400", ev: entry, stored: expired(choiceFlow(t)), says: hydraSays{RejectLogin: {err: err400}},
 			kind: ErrorPage, code: E1007, calls: []Op{RejectLogin}},
+		{name: "EXP-4 Q11, 403, finished meanwhile", ev: entry, stored: expired(choiceFlow(t)), reread: finishedFlow(t, "", 0),
+			says: hydraSays{RejectLogin: {err: err403}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{RejectLogin}},
 		{name: "EXP-4, unavailable", ev: entry, stored: expired(choiceFlow(t)), says: hydraSays{RejectLogin: {err: errDown}},
 			kind: ErrorPage, code: E1004, calls: []Op{RejectLogin}},
 		{name: "EXP-4, CHX at the creation: 401 writes it finished", ev: entry,
@@ -910,6 +946,29 @@ func TestFactsCarriedOver(t *testing.T) {
 		t.Helper()
 		if !slices.ContainsFunc(out.Reports, func(r Report) bool { return r.Event == "state.conflict" && r.Sentry }) {
 			t.Errorf("no state.conflict: %+v", out.Reports)
+		}
+	}
+	// audit wants the audit event of a reject made, then the checks more.
+	audit := func(event string, more ...func(t *testing.T, out Outcome)) func(t *testing.T, out Outcome) {
+		return func(t *testing.T, out Outcome) {
+			t.Helper()
+			if !slices.ContainsFunc(out.Reports, func(r Report) bool { return r.Event == event && r.Audit }) {
+				t.Errorf("no audit %s: %+v", event, out.Reports)
+			}
+			for _, check := range more {
+				check(t, out)
+			}
+		}
+	}
+	a3 := &Done{Call: Call{Op: RejectConsent, Reason: ReasonNotOurs}, RedirectTo: "http://hydra/a3"}
+	mismatch := &Done{Call: Call{Op: RejectLogin, Reason: ReasonSubject}, RedirectTo: hydraDone}
+	read := &ConsentRead{Request: consentRequest(lref, nil)}
+	refuse := Consent{Challenge: hydraC, Cookie: cookie, Post: true, Token: cookie, SameOrigin: true}
+	noCR := func(t *testing.T, f *Flow) {
+		t.Helper()
+		finished(t, f)
+		if f.ConsentRedirect != "" {
+			t.Errorf("Q20, the A3 reject's redirect_to kept: %q", f.ConsentRedirect)
 		}
 	}
 	for _, tc := range []struct {
@@ -968,7 +1027,33 @@ func TestFactsCarriedOver(t *testing.T) {
 			}},
 		{name: "ECR-4, the A3 reject of the consent carried over", ev: loop, flow: acceptedFlow(t),
 			answers: Answers{ConsentReject: &Done{Call: Call{Op: RejectConsent, Reason: ReasonNotOurs}, RedirectTo: "http://hydra/mine"}},
-			kind:    ErrorPage, code: E1007, write: finished},
+			kind:    ErrorPage, code: E1007, write: noCR, check: audit("flow.rejected")},
+		{name: "ECR-9 Q20, an A3 reject on a flow finished by its consent: never its redirect_to", ev: Consent{Challenge: hydraC, Cookie: cookie},
+			flow: finishedFlow(t, "http://hydra/theirs", 0), answers: Answers{Consent: read, ConsentReject: a3},
+			kind: ErrorPage, code: E1007, check: audit("flow.rejected", conflict)},
+		{name: "ECR-9 Q20, an A3 reject on a flow finished otherwise", ev: Consent{Challenge: hydraC, Cookie: cookie},
+			flow: finishedFlow(t, "", 0), answers: Answers{Consent: read, ConsentReject: a3},
+			kind: ErrorPage, code: E1007, check: audit("flow.rejected", conflict)},
+		{name: "Q20, an A3 reject reached again by the user's refusal", ev: refuse, flow: acceptedFlow(t), answers: Answers{Consent: read, ConsentReject: a3},
+			kind: ErrorPage, code: E1007, write: noCR, check: audit("flow.rejected")},
+		{name: "ECR-4, a subject mismatch carried over to a flow back to the choice", ev: callBy(AppAcceptLogin, 1000, "2fa", `{"subject":"bob"}`),
+			flow: atStep(t, 2, false, false).restart(), answers: Answers{Reject: mismatch},
+			kind: AppJSON, write: finished, check: audit("step.subject_mismatch")},
+		{name: "ECR-9, a subject mismatch on a flow finished meanwhile", ev: callBy(AppAcceptLogin, 1000, "2fa", `{"subject":"bob"}`),
+			flow: finishedFlow(t, "", 0), answers: Answers{Reject: mismatch},
+			kind: AppJSON, check: audit("step.subject_mismatch", conflict)},
+		{name: "no second mutation: the final accept after a reject", ev: loop, flow: lastDone(t), answers: Answers{Reject: reject},
+			kind: Redirect, url: "http://hydra/rejected", write: finished},
+		{name: "no second mutation: the consent accept after an A3 reject", ev: Consent{Challenge: hydraC, Cookie: cookie}, flow: acceptedFlow(t),
+			answers: Answers{Consent: &ConsentRead{Request: consentRequest(lref, func(r *ory.OAuth2ConsentRequest) { r.Skip = ory.PtrBool(true) })}, ConsentReject: a3},
+			kind:    ErrorPage, code: E1007, write: noCR, check: audit("flow.rejected")},
+		{name: "no second mutation: the consent reject after an accept", ev: refuse, flow: acceptedFlow(t), answers: Answers{Consent: read, ConsentAccept: consentAccept},
+			kind: Redirect, url: "http://hydra/mine",
+			write: func(t *testing.T, f *Flow) {
+				if !f.Done || f.ConsentRedirect != "http://hydra/mine" {
+					t.Errorf("flow %+v", f)
+				}
+			}},
 		{name: "no second mutation after a failed one", ev: loop, flow: expired(lastDone(t)), answers: Answers{Accept: &Done{Call: acceptCall, Err: errDown}},
 			kind: ErrorPage, code: E1007, check: conflict},
 	} {

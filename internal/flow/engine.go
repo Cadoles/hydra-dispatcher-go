@@ -124,12 +124,19 @@ func (o Outcome) writing(f *Flow) Outcome {
 }
 
 // past turns a write that would come at or after HydraExpiresAt into the
-// answer to an absent flow (ECR-8): no key is written without a TTL.
+// answer to an absent flow (ECR-8): no key is written without a TTL. The
+// audit events stand: what they report, a reject Hydra made, happened.
 func (o Outcome) past(in Input) Outcome {
 	if o.Write == nil || in.Env.Now.UnixMilli() < o.Write.HydraExpiresAt {
 		return o
 	}
-	return (&run{Input: in}).surface().absent()
+	out := (&run{Input: in}).surface().absent()
+	for _, rep := range o.Reports {
+		if rep.Audit {
+			out = out.report(rep)
+		}
+	}
+	return out
 }
 
 // Code is an error code of the pages and of the emulated API.

@@ -3,6 +3,7 @@ package flow
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strconv"
@@ -176,18 +177,25 @@ func (f *Flow) request() (ory.OAuth2LoginRequest, error) {
 	return r, nil
 }
 
+// errAppGone is the error of a request for an app gone from the snapshot:
+// without its options, it would receive every claim.
+var errAppGone = errors.New("flow: app gone from the configuration")
+
 // LoginRequestFor is the login request served to the app of step k (EMU-8):
 // the snapshot's members, with the step's challenge, the flow's subject ("" on
 // the first step), skip false, the claims of the previous steps the app
 // receives, and x_dispatcher_restart_url unless the flow is imposed. Hydra's
 // challenge is never in it (I7).
 func (f *Flow) LoginRequestFor(env Env, ref string, k int) (ory.OAuth2LoginRequest, error) {
+	step := f.Steps[k-1]
+	app, ok := env.Config.App(step.App)
+	if !ok {
+		return ory.OAuth2LoginRequest{}, errAppGone
+	}
 	r, err := f.request()
 	if err != nil {
 		return r, err
 	}
-	step := f.Steps[k-1]
-	app, _ := env.Config.App(step.App)
 	ext := hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values()}
 	if !f.Imposed {
 		ext.RestartURL = RestartURL(env.BaseURL, ref)
@@ -204,12 +212,15 @@ func (f *Flow) LoginRequestFor(env Env, ref string, k int) (ory.OAuth2LoginReque
 // login accept without the dispatcher's members (A2, I6), and the claims of
 // the previous steps, as on the login request.
 func (f *Flow) ConsentRequestFor(env Env, ref string, k int) (ory.OAuth2ConsentRequest, error) {
+	step := f.Steps[k-1]
+	app, ok := env.Config.App(step.App)
+	if !ok {
+		return ory.OAuth2ConsentRequest{}, errAppGone
+	}
 	login, err := f.request()
 	if err != nil {
 		return ory.OAuth2ConsentRequest{}, err
 	}
-	step := f.Steps[k-1]
-	app, _ := env.Config.App(step.App)
 	r := ory.OAuth2ConsentRequest{
 		Acr:                          ory.PtrString(f.ACRNow()),
 		Amr:                          f.AMRNow(env),

@@ -7,7 +7,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
+
+// without2FA is the snapshot without the app 2fa, gone in the course of a
+// flow (Q21).
+func without2FA(e *Env) {
+	e.Config = store.NewSnapshot([]store.App{testApps()[0], testApps()[2]}, testFlows(), e.Config.Settings)
+}
 
 // appCase is one line of the table, on the emulated API.
 type appCase struct {
@@ -153,6 +161,10 @@ func TestAppLogin(t *testing.T) {
 			}},
 		{name: "EMU-8 I2, second step", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),
 			status: http.StatusOK, body: `"x_dispatcher_claims":{"email":"alice@example.org"}...`},
+		{name: "EMU-28 Q21, the login request of an app gone from the snapshot", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),
+			env:    without2FA,
+			status: http.StatusInternalServerError, body: `{"error":"server_error","error_description":"E1005","status_code":500}`,
+			check: reportsHas("flow.error", "E1005")},
 		{name: "EMU-9, accepted step", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: atStep(t, 1, true, false), status: http.StatusGone, body: loopBody},
 		{name: "EMU-9, past step", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: atStep(t, 2, false, false), status: http.StatusGone, body: loopBody},
 		{name: "EMU-9, accepted flow", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: acceptedFlow(t), status: http.StatusGone, body: loopBody},
@@ -279,6 +291,13 @@ func TestAppConsent(t *testing.T) {
 		{name: "EMU-15, consent context a string", ev: callBy(AppAcceptConsent, 1000, "sql", `{"context":"x"}`), stored: atStep(t, 1, true, false), status: http.StatusBadRequest},
 		{name: "EMU-15, consent body not JSON", ev: callBy(AppAcceptConsent, 1000, "sql", `{`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
 		{name: "EMU-22", ev: callBy(AppAcceptConsent, 1000, "sql", consentBody), stored: atStep(t, 1, true, true), status: http.StatusOK, body: loopBody},
+		{name: "EMU-15, a second consent accept with an invalid body", ev: callBy(AppAcceptConsent, 1000, "sql", `{"session":{"id_token":[1]}}`),
+			stored: atStep(t, 1, true, true), status: http.StatusBadRequest, body: `{"error":"invalid_request","error_description":"E1001","status_code":400}`},
+		{name: "EMU-15, a consent accept with an invalid body on an accepted flow", ev: callBy(AppAcceptConsent, 1000, "2fa", `{"context":[]}`),
+			stored: acceptedFlow(t), status: http.StatusBadRequest},
+		{name: "EMU-28 Q21, the consent request of an app gone from the snapshot", ev: callBy(AppGetConsent, 1000, "2fa", ""), stored: atStep(t, 2, true, false),
+			env:    without2FA,
+			status: http.StatusInternalServerError, body: `{"error":"server_error","error_description":"E1005","status_code":500}`},
 		{name: "EMU-23", ev: callBy(AppRejectConsent, 1000, "sql", rejectBody), stored: atStep(t, 1, true, false),
 			says: hydraSays{RejectLogin: {redirectTo: hydraDone}}, status: http.StatusOK, body: `{"redirect_to":"` + hydraDone + `"}`,
 			calls: []Op{RejectLogin}, write: finished},
@@ -307,8 +326,10 @@ func TestAppRejectErrors(t *testing.T) {
 		{name: "EMU-26, 409, nothing changed", ev: reject, stored: atStep(t, 1, false, false),
 			says: hydraSays{RejectLogin: {err: err409}}, status: http.StatusInternalServerError,
 			body: `{"error":"server_error","error_description":"E1007","status_code":500}`, calls: []Op{RejectLogin}},
-		{name: "EMU-26, 400", ev: reject, stored: atStep(t, 1, false, false), says: hydraSays{RejectLogin: {err: err400}},
+		{name: "EMU-26, 400, nothing changed", ev: reject, stored: atStep(t, 1, false, false), says: hydraSays{RejectLogin: {err: err400}},
 			status: http.StatusInternalServerError, body: `{"error":"server_error","error_description":"E1007","status_code":500}`, calls: []Op{RejectLogin}},
+		{name: "EMU-26 Q11, 400, finished meanwhile", ev: reject, stored: atStep(t, 1, false, false), reread: finishedFlow(t, "", 0),
+			says: hydraSays{RejectLogin: {err: err400}}, status: http.StatusOK, body: loopBody, calls: []Op{RejectLogin}},
 		{name: "EMU-26, 403", ev: mismatch, stored: atStep(t, 1, true, false), says: hydraSays{RejectLogin: {err: err403}},
 			status: http.StatusInternalServerError, calls: []Op{RejectLogin}},
 		{name: "EMU-27", ev: reject, stored: atStep(t, 1, false, false), says: hydraSays{RejectLogin: {err: errDown}},
@@ -347,6 +368,11 @@ func TestPast(t *testing.T) {
 	}
 	if out := late.past(Input{Event: Loop{}, Env: env}); out.Write != nil || out.Response.Code != E1002 {
 		t.Errorf("pages: %+v", out)
+	}
+	// The audit event of a reject made stands; the rest went with the write.
+	late.Reports = []Report{{Event: "step.subject_mismatch", Audit: true}, {Event: "flow.rejected"}}
+	if out := late.past(Input{Event: Loop{}, Env: env}); len(out.Reports) != 1 || out.Reports[0].Event != "step.subject_mismatch" {
+		t.Errorf("reports %+v", out.Reports)
 	}
 	early := Outcome{Write: &Flow{HydraExpiresAt: testNow.Add(time.Millisecond).UnixMilli()}}
 	if out := early.past(Input{Event: Loop{}, Env: env}); out.Write == nil {

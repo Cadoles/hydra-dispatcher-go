@@ -105,11 +105,7 @@ func (r *run) appCall(ev AppCall) Outcome {
 		if !current || step.LoginOK {
 			return s.redirect(s.loop) // EMU-9 (RA2, Q4)
 		}
-		req, err := f.LoginRequestFor(r.Env, ref, k)
-		if err != nil {
-			return s.fail(E1000)
-		}
-		return Outcome{Response: Response{Kind: AppJSON, Status: http.StatusOK, Body: req}} // EMU-8
+		return s.served(f.LoginRequestFor(r.Env, ref, k)) // EMU-8
 	case AppAcceptLogin:
 		body, ctx, err := loginAcceptOf(ev.Body)
 		switch {
@@ -128,36 +124,44 @@ func (r *run) appCall(ev AppCall) Outcome {
 		return r.appReject(f, ev.Body) // EMU-16 (M8, T3)
 	}
 
-	// The consent of a step.
+	// The consent of a step. Its accept's body is checked first, as the
+	// login's: a second accept with an invalid body gets 400 (EMU-15).
+	var idt, act, ctx Object
+	if ev.Op == AppAcceptConsent {
+		var err error
+		if idt, act, ctx, err = consentAcceptOf(ev.Body); err != nil {
+			return invalidBody() // EMU-15
+		}
+	}
 	switch done := !current || step.ConsentOK; {
 	case done:
 		return s.redirect(s.loop) // EMU-19, EMU-22, EMU-24
-	case !step.LoginOK && ev.Op == AppAcceptConsent:
-		if _, _, _, err := consentAcceptOf(ev.Body); err != nil {
-			return invalidBody()
-		}
-		return s.redirect(s.loop) // EMU-20
 	case !step.LoginOK:
 		return s.redirect(s.loop) // EMU-20: cC(k) is only issued after lok
 	}
 	switch ev.Op {
 	case AppGetConsent:
-		req, err := f.ConsentRequestFor(r.Env, ref, k)
-		if err != nil {
-			return s.fail(E1000)
-		}
-		return Outcome{Response: Response{Kind: AppJSON, Status: http.StatusOK, Body: req}} // EMU-18
+		return s.served(f.ConsentRequestFor(r.Env, ref, k)) // EMU-18
 	case AppAcceptConsent:
-		idt, act, ctx, err := consentAcceptOf(ev.Body)
-		if err != nil {
-			return invalidBody() // EMU-15
-		}
 		g := f.clone()
 		g.Steps[k-1].ConsentOK = true
 		g.Steps[k-1].IDToken, g.Steps[k-1].AccessToken, g.Steps[k-1].ConsentContext = idt, act, ctx
 		return s.redirect(s.loop).writing(g).report(Report{Event: "step.consent_accepted", Detail: step.App}) // EMU-21
 	}
 	return r.appReject(f, ev.Body) // EMU-23: a reject of the login (M8)
+}
+
+// served answers with a login or consent request served to an app (EMU-8,
+// EMU-18): its app gone from the snapshot is E1005, as on the pages (EMU-28,
+// BCL-11, Q21), its options with it; a stored flow it cannot read, E1000.
+func (s surface) served(req any, err error) Outcome {
+	switch {
+	case errors.Is(err, errAppGone):
+		return s.fail(E1005)
+	case err != nil:
+		return s.fail(E1000)
+	}
+	return Outcome{Response: Response{Kind: AppJSON, Status: http.StatusOK, Body: req}}
 }
 
 // loginAccepted records the login accept of the current step k (EMU-10,

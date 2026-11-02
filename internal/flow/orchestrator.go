@@ -157,15 +157,27 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			case bytes.Equal(read, data):
 				return o.result(out, reports)
 			case version == at && bytes.Equal(read, before) && replay:
-				// Not written: written once again, as the replay.
+				// Not written: written once again, as the replay, with the TTL
+				// left now (ECR-8 when hx passed meanwhile).
 				replay = false
 				reports = append(reports, Report{Event: "state.conflict", Detail: "write of unknown outcome, written again"})
-				err := o.Store.Put(ctx, key, data, ttl, version)
-				if err != nil && !errors.Is(err, state.ErrConflict) && load() == nil && bytes.Equal(read, data) {
-					err = nil // of unknown outcome again, but written
+				if ttl = time.UnixMilli(out.Write.HydraExpiresAt).Sub(o.now()); ttl <= 0 {
+					in.Env.Now = o.now()
+					continue
 				}
-				if err == nil {
+				switch err := o.Store.Put(ctx, key, data, ttl, version); {
+				case err == nil:
 					return o.result(out, reports)
+				case errors.Is(err, state.ErrClosed), errors.Is(err, state.ErrNoTTL), ctx.Err() != nil:
+					return fail(err) // ECR-7, as on the first write
+				case !errors.Is(err, state.ErrConflict):
+					// Of unknown outcome again: written if the bytes are.
+					if err := load(); err != nil {
+						return fail(err)
+					}
+					if bytes.Equal(read, data) {
+						return o.result(out, reports)
+					}
 				}
 				return o.result(in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "write failed twice", Sentry: true}))
 			}

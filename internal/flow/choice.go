@@ -22,8 +22,10 @@ type offer struct {
 	// flows are the candidates, in the snapshot's order.
 	flows []string
 	// clientOnly is the one flow the client's restriction leaves, "" when
-	// none or several: chosen, it is imposed (Q29).
+	// none or several, and preferred the flow acr_values prefers, when it is
+	// a candidate: chosen by any path, either is imposed (Q29).
 	clientOnly string
+	preferred  string
 	reports    []Report
 }
 
@@ -67,7 +69,7 @@ func (r *run) offer(f *Flow) offer {
 	}
 	switch {
 	case preferred != "" && slices.Contains(o.flows, preferred):
-		o.start, o.imposed = preferred, true
+		o.start, o.imposed, o.preferred = preferred, true, preferred
 	case preferred != "":
 		o.reports = append(o.reports, Report{Event: "config.warning", Detail: "preferred flow not offered, ignored: " + preferred})
 		fallthrough
@@ -80,21 +82,30 @@ func (r *run) offer(f *Flow) offer {
 }
 
 // clientFlows returns the client's metadata.dispatcher.flows, and whether it
-// restricts the flows. A restriction that is not a list of ids leaves none:
-// it only ever narrows what the client may use.
+// restricts the flows. A restriction that is not a list of ids, or a
+// dispatcher member that is not an object, leaves none: it only ever narrows
+// what the client may use. Metadata that is not an object holds no
+// restriction.
 func clientFlows(client json.RawMessage) ([]string, bool) {
 	var c struct {
-		Metadata struct {
-			Dispatcher struct {
-				Flows json.RawMessage `json:"flows"`
-			} `json:"dispatcher"`
-		} `json:"metadata"`
+		Metadata json.RawMessage `json:"metadata"`
 	}
-	if json.Unmarshal(client, &c) != nil || c.Metadata.Dispatcher.Flows == nil || isNull(c.Metadata.Dispatcher.Flows) {
+	_ = json.Unmarshal(client, &c) // a client that is no object has no metadata
+	var metadata, dispatcher map[string]json.RawMessage
+	_ = json.Unmarshal(c.Metadata, &metadata)
+	d, ok := metadata["dispatcher"]
+	if !ok || isNull(d) {
+		return nil, false
+	}
+	if json.Unmarshal(d, &dispatcher) != nil {
+		return nil, true
+	}
+	flows, ok := dispatcher["flows"]
+	if !ok || isNull(flows) {
 		return nil, false
 	}
 	var ids []string
-	if json.Unmarshal(c.Metadata.Dispatcher.Flows, &ids) != nil {
+	if json.Unmarshal(flows, &ids) != nil {
 		return nil, true
 	}
 	return ids, true

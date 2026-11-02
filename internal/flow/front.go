@@ -196,7 +196,7 @@ func (r *run) choose(ev Choose) Outcome {
 	if state != Choice {
 		g = f.restart() // POS-4 (Q8): back to the choice and chosen, one write
 	}
-	return r.start(ref, g, ev.FlowID, ev.FlowID == o.clientOnly, "choice")
+	return r.start(ref, g, ev.FlowID, ev.FlowID == o.clientOnly || ev.FlowID == o.preferred, "choice") // Q29
 }
 
 // csrf returns the copy of the cookie, "" for no flow.

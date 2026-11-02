@@ -104,6 +104,8 @@ func (h *fakeHydra) RejectConsent(context.Context, string, ory.RejectOAuth2Reque
 type fakeStore struct {
 	state.StateStore
 	puts int
+	// ttls are those of the writes, in order (I4, Q2).
+	ttls []time.Duration
 	hook func(n int, key string, val []byte, ifVersion uint64) (error, bool)
 	gets int
 	// getErr fails the reads from the one numbered, from 1; 0 never.
@@ -112,6 +114,7 @@ type fakeStore struct {
 
 func (s *fakeStore) Put(ctx context.Context, key string, val []byte, ttl time.Duration, ifVersion uint64) error {
 	s.puts++
+	s.ttls = append(s.ttls, ttl)
 	if s.hook != nil {
 		if err, done := s.hook(s.puts, key, val, ifVersion); done {
 			return err
@@ -464,6 +467,56 @@ func TestConditionalWrites(t *testing.T) {
 			t.Errorf("answer %+v", r.Response)
 		}
 	})
+	t.Run("ECR-7, store closed on the write again", func(t *testing.T) {
+		w := running(t, atStep(t, 1, true, true))
+		w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+			if n == 1 {
+				return errors.New("redis: i/o timeout"), true
+			}
+			return state.ErrClosed, true
+		}
+		if r := w.handle(loop); r.Response.Code != E1000 || !reported(r, "state.error") {
+			t.Errorf("answer %+v, reports %+v", r.Response, r.Reports)
+		}
+	})
+	t.Run("ECR-8, hx passed before the write again: nothing written", func(t *testing.T) {
+		w := running(t, atStep(t, 1, true, true))
+		w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+			w.now = testNow.Add(31 * time.Minute)
+			return errors.New("redis: i/o timeout"), true
+		}
+		if r := w.handle(loop); r.Response.Code != E1002 || w.store.puts != 1 {
+			t.Errorf("answer %+v, puts %d", r.Response, w.store.puts)
+		}
+	})
+	t.Run("I4 Q2, the TTL runs to hx, the write again's too", func(t *testing.T) {
+		w := running(t, atStep(t, 1, true, true))
+		w.now = testNow.Add(5 * time.Minute)
+		w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+			w.now = w.now.Add(time.Minute)
+			return errors.New("redis: i/o timeout"), n == 1
+		}
+		w.handle(loop)
+		if want := []time.Duration{25 * time.Minute, 24 * time.Minute}; !slices.Equal(w.store.ttls, want) {
+			t.Errorf("ttls %v; want %v", w.store.ttls, want)
+		}
+	})
+	t.Run("ECR-4, a subject mismatch carried over keeps its audit event", func(t *testing.T) {
+		w := running(t, atStep(t, 2, false, false))
+		w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+			if n == 1 {
+				w.put(atStep(t, 2, false, false).restart()) // back to the choice meanwhile
+			}
+			return nil, false
+		}
+		r := w.handle(callBy(AppAcceptLogin, 1000, "2fa", `{"subject":"bob"}`))
+		if r.Response.Status != http.StatusOK || !slices.Equal(w.hydra.calls, []string{"reject_login"}) || !w.stored().Done {
+			t.Errorf("answer %d %s, calls %v", r.Response.Status, rawJSON(r.Response.Body), w.hydra.calls)
+		}
+		if !slices.ContainsFunc(r.Reports, func(x Report) bool { return x.Event == "step.subject_mismatch" && x.Audit }) {
+			t.Errorf("no audit: %+v", r.Reports)
+		}
+	})
 	t.Run("ECR-6, two loads of GET /: the last one wins", func(t *testing.T) {
 		w := newWorld(t)
 		w.hydra.before["get_login"] = func() {
@@ -579,6 +632,32 @@ func TestConditionalWrites(t *testing.T) {
 		}
 		if got := rawJSON(w.hydra.accepted.Context); got != `{"from":"2fa","x_dispatcher_ref":"`+lref+`"}` {
 			t.Errorf("context %s", got)
+		}
+	})
+}
+
+// The rejects of the consent, made by the orchestrator (CST-15, CST-8).
+func TestConsentRejects(t *testing.T) {
+	login := &ory.AcceptOAuth2LoginRequest{Subject: "alice", Context: map[string]any{"x_dispatcher_ref": lref}}
+	t.Run("CST-15", func(t *testing.T) {
+		w := running(t, acceptedFlow(t))
+		w.hydra.accepted = login
+		r := w.handle(Consent{Challenge: hydraC, Cookie: cookie, Post: true, Token: cookie, SameOrigin: true})
+		f := w.stored()
+		if r.Response.URL != hydraDone || !slices.Equal(w.hydra.calls, []string{"get_consent", "reject_consent"}) || !f.Done || f.ConsentRedirect != hydraDone {
+			t.Errorf("answer %+v, calls %v, flow %+v", r.Response, w.hydra.calls, f)
+		}
+	})
+	t.Run("CST-8, the cookie not even checked", func(t *testing.T) {
+		w := running(t, lastDone(t))
+		w.hydra.accepted = login
+		r := w.handle(Consent{Challenge: hydraC})
+		f := w.stored()
+		if r.Response.Code != E1007 || !slices.Equal(w.hydra.calls, []string{"get_consent", "reject_consent"}) || !f.Done || f.ConsentRedirect != "" {
+			t.Errorf("answer %+v, calls %v, flow %+v", r.Response, w.hydra.calls, f)
+		}
+		if !slices.ContainsFunc(r.Reports, func(x Report) bool { return x.Event == "flow.rejected" && x.Audit }) {
+			t.Errorf("A3, no audit: %+v", r.Reports)
 		}
 	})
 }

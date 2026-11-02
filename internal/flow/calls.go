@@ -45,19 +45,18 @@ func blocked() Outcome {
 
 // hydraFailure answers the error of an accept or a reject made on f (Q11,
 // EXP-4): a request gone at Hydra finishes the flow without a rejection; a
-// 409 is a concurrent request's, the flow is read again first; a refusal is
-// E1007, an unavailable Hydra E1004, the flow unchanged.
+// refusal (400, 403, 409) reads the flow again first, a concurrent request
+// having perhaps moved it on or finished it, then is E1007; an unavailable
+// Hydra is E1004, the flow unchanged.
 func (r *run) hydraFailure(f *Flow, err error) Outcome {
 	s := r.surface()
 	switch classify(err) {
 	case unknown, gone:
 		return s.ended(f).writing(f.Reduce())
-	case conflict:
+	case conflict, refused:
 		if !r.Reread {
 			return Outcome{Reread: true}
 		}
-		return s.fail(E1007)
-	case refused:
 		return s.fail(E1007)
 	}
 	return s.fail(E1004)
@@ -77,7 +76,7 @@ func (r *run) rejectLogin(f *Flow, reason Reason, body ory.RejectOAuth2Request, 
 	if err := d.err(); err != nil {
 		return r.hydraFailure(f, err)
 	}
-	return ok(d.RedirectTo).writing(f.Reduce()).report(Report{Event: "flow.rejected", Detail: reason.String()})
+	return ok(d.RedirectTo).writing(f.Reduce()).report(Report{Event: "flow.rejected", Detail: d.Call.Reason.String()})
 }
 
 // expire rejects an expired flow with login_required (M9, ENT-8, EXP-2).
@@ -256,8 +255,13 @@ func (r *run) rejectConsent(f *Flow, c string, reason Reason, body ory.RejectOAu
 		return ok(d.RedirectTo)
 	}
 	out, answer := r.consentDone(f, d), ok(d.RedirectTo)
+	if d.Call.Reason == ReasonNotOurs {
+		// Q20: the reject made is A3's, whatever the transition replayed on
+		// the flow read again would answer.
+		answer = s.fail(E1007)
+	}
 	out.Response, out.Reports = answer.Response, append(out.Reports, answer.Reports...)
-	return out.report(Report{Event: "flow.rejected", Detail: reason.String(), Audit: reason == ReasonNotOurs})
+	return out.report(Report{Event: "flow.rejected", Detail: d.Call.Reason.String(), Audit: d.Call.Reason == ReasonNotOurs})
 }
 
 // consentDone finishes f after the accept or the reject of its consent,
@@ -273,7 +277,8 @@ func (r *run) consentDone(f *Flow, d *Done) Outcome {
 
 // unusedFact answers an accept or a reject Hydra made that the transition,
 // replayed on a flow read again, did not reach (ECR-3, ECR-4, ECR-9):
-// carried over to the flow unless it is finished, never a second one.
+// carried over to the flow unless it is finished, never a second one. The
+// audit event of a reject stands either way: the reject was made.
 func (r *run) unusedFact() (Outcome, bool) {
 	a, s, f := r.Answers, r.surface(), r.Flow
 	conflict := Report{Event: "state.conflict", Detail: "finished meanwhile", Sentry: true}
@@ -289,14 +294,15 @@ func (r *run) unusedFact() (Outcome, bool) {
 		}
 		return r.accepted(f, a.Accept), true // ECR-4
 	case a.Reject.ok() && !r.used[RejectLogin]:
+		d := a.Reject
 		if f == nil || f.Done || f.StateAt(r.Env.Now) == Absent {
-			return s.redirect(a.Reject.RedirectTo).report(conflict), true // ECR-9: it grants nothing
+			return s.redirect(d.RedirectTo).report(conflict).audited(d), true // ECR-9: it grants nothing
 		}
-		out := s.redirect(a.Reject.RedirectTo)
-		if a.Reject.Call.Reason == ReasonSkipSubject {
+		out := s.redirect(d.RedirectTo)
+		if d.Call.Reason == ReasonSkipSubject {
 			out = s.fail(E1003)
 		}
-		return out.writing(f.Reduce()), true // ECR-4
+		return out.writing(f.Reduce()).audited(d), true // ECR-4
 	case a.ConsentAccept.ok() && !r.used[AcceptConsent], a.ConsentReject.ok() && !r.used[RejectConsent]:
 		d := a.ConsentAccept
 		if !d.ok() || r.used[AcceptConsent] {
@@ -304,7 +310,11 @@ func (r *run) unusedFact() (Outcome, bool) {
 		}
 		switch {
 		case f == nil || f.StateAt(r.Env.Now) == Absent:
-			return s.absent().report(conflict), true
+			return s.absent().report(conflict).audited(d), true
+		case f.Done && d.Call.Reason == ReasonNotOurs:
+			// Q20: an A3 reject's redirect_to is never followed, and the cr
+			// of the flow is another consent's.
+			return s.fail(E1007).report(conflict).audited(d), true
 		case f.Done && f.ConsentRedirect != "":
 			return s.redirect(d.RedirectTo), true // ECR-3, Q30: the same consent
 		case f.Done && d.Call.Op == AcceptConsent:
@@ -317,7 +327,19 @@ func (r *run) unusedFact() (Outcome, bool) {
 			fail := s.fail(E1007)
 			out.Response, out.Reports = fail.Response, fail.Reports
 		}
-		return out, true // ECR-4
+		return out.audited(d), true // ECR-4
 	}
 	return Outcome{}, false
+}
+
+// audited adds the audit event of the reject d (EMU-12, EMU-14, CST-8 to
+// CST-10), which the transition reports when it reaches the reject itself.
+func (o Outcome) audited(d *Done) Outcome {
+	switch d.Call.Reason {
+	case ReasonSubject:
+		return o.report(Report{Event: "step.subject_mismatch", Audit: true})
+	case ReasonNotOurs:
+		return o.report(Report{Event: "flow.rejected", Detail: ReasonNotOurs.String(), Audit: true})
+	}
+	return o
 }
