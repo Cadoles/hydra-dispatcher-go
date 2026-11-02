@@ -662,15 +662,32 @@ func TestConsentRejects(t *testing.T) {
 	})
 }
 
+// traced is the log handler of serve, as far as the orchestrator sees it: it
+// writes the trace id of the request's context.
+type traced struct{ slog.Handler }
+
+type traceKey struct{}
+
+func (h traced) Handle(ctx context.Context, r slog.Record) error {
+	if id, ok := ctx.Value(traceKey{}).(string); ok {
+		r.AddAttrs(slog.String("trace_id", id))
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
 func TestOrchestratorLogs(t *testing.T) {
 	w := running(t, atStep(t, 1, false, false))
-	r := w.handle(callBy(AppGetLogin, 1000, "2fa", "")) // a future step: forged
-	if r.Response.Status != http.StatusNotFound || !strings.Contains(w.logs.String(), `"level":"WARN","msg":"challenge.invalid","detail":"forged"`) {
+	w.o.Log = slog.New(traced{slog.NewJSONHandler(&w.logs, nil)})
+	// A future step: forged. Logged in the request's context, with its
+	// surface.
+	r := w.o.Handle(context.WithValue(context.Background(), traceKey{}, "t1"), callBy(AppGetLogin, 1000, "2fa", ""))
+	if r.Response.Status != http.StatusNotFound ||
+		!strings.Contains(w.logs.String(), `"level":"WARN","msg":"challenge.invalid","surface":"emulated","detail":"forged","audit":false,"trace_id":"t1"`) {
 		t.Errorf("answer %d, logs %s", r.Response.Status, w.logs.String())
 	}
 	w.store.getErr = 1
 	w.handle(Loop{Ref: lref, Cookie: cookie})
-	if !strings.Contains(w.logs.String(), `"level":"ERROR","msg":"state.error"`) {
+	if !strings.Contains(w.logs.String(), `"level":"ERROR","msg":"state.error","surface":"front"`) {
 		t.Errorf("logs %s", w.logs.String())
 	}
 	w.o.Log, w.o.Now = nil, nil

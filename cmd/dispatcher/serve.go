@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,9 +134,32 @@ func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs l
 	if err := prepareStore(ctx, cfg, db, logs.app); err != nil {
 		return nil, err
 	}
+	hosts, err := cfg.Security.EmulatedAPIAuthorizedHosts.Prefixes()
+	if err != nil {
+		return nil, err
+	}
 	readCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	return store.NewLive(readCtx, db, logs.app, logs.warnings)
+	return store.NewLive(readCtx, identified{db, hosts}, logs.app, logs.warnings)
+}
+
+// identified adds to each snapshot the warnings of the apps'
+// identification against security.emulated_api_authorized_hosts, which the
+// store does not know (emulated.Warnings).
+type identified struct {
+	store.Source
+	hosts []netip.Prefix
+}
+
+func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
+	s, err := i.Source.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// A copy: a source may give the same snapshot twice.
+	c := *s
+	c.Warnings = append(slices.Clip(s.Warnings), emulated.Warnings(s.Apps, i.hosts)...)
+	return &c, nil
 }
 
 // shutdownGrace is how long in-flight requests may run after SIGTERM, and
@@ -253,9 +277,11 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	return httpx.Chain(httpx.Routes(mux),
 		httpx.RealIP(trusted),
 		// traceparent is honoured from the proxies and the login apps, by
-		// the sources the configuration of the moment declares (B2).
+		// the sources the configuration of the moment declares, within the
+		// allowlist of the emulated API (B2): a source outside it, or one
+		// written 0.0.0.0/0, would let any client choose its trace id.
 		httpx.TraceFrom(func(ip netip.Addr) bool {
-			return httpx.Within(trusted, ip) || appSource(s.config.Snapshot(), ip)
+			return httpx.Within(trusted, ip) || httpx.Within(loginApps, ip) && appSource(s.config.Snapshot(), ip)
 		}),
 		httpx.SecurityHeaders(httpx.CSP(csp), strings.HasPrefix(cfg.Server.BaseURL, "https://"), cfg.TLS.HSTSIncludeSubdomains),
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP),

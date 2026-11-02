@@ -107,7 +107,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 	}
 	fail := func(err error) Result {
 		out := (&run{Input: in}).surface().fail(E1000)
-		return o.result(in, out, append(reports, Report{Event: "state.error", Detail: err.Error(), Sentry: true}))
+		return o.result(ctx, in, out, append(reports, Report{Event: "state.error", Detail: err.Error(), Sentry: true}))
 	}
 	for range maxRounds {
 		out := Decide(in)
@@ -128,7 +128,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			o.call(ctx, *out.Call, &in.Answers)
 			continue
 		case out.Write == nil:
-			return o.result(in, out, reports)
+			return o.result(ctx, in, out, reports)
 		}
 
 		data, err := Encode(out.Write)
@@ -145,7 +145,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		err = o.Store.Put(ctx, key, data, ttl, version)
 		switch {
 		case err == nil:
-			return o.result(in, out, reports)
+			return o.result(ctx, in, out, reports)
 		case errors.Is(err, state.ErrConflict):
 		case errors.Is(err, state.ErrClosed), errors.Is(err, state.ErrNoTTL), ctx.Err() != nil:
 			return fail(err)
@@ -157,7 +157,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			}
 			switch {
 			case bytes.Equal(read, data):
-				return o.result(in, out, reports)
+				return o.result(ctx, in, out, reports)
 			case version == at && bytes.Equal(read, before) && replay:
 				// Not written: written once again, as the replay, with the TTL
 				// left now (ECR-8 when hx passed meanwhile).
@@ -169,7 +169,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 				}
 				switch err := o.Store.Put(ctx, key, data, ttl, version); {
 				case err == nil:
-					return o.result(in, out, reports)
+					return o.result(ctx, in, out, reports)
 				case errors.Is(err, state.ErrClosed), errors.Is(err, state.ErrNoTTL), ctx.Err() != nil:
 					return fail(err) // ECR-7, as on the first write
 				case !errors.Is(err, state.ErrConflict):
@@ -178,16 +178,16 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 						return fail(err)
 					}
 					if bytes.Equal(read, data) {
-						return o.result(in, out, reports)
+						return o.result(ctx, in, out, reports)
 					}
 				}
-				return o.result(in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "write failed twice", Sentry: true}))
+				return o.result(ctx, in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "write failed twice", Sentry: true}))
 			}
 		}
 		// A conflict (ECR-1, ECR-6), or another value read after an unknown
 		// outcome: the transition is replayed once on the flow read again.
 		if !replay {
-			return o.result(in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "replayed", Sentry: true}))
+			return o.result(ctx, in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "replayed", Sentry: true}))
 		}
 		replay = false
 		reports = append(reports, Report{Event: "state.conflict", Detail: "replay"})
@@ -197,7 +197,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			}
 		}
 	}
-	return o.result(in, in.surface(E1000), append(reports, Report{Event: "flow.error", Detail: "no outcome", Sentry: true}))
+	return o.result(ctx, in, in.surface(E1000), append(reports, Report{Event: "flow.error", Detail: "no outcome", Sentry: true}))
 }
 
 // surface answers code in the forms of the event.
@@ -205,9 +205,16 @@ func (in Input) surface(code Code) Outcome {
 	return (&run{Input: in}).surface().fail(code)
 }
 
-func (o *Orchestrator) result(in Input, out Outcome, reports []Report) Result {
+// result logs the reports in the request's context, which gives them its
+// trace id and route, with the surface of the event: the trace id of an
+// error the app or the page shows leads to its cause.
+func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, reports []Report) Result {
 	reports = append(reports, out.Reports...)
 	if o.Log != nil {
+		surface := "front"
+		if _, ok := in.Event.(AppCall); ok {
+			surface = "emulated"
+		}
 		for _, r := range reports {
 			level := slog.LevelInfo
 			switch {
@@ -216,7 +223,7 @@ func (o *Orchestrator) result(in Input, out Outcome, reports []Report) Result {
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Audit:
 				level = slog.LevelWarn
 			}
-			o.Log.Log(context.Background(), level, r.Event, "detail", r.Detail, "audit", r.Audit)
+			o.Log.Log(ctx, level, r.Event, "surface", surface, "detail", r.Detail, "audit", r.Audit)
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}

@@ -46,14 +46,17 @@ type fixedSnapshot struct{ s *store.Snapshot }
 func (f fixedSnapshot) Snapshot() *store.Snapshot { return f.s }
 
 // testServices are those of a handler without a database: the state store
-// in memory, and one app, which calls from 192.168.5.7.
+// in memory, and two apps, one calling from 192.168.5.7.
 func testServices(t *testing.T, database httpx.Check) services {
 	t.Helper()
 	mem := state.NewMemory()
 	t.Cleanup(func() { _ = mem.Close() })
 	app := store.App{ID: "sql", LoginURL: "http://sql/login", ConsentURL: "http://sql/consent", AuthMode: "network",
 		AllowedSources: []netip.Prefix{netip.MustParsePrefix("192.168.5.7/32")}}
-	return services{database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app}, nil, store.DefaultSettings())}}
+	// Its sources outside every allowlist of the tests.
+	far := store.App{ID: "far", LoginURL: "http://far/login", ConsentURL: "http://far/consent", AuthMode: "network",
+		AllowedSources: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}}
+	return services{database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app, far}, nil, store.DefaultSettings())}}
 }
 
 func testConfig(t *testing.T, hydraAdminURL string) *config.Config {
@@ -228,10 +231,12 @@ func TestLoggersLevel(t *testing.T) {
 
 // traceparent is honoured from the proxies and the login apps, as RealIP
 // tells them, and from them only: no more from every private address, nor
-// from the whole allowlist of the emulated API, only the apps' sources (B2).
+// from the whole allowlist of the emulated API, only the apps' sources
+// within it (B2).
 func TestHandlerTrace(t *testing.T) {
-	cfg, _, err := config.Load("", append(requiredEnv("http://127.0.0.1:1"),
-		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=192.168.5.0/24"))
+	// First: the first value of a variable is the one read.
+	cfg, _, err := config.Load("", append([]string{"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=192.168.5.0/24"},
+		requiredEnv("http://127.0.0.1:1")...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +261,9 @@ func TestHandlerTrace(t *testing.T) {
 		{"another private host claiming a login app", "10.0.0.99:1", "192.168.5.7", false},
 		// In the allowlist of the emulated API, but no app's source.
 		{"allowlisted, no app", "192.168.5.8:1", "", false},
+		// An app's source, outside the allowlist: its sources do not open
+		// the trace to clients the emulated API refuses.
+		{"an app's source outside the allowlist", "203.0.113.9:1", "", false},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/health", nil)
 		r.RemoteAddr = tt.remote
@@ -418,7 +426,7 @@ func TestServeWarningsAtErrorLevel(t *testing.T) {
 		k, v, _ := strings.Cut(kv, "=")
 		t.Setenv(k, v)
 	}
-	useStore(t, &fakeStore{warnings: []string{`setting "x" is unknown to this version: ignored`}})
+	useStore(t, &fakeStore{warnings: []string{`setting "x" is unknown to this version: ignored`}, apps: []store.App{{ID: "open", AuthMode: "network"}}})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var err error
@@ -429,6 +437,33 @@ func TestServeWarningsAtErrorLevel(t *testing.T) {
 	}
 	if !strings.Contains(logs, `"detail":"setting \"x\" is unknown to this version: ignored"`) {
 		t.Errorf("the snapshot's warning is missing at log_level error:\n%s", logs)
+	}
+	// Those of the apps' identification, which serve adds.
+	if !strings.Contains(logs, `"detail":"app open has no allowed_sources`) {
+		t.Errorf("the app's warning is missing:\n%s", logs)
+	}
+}
+
+// snapshotSource gives the same snapshot at each read.
+type snapshotSource struct{ s *store.Snapshot }
+
+func (s snapshotSource) Snapshot(context.Context) (*store.Snapshot, error) { return s.s, nil }
+
+// The warnings of the apps' identification join a snapshot's own, without
+// changing it: a source that gives the same snapshot twice does not get
+// them twice.
+func TestIdentifiedWarnings(t *testing.T) {
+	snap := store.NewSnapshot([]store.App{{ID: "open", AuthMode: "network"}}, nil, store.DefaultSettings())
+	snap.Warnings = []string{"a setting"}
+	src := identified{snapshotSource{snap}, []netip.Prefix{netip.MustParsePrefix("10.0.1.0/24")}}
+	for range 2 {
+		s, err := src.Snapshot(context.Background())
+		if err != nil || len(s.Warnings) != 2 || s.Warnings[0] != "a setting" || !strings.HasPrefix(s.Warnings[1], "app open has no allowed_sources") || len(snap.Warnings) != 1 {
+			t.Fatalf("warnings %q, the source's %q, err %v", s.Warnings, snap.Warnings, err)
+		}
+	}
+	if _, err := (identified{&fakeStore{snapshotErr: errors.New("down")}, nil}).Snapshot(context.Background()); err == nil {
+		t.Error("the source's error lost")
 	}
 }
 

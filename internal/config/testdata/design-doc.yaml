@@ -1,4 +1,4 @@
-# Example configuration of "Conception Dispatcher Go.md" v1.3.10, section
+# Example configuration of "Conception Dispatcher Go.md" v1.3.12, section
 # "Configuration et deploiement", copied verbatim: it must keep loading.
 server:
   listen: ":8080"

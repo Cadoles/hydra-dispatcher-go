@@ -1001,9 +1001,17 @@ func TestEmulatedAPIHostsRequired(t *testing.T) {
 	if _, _, err := Load("", envOf(env)); err == nil || !strings.Contains(err.Error(), "security.emulated_api_authorized_hosts: is required") {
 		t.Errorf("unset: err = %v", err)
 	}
-	c, _, err := Load(writeFile(t, "security:\n  emulated_api_authorized_hosts: [10.5.0.0/24]\n"), envOf(env))
-	if err != nil || !slices.Equal(*c.Security.EmulatedAPIAuthorizedHosts, List{"10.5.0.0/24"}) {
-		t.Errorf("set by the file: err = %v", err)
+	c, warnings, err := Load(writeFile(t, "security:\n  emulated_api_authorized_hosts: [10.5.0.0/24]\n"), envOf(env))
+	if err != nil || !slices.Equal(*c.Security.EmulatedAPIAuthorizedHosts, List{"10.5.0.0/24"}) || hasWarning(warnings, "emulated_api_authorized_hosts is empty") {
+		t.Errorf("set by the file: err = %v, warnings %q", err, warnings)
+	}
+	// Empty, written [] or by a variable left empty: it passes, the API
+	// closed, and says so.
+	for _, file := range []string{"security:\n  emulated_api_authorized_hosts: []\n", "security:\n  emulated_api_authorized_hosts: ${UNSET}\n"} {
+		_, warnings, err := Load(writeFile(t, file), envOf(env))
+		if err != nil || !hasWarning(warnings, "security.emulated_api_authorized_hosts is empty: the emulated API refuses every call") {
+			t.Errorf("%q: err = %v, warnings %q", file, err, warnings)
+		}
 	}
 }
 

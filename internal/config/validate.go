@@ -92,6 +92,10 @@ func (c *Config) validate() (warnings []string, err error) {
 		fail("security.emulated_api_authorized_hosts", "is required: the networks the login apps call the emulated API from")
 	} else {
 		emulated = *c.Security.EmulatedAPIAuthorizedHosts
+		if len(emulated) == 0 {
+			// [] passes the requirement, as a ${VAR} left empty does.
+			warnings = append(warnings, "security.emulated_api_authorized_hosts is empty: the emulated API refuses every call of the login apps")
+		}
 	}
 	admin := c.Security.AdminAuthorizedHosts
 	allowlists := false
@@ -113,7 +117,7 @@ func (c *Config) validate() (warnings []string, err error) {
 		}
 		// However written: 0.0.0.0/0, or 0.0.0.0/1 and 128.0.0.0/1.
 		for _, all := range []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")} {
-			if covers(ps, all) {
+			if Covers(ps, all) {
 				warnings = append(warnings, fmt.Sprintf("%s covers %s: %s", l.path, all, l.open))
 			}
 		}
@@ -322,8 +326,8 @@ func (l List) Prefixes() ([]netip.Prefix, error) {
 	return ps, nil
 }
 
-// covers reports whether ps hold every address of p.
-func covers(ps []netip.Prefix, p netip.Prefix) bool {
+// Covers reports whether ps hold every address of p, however split.
+func Covers(ps []netip.Prefix, p netip.Prefix) bool {
 	split := false
 	for _, q := range ps {
 		switch {
@@ -340,5 +344,5 @@ func covers(ps []netip.Prefix, p netip.Prefix) bool {
 	high := p.Addr().AsSlice()
 	high[p.Bits()/8] |= 0x80 >> (p.Bits() % 8)
 	h, _ := netip.AddrFromSlice(high)
-	return covers(ps, netip.PrefixFrom(p.Addr(), bits)) && covers(ps, netip.PrefixFrom(h, bits))
+	return Covers(ps, netip.PrefixFrom(p.Addr(), bits)) && Covers(ps, netip.PrefixFrom(h, bits))
 }

@@ -8,12 +8,15 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	ory "github.com/ory/hydra-client-go/v26"
 
@@ -144,9 +147,21 @@ func TestLegacyPaths(t *testing.T) {
 	if w := s.do(http.MethodGet, "/admin/oauth2/auth/requests/login?login_challenge="+challenge, appIP, ""); w.Header().Get("Deprecation") != "" {
 		t.Error("v2 deprecated")
 	}
+	// Every answer of an alias carries its headers, the allowlist's refusal
+	// too; an address outside it is not remembered.
+	w := s.do(http.MethodPut, "/oauth2/auth/requests/consent/reject?consent_challenge="+challenge, outsideIP, "{}")
+	if w.Code != http.StatusForbidden || w.Header().Get("Deprecation") != "@1793577600" ||
+		w.Header().Get("Link") != `</admin/oauth2/auth/requests/consent/reject>; rel="successor-version"` || strings.Contains(s.logs.String(), `"msg":"emulated.legacy_path","path":"/oauth2/auth/requests/consent/reject"`) {
+		t.Errorf("v1 refused: %d %v; logs %s", w.Code, w.Header(), s.logs.String())
+	}
 	off := newServer(t, false)
-	if w := off.do(http.MethodGet, "/oauth2/auth/requests/login?login_challenge="+challenge, appIP, ""); w.Code != http.StatusNotFound {
-		t.Errorf("v1 off: %d", w.Code)
+	for _, e := range endpoints {
+		if w := off.do(e.method, e.path+"?"+e.param+"="+challenge, appIP, "{}"); w.Code != http.StatusNotFound {
+			t.Errorf("v1 off, %s %s: %d", e.method, e.path, w.Code)
+		}
+	}
+	if len(off.engine.events) != 0 {
+		t.Errorf("v1 off, the engine was called: %+v", off.engine.events)
 	}
 }
 
@@ -161,6 +176,83 @@ func TestBodyLimit(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &b)
 	if w.Code != http.StatusRequestEntityTooLarge || b.Error != "invalid_request" || b.Description != "E1001" || b.StatusCode != 413 {
 		t.Errorf("over 1 MiB: %d %s", w.Code, w.Body)
+	}
+	// A body cut short, or past the server's ReadTimeout: EMU-15, not the
+	// 200 net/http sends for a handler that writes nothing.
+	s.engine.events = nil
+	r := httptest.NewRequest(http.MethodPut, path, iotest.ErrReader(io.ErrUnexpectedEOF))
+	r.RemoteAddr = appIP + ":4321"
+	w = httptest.NewRecorder()
+	s.h.ServeHTTP(w, r)
+	b = errorBody{}
+	_ = json.Unmarshal(w.Body.Bytes(), &b)
+	if w.Code != http.StatusBadRequest || b.Error != "invalid_request" || b.Description != "E1001" || b.TraceID == "" || len(s.engine.events) != 0 {
+		t.Errorf("body cut short: %d %s, events %d", w.Code, w.Body, len(s.engine.events))
+	}
+}
+
+// Under the prefixes, what is no endpoint is answered after the allowlist,
+// in the form of the errors: a client outside it learns nothing of the
+// routes.
+func TestOtherPaths(t *testing.T) {
+	s := newServer(t, true)
+	for _, tc := range []struct {
+		method, path, from string
+		status             int
+		allow, deprecation string
+	}{
+		{http.MethodPut, "/admin/oauth2/auth/requests/login", outsideIP, http.StatusForbidden, "", ""},
+		{http.MethodGet, "/admin/oauth2/auth/requests/logout", outsideIP, http.StatusForbidden, "", ""},
+		{http.MethodPut, "/admin/oauth2/auth/requests/login", appIP, http.StatusMethodNotAllowed, "GET, HEAD", ""},
+		{http.MethodGet, "/admin/oauth2/auth/requests/consent/accept", appIP, http.StatusMethodNotAllowed, "PUT", ""},
+		{http.MethodGet, "/admin/oauth2/auth/requests/logout", appIP, http.StatusNotFound, "", ""},
+		{http.MethodGet, "/admin/oauth2/auth/requests/login/", appIP, http.StatusNotFound, "", ""},
+		// An alias: its Deprecation, the refusal's too.
+		{http.MethodPost, "/oauth2/auth/requests/login/accept", outsideIP, http.StatusForbidden, "", "@1793577600"},
+		{http.MethodPost, "/oauth2/auth/requests/login/accept", appIP, http.StatusMethodNotAllowed, "PUT", "@1793577600"},
+		{http.MethodGet, "/oauth2/auth/requests/logout", appIP, http.StatusNotFound, "", ""},
+	} {
+		w := s.do(tc.method, tc.path+"?login_challenge="+challenge, tc.from, "")
+		var b errorBody
+		_ = json.Unmarshal(w.Body.Bytes(), &b)
+		if w.Code != tc.status || b.StatusCode != tc.status || b.TraceID == "" || w.Header().Get("Content-Type") != "application/json" ||
+			w.Header().Get("Allow") != tc.allow || w.Header().Get("Deprecation") != tc.deprecation {
+			t.Errorf("%s %s from %s: %d %v %s", tc.method, tc.path, tc.from, w.Code, w.Header(), w.Body)
+		}
+	}
+	if len(s.engine.events) != 0 {
+		t.Errorf("the engine was called: %+v", s.engine.events)
+	}
+	// HEAD is the GET of a login or consent request, as for Hydra.
+	if w := s.do(http.MethodHead, "/admin/oauth2/auth/requests/login?login_challenge="+challenge, appIP, ""); w.Code != http.StatusOK || len(s.engine.events) != 1 || s.engine.events[0].Op != flow.AppGetLogin {
+		t.Errorf("HEAD: %d %+v", w.Code, s.engine.events)
+	}
+}
+
+func TestWarnings(t *testing.T) {
+	sources := func(cidrs ...string) []netip.Prefix {
+		var ps []netip.Prefix
+		for _, c := range cidrs {
+			ps = append(ps, netip.MustParsePrefix(c))
+		}
+		return ps
+	}
+	got := Warnings([]store.App{
+		{ID: "open", AuthMode: "network"},
+		{ID: "sourced", AuthMode: "network", AllowedSources: sources("10.0.1.7/32")},
+		{ID: "split", AuthMode: "network", AllowedSources: sources("10.0.2.0/24")},
+		{ID: "far", AuthMode: "network", AllowedSources: sources("10.9.0.0/16")},
+		{ID: "wide", AuthMode: "network", AllowedSources: sources("10.0.1.0/28")},
+		{ID: "certified", AuthMode: "mtls", ClientCertFingerprint: "ab"},
+	}, sources("10.0.1.0/24", "10.0.2.0/25", "10.0.2.128/25"))
+	want := []string{
+		"app open has no allowed_sources: the emulated API accepts its steps from any address of security.emulated_api_authorized_hosts",
+		"apps sourced and wide share addresses (10.0.1.7/32, 10.0.1.0/28): a host there is identified as either",
+		"app far: allowed source 10.9.0.0/16 is not within security.emulated_api_authorized_hosts: the emulated API refuses its calls from outside it",
+		"app certified is in auth_mode mtls: the dispatcher serves no TLS yet, so the emulated API never identifies it and refuses its calls",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("warnings\n%q\nwant\n%q", got, want)
 	}
 }
 

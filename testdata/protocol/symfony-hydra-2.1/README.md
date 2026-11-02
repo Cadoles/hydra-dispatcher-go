@@ -112,7 +112,11 @@ hydra-passwordless three.
 Symfony behaviour the Go dispatcher does not reproduce, on purpose: at the
 first step the emulated login request has `"subject": null` (Go: `""`) and
 `"x_dispatcher_claims": []` (Go: `{}`); Go omits the fields Symfony serves as
-`null`; Symfony sends `"context": []` in its final login accept to Hydra.
+`null`; Symfony sends `"context": []` in its final login accept to Hydra;
+Symfony writes the client's `created_at` and `updated_at` to the second with
+`+00:00` (Go relays Hydra's, to the microsecond with `Z`). Go adds
+`x_dispatcher_restart_url` to the login requests and `x_dispatcher_claims` to
+the consent requests, which Symfony did not serve.
 
 ## Data
 

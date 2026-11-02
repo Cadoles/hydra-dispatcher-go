@@ -11,12 +11,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -69,7 +72,11 @@ var endpoints = []endpoint{
 	{http.MethodPut, "/oauth2/auth/requests/consent/reject", "consent_challenge", flow.AppRejectConsent},
 }
 
-// Register adds the endpoints to mux.
+// prefix is the path of the six endpoints, by their v1 path.
+const prefix = "/oauth2/auth/requests/"
+
+// Register adds the endpoints to mux, and under their prefix an answer to
+// the other paths and methods, after the allowlist as well.
 func Register(mux *http.ServeMux, o Options) {
 	h := &handler{Options: o, legacyCallers: map[netip.Addr]bool{}}
 	for _, e := range endpoints {
@@ -77,6 +84,10 @@ func Register(mux *http.ServeMux, o Options) {
 		if o.LegacyV1Paths {
 			mux.Handle(e.method+" "+e.path, h.serve(e, true))
 		}
+	}
+	mux.Handle("/admin"+prefix, h.other(false))
+	if o.LegacyV1Paths {
+		mux.Handle(prefix, h.other(true))
 	}
 }
 
@@ -88,16 +99,9 @@ type handler struct {
 
 func (h *handler) serve(e endpoint, legacy bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := httpx.ClientIP(r.Context())
-		if !httpx.Within(h.AuthorizedHosts, ip) {
-			h.Logger.WarnContext(r.Context(), "security.ip_rejected", "surface", "emulated", "ip", httpx.FormatIP(ip, h.LogIP))
-			writeError(w, r, flow.AppError{Error: "request_forbidden", Description: "The request is not allowed.", StatusCode: http.StatusForbidden})
+		ip, ok := h.admit(w, r, e.path, legacy)
+		if !ok {
 			return
-		}
-		if legacy {
-			w.Header().Set("Deprecation", deprecation)
-			w.Header().Set("Link", "</admin"+e.path+`>; rel="successor-version"`)
-			h.warnLegacy(r, e.path, ip)
 		}
 		var body json.RawMessage
 		if e.method == http.MethodPut {
@@ -108,7 +112,10 @@ func (h *handler) serve(e endpoint, legacy bool) http.Handler {
 				writeError(w, r, flow.AppError{Error: "invalid_request", Description: string(flow.E1001), StatusCode: http.StatusRequestEntityTooLarge})
 				return
 			case err != nil:
-				// The app hung up: nothing to answer.
+				// A body cut short, or past the server's ReadTimeout: an
+				// invalid body (EMU-15), which an app that hung up does not
+				// read. Without an answer, net/http would send 200.
+				writeError(w, r, flow.AppError{Error: "invalid_request", Description: string(flow.E1001), StatusCode: http.StatusBadRequest})
 				return
 			}
 			body = data
@@ -120,6 +127,62 @@ func (h *handler) serve(e endpoint, legacy bool) http.Handler {
 			Body:      body,
 		})
 		write(w, r, res.Response)
+	})
+}
+
+// admit refuses a caller outside the allowlist, and gives the answers of a
+// v1 path, an alias of path, their Deprecation and Link, the refusal's too;
+// path is "" on another path. The first v1 call of an address the allowlist
+// lets in is logged.
+func (h *handler) admit(w http.ResponseWriter, r *http.Request, path string, legacy bool) (netip.Addr, bool) {
+	ip := httpx.ClientIP(r.Context())
+	alias := legacy && path != ""
+	if alias {
+		w.Header().Set("Deprecation", deprecation)
+		w.Header().Set("Link", "</admin"+path+`>; rel="successor-version"`)
+	}
+	if !httpx.Within(h.AuthorizedHosts, ip) {
+		h.Logger.WarnContext(r.Context(), "security.ip_rejected", "surface", "emulated", "ip", httpx.FormatIP(ip, h.LogIP))
+		writeError(w, r, flow.AppError{Error: "request_forbidden", Description: "The request is not allowed.", StatusCode: http.StatusForbidden})
+		return ip, false
+	}
+	if alias {
+		h.warnLegacy(r, path, ip)
+	}
+	return ip, true
+}
+
+// other answers what is under the prefix but no endpoint, after the
+// allowlist, so that a caller outside it learns nothing of the routes: 405
+// with Allow to another method of an endpoint, 404 to another path, in the
+// form of a malformed challenge (EMU-1).
+func (h *handler) other(legacy bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if !legacy {
+			path = strings.TrimPrefix(path, "/admin")
+		}
+		var allow []string
+		for _, e := range endpoints {
+			if e.path == path {
+				allow = append(allow, e.method)
+			}
+		}
+		if len(allow) == 0 {
+			path = ""
+		}
+		if _, ok := h.admit(w, r, path, legacy); !ok {
+			return
+		}
+		status := http.StatusNotFound
+		if len(allow) > 0 {
+			if allow[0] == http.MethodGet {
+				allow = append(allow, http.MethodHead)
+			}
+			w.Header().Set("Allow", strings.Join(allow, ", "))
+			status = http.StatusMethodNotAllowed
+		}
+		writeError(w, r, flow.AppError{Error: "invalid_request", Description: "request_failed", StatusCode: status})
 	})
 }
 
@@ -139,6 +202,54 @@ func identify(r *http.Request, ip netip.Addr) func(app store.App) bool {
 		}
 		return len(app.AllowedSources) == 0 || httpx.Within(app.AllowedSources, ip)
 	}
+}
+
+// Warnings are those of the apps' identification against hosts, the
+// allowlist (Sécurité, durcissement 1), written as config.warning by each
+// snapshot that changes them:
+//   - an app in network mode without allowed_sources, which any address of
+//     the allowlist passes for;
+//   - a source the allowlist does not cover, from which the app is refused;
+//   - sources two apps share, from which a host passes for either;
+//   - an app in mtls, which the dispatcher, serving no TLS yet, never
+//     identifies.
+func Warnings(apps []store.App, hosts []netip.Prefix) []string {
+	var out []string
+	for i, a := range apps {
+		if a.AuthMode == "mtls" {
+			out = append(out, "app "+a.ID+" is in auth_mode mtls: the dispatcher serves no TLS yet, so the emulated API never identifies it and refuses its calls")
+			continue
+		}
+		if len(a.AllowedSources) == 0 {
+			out = append(out, "app "+a.ID+" has no allowed_sources: the emulated API accepts its steps from any address of security.emulated_api_authorized_hosts")
+		}
+		for _, s := range a.AllowedSources {
+			if !config.Covers(hosts, s) {
+				out = append(out, fmt.Sprintf("app %s: allowed source %s is not within security.emulated_api_authorized_hosts: the emulated API refuses its calls from outside it", a.ID, s))
+			}
+		}
+		for _, b := range apps[i+1:] {
+			if b.AuthMode == "mtls" {
+				continue
+			}
+			if p, q, ok := overlap(a.AllowedSources, b.AllowedSources); ok {
+				out = append(out, fmt.Sprintf("apps %s and %s share addresses (%s, %s): a host there is identified as either", a.ID, b.ID, p, q))
+			}
+		}
+	}
+	return out
+}
+
+// overlap returns the first prefixes of ps and qs that share an address.
+func overlap(ps, qs []netip.Prefix) (netip.Prefix, netip.Prefix, bool) {
+	for _, p := range ps {
+		for _, q := range qs {
+			if p.Overlaps(q) {
+				return p, q, true
+			}
+		}
+	}
+	return netip.Prefix{}, netip.Prefix{}, false
 }
 
 // warnLegacy logs the first v1 call of an address, so that the apps still

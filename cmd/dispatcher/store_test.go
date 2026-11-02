@@ -31,8 +31,9 @@ type fakeStore struct {
 
 	// snapshotErr fails Snapshot, the first one of serve included.
 	snapshotErr error
-	// warnings are those of the snapshots.
+	// warnings and apps are those of the snapshots.
 	warnings []string
+	apps     []store.App
 	// deadlines are the time left to the first migrate, bootstrap and
 	// snapshot, when their context has a deadline.
 	deadlines map[string]time.Duration
@@ -71,7 +72,9 @@ func (f *fakeStore) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	if f.snapshotErr != nil {
 		return nil, f.snapshotErr
 	}
-	return &store.Snapshot{Settings: store.DefaultSettings(), Warnings: f.warnings}, nil
+	snap := store.NewSnapshot(f.apps, nil, store.DefaultSettings())
+	snap.Warnings = f.warnings
+	return snap, nil
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }

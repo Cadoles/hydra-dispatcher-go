@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -168,13 +169,21 @@ type player struct {
 	// accepts are the bodies of the step login accepts, by step challenge:
 	// the context a consent request serves (A2).
 	accepts map[string]json.RawMessage
+	// claims are the x_dispatcher_claims of the login requests served, by
+	// step challenge: the consent request of the step serves the same.
+	claims map[string]any
 	// compared counts the app calls compared.
 	compared int
+	// app is the host of the app the browser was last sent to; addrs the
+	// address each app calls from, and the X-Forwarded-For of the proxy it
+	// calls through, if any: 10.0.1.7 directly for the others.
+	app   string
+	addrs map[string][2]string
 }
 
 func newPlayer(t *testing.T, xs []exchange, prefix string) *player {
 	t.Helper()
-	p := &player{t: t, hydra: newReplayedHydra(t, xs), prefix: prefix, accepts: map[string]json.RawMessage{}}
+	p := &player{t: t, hydra: newReplayedHydra(t, xs), prefix: prefix, accepts: map[string]json.RawMessage{}, claims: map[string]any{}}
 	srv := httptest.NewServer(p.hydra)
 	t.Cleanup(srv.Close)
 	client, err := hydra.New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(5 * time.Second), MaxInFlight: 8}, config.TLS{MinVersion: "1.2"})
@@ -212,6 +221,9 @@ func (p *player) handle(ev flow.Event) flow.Response {
 	}
 	if r.Kind == flow.Redirect {
 		u, _ := url.Parse(r.URL)
+		if u.Host != "dispatcher.hydra.test" {
+			p.app = u.Host
+		}
 		if c := u.Query().Get("login_challenge"); c != "" && u.Host != "dispatcher.hydra.test" {
 			p.current.login = c
 		}
@@ -222,21 +234,34 @@ func (p *player) handle(ev flow.Event) flow.Response {
 	return r
 }
 
-// call sends an app's call to the emulated API, from the app's network.
+// call sends an app's call to the emulated API, from the app's address.
 func (p *player) call(method, path, param, challenge string, body json.RawMessage) (int, map[string]any) {
 	p.t.Helper()
+	from, ok := p.addrs[p.app]
+	if !ok {
+		from = [2]string{"10.0.1.7", ""}
+	}
+	w := p.callFrom(from[0], from[1], method, path, param, challenge, body)
+	var doc map[string]any
+	decodeNumbers(p.t, w.Body.Bytes(), &doc)
+	return w.Code, doc
+}
+
+// callFrom sends a call from remote, through a proxy when xff is set.
+func (p *player) callFrom(remote, xff, method, path, param, challenge string, body json.RawMessage) *httptest.ResponseRecorder {
 	target := p.prefix + path + "?" + param + "=" + url.QueryEscape(challenge)
 	var rd io.Reader
 	if len(body) > 0 && string(body) != "null" {
 		rd = bytes.NewReader(body)
 	}
 	r := httptest.NewRequest(method, target, rd)
-	r.RemoteAddr = "10.0.1.7:4321"
+	r.RemoteAddr = net.JoinHostPort(remote, "4321")
+	if xff != "" {
+		r.Header.Set("X-Forwarded-For", xff)
+	}
 	w := httptest.NewRecorder()
 	p.api.ServeHTTP(w, r)
-	var doc map[string]any
-	decodeNumbers(p.t, w.Body.Bytes(), &doc)
-	return w.Code, doc
+	return w
 }
 
 func decodeNumbers(t *testing.T, data []byte, v any) {
@@ -321,9 +346,20 @@ func (p *player) compareCall(x exchange, path string) {
 		want["redirect_to"] = got["redirect_to"]
 	case path == "/oauth2/auth/requests/login":
 		p.normalizeRequest(want, got)
+		// x_dispatcher_restart_url, which Symfony did not serve: the choice
+		// of the ref, never Hydra's challenge (A1).
+		if restart := flow.RestartURL("http://dispatcher.hydra.test", p.ref); got["x_dispatcher_restart_url"] != restart {
+			t.Errorf("x_dispatcher_restart_url %v, want %s", got["x_dispatcher_restart_url"], restart)
+		}
+		want["x_dispatcher_restart_url"] = got["x_dispatcher_restart_url"]
+		p.claims[challenge] = got["x_dispatcher_claims"]
 	case path == "/oauth2/auth/requests/consent":
 		p.normalizeRequest(want, got)
-		// The consent requests carry the claims of the previous steps too.
+		// The consent requests carry the claims of the previous steps too,
+		// which Symfony did not serve: those of the step's login request.
+		if served, ok := p.claims[p.loginOf(challenge)]; !ok || !reflect.DeepEqual(got["x_dispatcher_claims"], served) {
+			t.Errorf("consent request x_dispatcher_claims %v, want the step's login request's %v", got["x_dispatcher_claims"], served)
+		}
 		want["x_dispatcher_claims"] = got["x_dispatcher_claims"]
 		// A2: the context of the step's login accept, where Symfony served
 		// {}.
@@ -353,8 +389,8 @@ func (p *player) loginOf(string) string { return p.current.login }
 
 // normalizeRequest applies the assumed deviations of a served request: the
 // step's challenges, subject "" and claims {} on the first step where
-// Symfony served null and [], x_dispatcher_restart_url added, the client's
-// dates relayed as Hydra gives them.
+// Symfony served null and [], the client's dates relayed as Hydra gives
+// them, where Symfony wrote them to the second with +00:00.
 func (p *player) normalizeRequest(want, got map[string]any) {
 	for _, k := range []string{"challenge", "login_challenge"} {
 		if _, ok := want[k]; ok {
@@ -367,13 +403,14 @@ func (p *player) normalizeRequest(want, got map[string]any) {
 	if claims, ok := want["x_dispatcher_claims"].([]any); ok && len(claims) == 0 {
 		want["x_dispatcher_claims"] = map[string]any{}
 	}
-	if u, ok := got["x_dispatcher_restart_url"]; ok {
-		want["x_dispatcher_restart_url"] = u
-	}
-	for _, doc := range []map[string]any{want, got} {
-		client, _ := doc["client"].(map[string]any)
-		delete(client, "created_at")
-		delete(client, "updated_at")
+	var hydraLogin map[string]any
+	decodeNumbers(p.t, p.hydra.answers["GET /admin/oauth2/auth/requests/login"].Response.Body, &hydraLogin)
+	relayed, _ := hydraLogin["client"].(map[string]any)
+	client, _ := want["client"].(map[string]any)
+	for _, k := range []string{"created_at", "updated_at"} {
+		if _, ok := client[k]; ok {
+			client[k] = relayed[k]
+		}
 	}
 }
 
@@ -408,11 +445,11 @@ func diff(want, got any, path string) []string {
 }
 
 // sentToHydra compares what the dispatcher sent Hydra with what Symfony
-// sent, at the final login accept and the consent accept.
+// sent, at the final login accept, the consent accept and the rejects.
 func (p *player) sentToHydra(xs []exchange) {
 	t := p.t
 	for _, x := range xs {
-		if x.Leg != "hydra" || x.Request.Method != http.MethodPut || !strings.HasSuffix(strings.SplitN(x.Request.URI, "?", 2)[0], "/accept") {
+		if x.Leg != "hydra" || x.Request.Method != http.MethodPut {
 			continue
 		}
 		key := "PUT " + strings.SplitN(x.Request.URI, "?", 2)[0]
@@ -507,45 +544,124 @@ func TestSymfonyErrors(t *testing.T) {
 			return http.StatusForbidden, map[string]any{"error": "request_forbidden", "error_description": "The request is not allowed.", "status_code": json.Number("403")}
 		}},
 	} {
-		t.Run(tc.dir, func(t *testing.T) {
-			p := newPlayer(t, nil, "")
-			n := 0
-			for _, x := range readCapture(t, tc.dir) {
-				if x.Leg != "front" || !strings.HasPrefix(x.Request.URI, "/oauth2/auth/requests/") {
-					continue
-				}
-				n++
-				var body io.Reader
-				if len(x.Request.Body) > 0 && string(x.Request.Body) != "null" {
-					body = bytes.NewReader(x.Request.Body)
-				}
-				r := httptest.NewRequest(x.Request.Method, x.Request.URI, body)
-				r.RemoteAddr = tc.from + ":4321"
-				w := httptest.NewRecorder()
-				p.api.ServeHTTP(w, r)
-				var got, want map[string]any
-				decodeNumbers(t, w.Body.Bytes(), &got)
-				decodeNumbers(t, x.Response.Body, &want)
-				status := x.Response.Status
-				if tc.adjust != nil {
-					status, want = tc.adjust(status, want)
-				}
-				if _, ok := want["trace_id"]; ok || tc.adjust != nil {
-					if got["trace_id"] != w.Header().Get("X-Trace-ID") {
-						t.Errorf("%s: trace_id %v", x.Request.URI, got["trace_id"])
+		for _, prefix := range []string{"", "/admin"} {
+			t.Run(tc.dir+prefix, func(t *testing.T) {
+				p := newPlayer(t, nil, prefix)
+				n := 0
+				for _, x := range readCapture(t, tc.dir) {
+					if x.Leg != "front" || !strings.HasPrefix(x.Request.URI, "/oauth2/auth/requests/") {
+						continue
 					}
-					want["trace_id"] = got["trace_id"]
+					n++
+					var body io.Reader
+					if len(x.Request.Body) > 0 && string(x.Request.Body) != "null" {
+						body = bytes.NewReader(x.Request.Body)
+					}
+					r := httptest.NewRequest(x.Request.Method, prefix+x.Request.URI, body)
+					r.RemoteAddr = tc.from + ":4321"
+					w := httptest.NewRecorder()
+					p.api.ServeHTTP(w, r)
+					var got, want map[string]any
+					decodeNumbers(t, w.Body.Bytes(), &got)
+					decodeNumbers(t, x.Response.Body, &want)
+					status := x.Response.Status
+					if tc.adjust != nil {
+						status, want = tc.adjust(status, want)
+					}
+					if _, ok := want["trace_id"]; ok || tc.adjust != nil {
+						if got["trace_id"] != w.Header().Get("X-Trace-ID") {
+							t.Errorf("%s: trace_id %v", x.Request.URI, got["trace_id"])
+						}
+						want["trace_id"] = got["trace_id"]
+					}
+					if w.Code != status {
+						t.Errorf("%s %s: %d, want %d", x.Request.Method, x.Request.URI, w.Code, status)
+					}
+					if d := diff(want, got, ""); len(d) > 0 {
+						t.Errorf("%s %s: %v", x.Request.Method, x.Request.URI, d)
+					}
 				}
-				if w.Code != status {
-					t.Errorf("%s %s: %d, want %d", x.Request.Method, x.Request.URI, w.Code, status)
+				if n == 0 || len(p.hydra.calls) != 0 {
+					t.Errorf("%d calls replayed, Hydra called %v", n, p.hydra.calls)
 				}
-				if d := diff(want, got, ""); len(d) > 0 {
-					t.Errorf("%s %s: %v", x.Request.Method, x.Request.URI, d)
+			})
+		}
+	}
+}
+
+// Durcissement 1 on the engine: the apps of capture 14 identified by their
+// sources, hydra-2fa in IPv6, one directly and one through the proxy. At
+// each step, the app's challenge is refused from another app's source, from
+// an address of the allowlist that is no app's, directly or through the
+// proxy, and the refusal is logged with its trace id.
+func TestIdentification(t *testing.T) {
+	xs := readCapture(t, "14-sql-2fa-consent-skipped")
+	p := newPlayer(t, xs, "/admin")
+	snap := hydraDevSnapshot()
+	sources := map[string]string{"hydra-oidc": "10.0.1.9", "hydra-sql": "10.0.1.7", "hydra-2fa": "2001:db8::8"}
+	for i, a := range snap.Apps {
+		addr := netip.MustParseAddr(sources[a.ID])
+		snap.Apps[i].AllowedSources = []netip.Prefix{netip.PrefixFrom(addr, addr.BitLen())}
+	}
+	p.o.Config = snapshots{snap}
+	var logs bytes.Buffer
+	logger := slog.New(httpx.LogHandler(slog.NewJSONHandler(&logs, nil)))
+	p.o.Log = logger
+	mux := http.NewServeMux()
+	Register(mux, Options{
+		Engine:          p.o,
+		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::/64")},
+		LegacyV1Paths:   true,
+		Logger:          logger,
+	})
+	proxy := []netip.Prefix{netip.MustParsePrefix("10.0.0.10/32")}
+	p.api = httpx.Chain(httpx.Routes(mux), httpx.RealIP(proxy), httpx.Trace(nil))
+	// hydra-sql calls directly, hydra-2fa through the proxy.
+	p.addrs = map[string][2]string{"sql.hydra.test": {"10.0.1.7", ""}, "2fa.hydra.test": {"10.0.0.10", "2001:db8::8"}}
+	served := map[string]bool{}
+	for _, x := range xs {
+		if x.Leg == "front" && strings.HasPrefix(x.Request.URI, "/oauth2/auth/requests/login?") && !served[p.current.login] {
+			served[p.current.login] = true
+			for _, from := range [][2]string{{"10.0.1.9", ""}, {"10.0.1.50", ""}, {"10.0.0.10", "10.0.1.9"}, {"10.0.0.10", "10.0.1.50"}, {"2001:db8::50", ""}} {
+				w := p.callFrom(from[0], from[1], http.MethodGet, "/oauth2/auth/requests/login", "login_challenge", p.current.login, nil)
+				var b errorBody
+				_ = json.Unmarshal(w.Body.Bytes(), &b)
+				if w.Code != http.StatusForbidden || b.Error != "request_forbidden" {
+					t.Errorf("%s from %v: %d %s", p.app, from, w.Code, w.Body)
+				}
+				if line := `"msg":"security.ip_rejected","surface":"emulated","detail":"emulated: app outside its sources","audit":false,"trace_id":"` + b.TraceID + `"`; !strings.Contains(logs.String(), line) {
+					t.Errorf("%s from %v: no %s in %s", p.app, from, line, logs.String())
 				}
 			}
-			if n == 0 || len(p.hydra.calls) != 0 {
-				t.Errorf("%d calls replayed, Hydra called %v", n, p.hydra.calls)
+			// The app itself, directly or through the proxy, passes.
+			from := p.addrs[p.app]
+			if w := p.callFrom(from[0], from[1], http.MethodGet, "/oauth2/auth/requests/login", "login_challenge", p.current.login, nil); w.Code != http.StatusOK {
+				t.Errorf("%s from %v: %d %s", p.app, from, w.Code, w.Body)
 			}
-		})
+		}
+		p.play([]exchange{x})
+	}
+	if len(served) != 2 {
+		t.Errorf("%d steps checked", len(served))
+	}
+	p.sentToHydra(xs)
+}
+
+// Numbers beyond 2^53 in a step's context and claims reach the consent
+// request and Hydra as written.
+func TestNumbersAsWritten(t *testing.T) {
+	xs := readCapture(t, "12-sql-consent-skipped")
+	for i, x := range xs {
+		switch {
+		case x.Leg == "front" && strings.Contains(x.Request.URI, "/login/accept"):
+			xs[i].Request.Body = json.RawMessage(`{"amr":["pwd"],"context":{"n":12345678901234567891,"f":1.10},"remember":true,"subject":"test2@test.com"}`)
+		case x.Leg == "front" && strings.Contains(x.Request.URI, "/consent/accept"):
+			xs[i].Request.Body = json.RawMessage(`{"grant_scope":["openid"],"remember":true,"session":{"id_token":{"big":98765432109876543211,"email":"test2@test.com"}}}`)
+		}
+	}
+	p := newPlayer(t, xs, "/admin")
+	p.play(xs) // A2: the consent request's context compared, numbers as written
+	if sent := string(p.hydra.sent["PUT /admin/oauth2/auth/requests/consent/accept"]); !strings.Contains(sent, `"id_token":{"big":98765432109876543211,`) {
+		t.Errorf("consent accept sent %s", sent)
 	}
 }

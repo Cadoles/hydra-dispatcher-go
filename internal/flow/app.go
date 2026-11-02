@@ -205,12 +205,15 @@ func (r *run) subjectMismatch(f *Flow) Outcome {
 }
 
 // appReject forwards an app's reject to Hydra as a reject of the login, its
-// body as received (M8, T3).
+// body as received (M8, T3) but for the members the model does not know:
+// Hydra refuses them (DisallowUnknownFields, 2.1 and 2.2), which would make
+// the reject an E1007, and the model would round their numbers.
 func (r *run) appReject(f *Flow, data json.RawMessage) Outcome {
 	var body ory.RejectOAuth2Request
 	if err := strictJSON(data, &body); err != nil {
 		return invalidBody()
 	}
+	body.AdditionalProperties = nil
 	return r.rejectLogin(f, ReasonApp, body, r.surface().redirect)
 }
 
@@ -265,17 +268,11 @@ func consentAcceptOf(data json.RawMessage) (idt, act, ctx Object, err error) {
 }
 
 // strictJSON decodes one JSON object into the SDK's model, refusing what is
-// not one, or what follows it.
+// not one, or what follows it: json.Valid, as a decoder's More does not see
+// a closing brace or bracket after the object.
 func strictJSON(data json.RawMessage, v any) error {
-	if len(bytes.TrimSpace(data)) == 0 || bytes.TrimSpace(data)[0] != '{' {
-		return errors.New("the body is not a JSON object")
+	if !json.Valid(data) || bytes.TrimSpace(data)[0] != '{' {
+		return errors.New("the body is not one JSON object")
 	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	if err := d.Decode(v); err != nil {
-		return err
-	}
-	if d.More() {
-		return errors.New("data after the JSON object")
-	}
-	return nil
+	return json.Unmarshal(data, v)
 }

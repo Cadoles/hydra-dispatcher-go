@@ -238,6 +238,8 @@ func TestAppLogin(t *testing.T) {
 		{name: "EMU-15, a type", ev: callBy(AppAcceptLogin, 1000, "sql", `{"subject":1}`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
 		{name: "EMU-15 A9, context a list", ev: callBy(AppAcceptLogin, 1000, "sql", `{"subject":"a","context":[]}`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
 		{name: "EMU-15, data after the object", ev: callBy(AppAcceptLogin, 1000, "sql", `{"subject":"a"} {}`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
+		{name: "EMU-15, a brace after the object", ev: callBy(AppAcceptLogin, 1000, "sql", `{"subject":"a"}}`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
+		{name: "EMU-15, a bracket after the object", ev: callBy(AppAcceptLogin, 1000, "sql", `{"subject":"a"}]`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
 		{name: "EMU-15, no body", ev: callBy(AppAcceptLogin, 1000, "sql", ``), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
 		{name: "EMU-16 T3", ev: callBy(AppRejectLogin, 1000, "sql", rejectBody), stored: atStep(t, 1, false, false),
 			says: hydraSays{RejectLogin: {redirectTo: hydraDone}}, status: http.StatusOK, body: `{"redirect_to":"` + hydraDone + `"}`,
@@ -248,6 +250,15 @@ func TestAppLogin(t *testing.T) {
 				}
 			}},
 		{name: "EMU-16, invalid body", ev: callBy(AppRejectLogin, 1000, "sql", `{"error":1}`), stored: atStep(t, 1, false, false), status: http.StatusBadRequest},
+		{name: "EMU-16, members Hydra does not know", ev: callBy(AppRejectLogin, 1000, "sql", `{"error":"access_denied","status_code":403,"x_extra":12345678901234567891}`),
+			stored: atStep(t, 1, false, false), says: hydraSays{RejectLogin: {redirectTo: hydraDone}}, status: http.StatusOK,
+			calls: []Op{RejectLogin}, write: finished,
+			check: func(t *testing.T, p played) {
+				// Hydra refuses a member it does not know (DisallowUnknownFields).
+				if data, _ := json.Marshal(p.calls[0].Reject); string(data) != `{"error":"access_denied","status_code":403}` {
+					t.Errorf("sent to Hydra: %s", data)
+				}
+			}},
 		{name: "EMU-17", ev: callBy(AppRejectLogin, 1000, "sql", rejectBody), stored: atStep(t, 1, true, false), status: http.StatusOK, body: loopBody},
 		{name: "EMU-17, accepted flow", ev: callBy(AppRejectLogin, 1000, "2fa", rejectBody), stored: acceptedFlow(t), status: http.StatusOK, body: loopBody},
 	} {

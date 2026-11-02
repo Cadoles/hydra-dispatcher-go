@@ -153,9 +153,9 @@ type Snapshot struct {
 	Apps     []App
 	Flows    []Flow
 	Settings Settings
-	// Warnings are what this version sets aside of the setting table
-	// (unknown keys, locales without a catalog), and the apps the emulated
-	// API identifies by its allowlist only.
+	// Warnings are what this version sets aside of the setting table:
+	// unknown keys, locales without a catalog. serve adds those of the apps'
+	// identification on the emulated API (emulated.Warnings).
 	Warnings []string
 	apps     map[string]int
 }
@@ -216,21 +216,7 @@ func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 	if s.Settings, s.Warnings, err = settingsFrom(rows); err != nil {
 		return nil, err
 	}
-	s.Warnings = append(s.Warnings, appWarnings(s.Apps)...)
 	return s, nil
-}
-
-// appWarnings names the apps in network mode without allowed_sources: any
-// address of security.emulated_api_authorized_hosts may call the emulated
-// API for them, as with Symfony (Sécurité, durcissement 1).
-func appWarnings(apps []App) []string {
-	var out []string
-	for _, a := range apps {
-		if a.AuthMode != "mtls" && len(a.AllowedSources) == 0 {
-			out = append(out, "app "+a.ID+" has no allowed_sources: the emulated API accepts its steps from any address of security.emulated_api_authorized_hosts")
-		}
-	}
-	return out
 }
 
 func readApps(ctx context.Context, q querier) ([]App, error) {
