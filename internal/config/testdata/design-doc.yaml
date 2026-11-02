@@ -1,6 +1,5 @@
-# Example configuration of "Conception Dispatcher Go.md" v1.3.5, section
-# "Configuration et deploiement", copied verbatim but for the sections not
-# implemented yet (emulated_api, consent): it must keep loading.
+# Example configuration of "Conception Dispatcher Go.md" v1.3.10, section
+# "Configuration et deploiement", copied verbatim: it must keep loading.
 server:
   listen: ":8080"
   base_url: "http://dispatcher.hydra.test"
@@ -58,6 +57,11 @@ ui:
   reload: false                 # true en développement de thème
   remember_last_flow: true      # présélection du dernier flow
   csp_extra: {}                 # ex. font-src: ["https://fonts.gstatic.com"] ; locales : settings de la graine
+emulated_api:
+  legacy_v1_paths: true         # alias v1 dépréciés, retirés en 1.0
+consent:
+  claims_filter: permissive     # permissive | strict (strict demande le catalogue des scopes, phase 3)
+  show_values: false            # valeurs des claims sur l'écran de consent
 observability:
   log_level: info
   log_format: json              # json | text (développement)

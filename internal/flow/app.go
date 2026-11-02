@@ -7,6 +7,8 @@ import (
 	"net/http"
 
 	ory "github.com/ory/hydra-client-go/v26"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
 // AppOp is an endpoint of the emulated API, on the v2 paths and their v1
@@ -33,12 +35,14 @@ func (o AppOp) kind() Kind {
 func (o AppOp) get() bool { return o == AppGetLogin || o == AppGetConsent }
 
 // AppCall is a call of a login app to the emulated API: the endpoint, the
-// step challenge, the body of a PUT, and whether the app P4 identified by
-// its sources is the one named (nil refuses all).
+// step challenge, the body of a PUT, and whether the caller is the app
+// given, as the handler identifies it by its sources (nil refuses all). The
+// app is the one of the snapshot the transition decides on: the caller is
+// never identified on another (revue R12).
 type AppCall struct {
 	Op        AppOp
 	Challenge string
-	Caller    func(app string) bool
+	Caller    func(app store.App) bool
 	Body      json.RawMessage
 }
 
@@ -87,7 +91,11 @@ func (r *run) appCall(ev AppCall) Outcome {
 	if f.StateAt(r.Env.Now) == Absent {
 		return s.absent() // EMU-2, EXP-1
 	}
-	check := r.Env.Keys.Verify(f, ev.Challenge, ev.Op.kind(), r.Env.appIDs(), ev.Caller, r.Env.Now)
+	caller := func(id string) bool {
+		app, ok := r.Env.Config.App(id)
+		return ok && ev.Caller != nil && ev.Caller(app)
+	}
+	check := r.Env.Keys.Verify(f, ev.Challenge, ev.Op.kind(), r.Env.appIDs(), caller, r.Env.Now)
 	switch check.Verdict {
 	case ChallengeForged:
 		// EMU-3 (Q17): an unknown challenge, for the failure limiter (P11).

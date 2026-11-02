@@ -23,6 +23,8 @@ type Config struct {
 	Store         Store         `yaml:"store"`
 	Admin         Admin         `yaml:"admin"`
 	UI            UI            `yaml:"ui"`
+	EmulatedAPI   EmulatedAPI   `yaml:"emulated_api"`
+	Consent       Consent       `yaml:"consent"`
 	Observability Observability `yaml:"observability"`
 	Webhooks      Webhooks      `yaml:"webhooks"`
 	Logout        Logout        `yaml:"logout"`
@@ -62,10 +64,12 @@ type Hydra struct {
 
 type Security struct {
 	AdminAuthorizedHosts List `yaml:"admin_authorized_hosts"`
-	// Nil until Load resolves them to the admin list when unset.
-	EmulatedAPIAuthorizedHosts *List            `yaml:"emulated_api_authorized_hosts"`
-	MetricsAuthorizedHosts     *List            `yaml:"metrics_authorized_hosts"`
-	FailureRateLimit           FailureRateLimit `yaml:"failure_rate_limit"`
+	// EmulatedAPIAuthorizedHosts has no default (nil): it is required, the
+	// networks the login apps call from (B2).
+	EmulatedAPIAuthorizedHosts *List `yaml:"emulated_api_authorized_hosts"`
+	// Nil until Load resolves it to the admin list when unset.
+	MetricsAuthorizedHosts *List            `yaml:"metrics_authorized_hosts"`
+	FailureRateLimit       FailureRateLimit `yaml:"failure_rate_limit"`
 }
 
 type FailureRateLimit struct {
@@ -142,6 +146,27 @@ type UI struct {
 	RememberLastFlow bool            `yaml:"remember_last_flow"`
 	CSPExtra         map[string]List `yaml:"csp_extra"`
 }
+
+type EmulatedAPI struct {
+	// LegacyV1Paths serves the v1 paths of the Symfony dispatcher
+	// (/oauth2/auth/requests/...) as deprecated aliases, until 1.0.
+	LegacyV1Paths bool `yaml:"legacy_v1_paths"`
+}
+
+type Consent struct {
+	// ClaimsFilter is permissive: the claims outside the scope catalogue are
+	// sent too, and listed on the screen. strict waits for the catalogue in
+	// the database (phase 3).
+	ClaimsFilter string `yaml:"claims_filter"`
+	// ShowValues shows the values of the claims on the consent screen.
+	ShowValues bool `yaml:"show_values"`
+}
+
+// Values of consent.claims_filter.
+const (
+	ClaimsPermissive = "permissive"
+	ClaimsStrict     = "strict"
+)
 
 type Observability struct {
 	LogLevel         string   `yaml:"log_level"`
@@ -229,6 +254,8 @@ func defaults() *Config {
 	c.Admin.HydraClients.Enabled = true
 	c.Admin.ClientSecretMaxAge = Duration(365 * 24 * time.Hour)
 	c.UI.RememberLastFlow = true
+	c.EmulatedAPI.LegacyV1Paths = true
+	c.Consent.ClaimsFilter = ClaimsPermissive
 	c.Observability.LogLevel = "info"
 	c.Observability.LogFormat = "json"
 	c.Observability.AccessLogSample = 1
@@ -285,10 +312,6 @@ func Load(path string, environ []string) (*Config, []string, error) {
 // secrets given as files.
 func (c *Config) resolve() error {
 	c.Seed.resolve()
-	if c.Security.EmulatedAPIAuthorizedHosts == nil {
-		l := append(List{}, c.Security.AdminAuthorizedHosts...)
-		c.Security.EmulatedAPIAuthorizedHosts = &l
-	}
 	if c.Security.MetricsAuthorizedHosts == nil {
 		l := append(List{}, c.Security.AdminAuthorizedHosts...)
 		c.Security.MetricsAuthorizedHosts = &l

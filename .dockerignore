@@ -8,5 +8,11 @@
 !cmd/**/*.go
 !internal/**/*.go
 !tools/**/*.go
+# Embedded by internal/store, internal/i18n and web.
+!internal/store/migrations/*.sql
+!internal/i18n/*.json
+!web/**/*.go
+!web/templates/**
+!web/static/**
 **/*_test.go
 **/testdata

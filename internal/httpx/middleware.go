@@ -94,6 +94,10 @@ func parseHop(s string) (netip.Addr, bool) {
 	return a.Unmap().WithZone(""), true
 }
 
+// Within tells whether ip is in one of the prefixes; the unknown client (the
+// zero Addr) never is.
+func Within(prefixes []netip.Prefix, ip netip.Addr) bool { return contains(prefixes, ip) }
+
 func contains(prefixes []netip.Prefix, ip netip.Addr) bool {
 	for _, p := range prefixes {
 		if p.Contains(ip) {
@@ -114,6 +118,13 @@ var (
 // tracing nor put an id of their choosing (another user's) in the logs and
 // the audit. It is returned in X-Trace-ID on every response.
 func Trace(parentNetworks []netip.Prefix) Middleware {
+	return TraceFrom(func(ip netip.Addr) bool { return contains(parentNetworks, ip) })
+}
+
+// TraceFrom is Trace for networks that change while serving, the sources of
+// the login apps the configuration snapshot declares: parent tells whether a
+// client may give the trace id.
+func TraceFrom(parent func(netip.Addr) bool) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			inf := infoFrom(r.Context())
@@ -121,7 +132,7 @@ func Trace(parentNetworks []netip.Prefix) Middleware {
 				inf = &requestInfo{}
 				r = r.WithContext(context.WithValue(r.Context(), infoKey{}, inf))
 			}
-			trusted := contains(parentNetworks, inf.clientIP)
+			trusted := inf.clientIP.IsValid() && parent(inf.clientIP)
 			// W3C: an all-zero trace id or parent id voids the header.
 			if m := traceparent.FindStringSubmatch(r.Header.Get("Traceparent")); trusted && m != nil &&
 				m[1] != strings.Repeat("0", 32) && m[2] != strings.Repeat("0", 16) {
@@ -217,16 +228,16 @@ func logRequest(logger *slog.Logger, r *http.Request, start time.Time, sw *statu
 	if aborted {
 		attrs = append(attrs, slog.Bool("aborted", true))
 	}
-	if ip := formatIP(ClientIP(r.Context()), logIP); ip != "" {
+	if ip := FormatIP(ClientIP(r.Context()), logIP); ip != "" {
 		attrs = append(attrs, slog.String("ip", ip))
 	}
 	logger.LogAttrs(r.Context(), slog.LevelInfo, "http.request", attrs...)
 }
 
-// formatIP applies observability.log_ip: truncated keeps the /24 (IPv4) or
+// FormatIP applies observability.log_ip: truncated keeps the /24 (IPv4) or
 // /48 (IPv6) network. A client RealIP could not tell (X-Forwarded-For
-// unreadable) is "unknown", so that it shows, unlike with none.
-func formatIP(ip netip.Addr, mode string) string {
+// unreadable) is "unknown", so that it shows, unlike with none; "" for none.
+func FormatIP(ip netip.Addr, mode string) string {
 	switch {
 	case mode == "none":
 		return ""

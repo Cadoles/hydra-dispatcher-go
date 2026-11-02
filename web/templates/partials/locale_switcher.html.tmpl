@@ -1,0 +1,1 @@
+{{define "locale_switcher"}}{{if gt (len .Locales) 1}}<form method="post" class="locales" aria-label="{{.T "locale.label"}}">{{range .Locales}}<button type="submit" formaction="{{.Action}}" lang="{{.Code}}"{{if .Current}} aria-current="true" disabled{{end}}>{{.Label}}</button>{{end}}</form>{{end}}{{end}}

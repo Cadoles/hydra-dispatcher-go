@@ -9,12 +9,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
@@ -77,7 +80,7 @@ func serve(ctx context.Context, args []string) error {
 		live.Run(refreshCtx, store.RefreshEvery)
 	}()
 
-	handler, err := newHandler(cfg, logger, logs.access, db.Ping)
+	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live})
 	if err != nil {
 		stop()
 		return err
@@ -169,9 +172,24 @@ func closeStores(logger *slog.Logger, inFlight *httpx.InFlight, states state.Sta
 	}
 }
 
+// snapshots gives the configuration of the moment: store.Live.
+type snapshots interface {
+	Snapshot() *store.Snapshot
+}
+
+// services are what the handlers use besides the configuration file: the
+// check of the configuration store, for /ready, the state store and the
+// configuration of the moment.
+type services struct {
+	database httpx.Check
+	states   state.StateStore
+	config   snapshots
+}
+
 // newHandler builds the routes behind the middleware chain every surface
-// shares. database is the check of the configuration store, for /ready.
-func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, database httpx.Check) (http.Handler, error) {
+// shares: the probes, the emulated API (P4) and the pages (P5), both on the
+// flow engine.
+func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s services) (http.Handler, error) {
 	trusted, err := cfg.Server.TrustedProxies.Prefixes()
 	if err != nil {
 		return nil, err
@@ -185,22 +203,74 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, database 
 	if err != nil {
 		return nil, fmt.Errorf("hydra client: %w", err)
 	}
+	keys := flow.Keys{cfg.Secrets.ChallengeKey}
+	for _, k := range cfg.Secrets.ChallengeKeysPrevious {
+		keys = append(keys, k)
+	}
+	engine := &flow.Orchestrator{
+		Store:           s.states,
+		Config:          s.config,
+		Source:          flow.Fallback{Hydra: hydraClient},
+		Hydra:           hydraClient,
+		Webhooks:        flow.StubWebhooks{},
+		BaseURL:         cfg.Server.BaseURL,
+		LoginConsentTTL: cfg.Hydra.LoginConsentTTL.Std(),
+		Keys:            keys,
+		Log:             logger,
+	}
+	pages, err := front.New(front.Options{
+		Engine:     engine,
+		Hydra:      hydraClient,
+		Config:     s.config,
+		BaseURL:    cfg.Server.BaseURL,
+		CookiePath: cfg.Server.CookiePath,
+		ShowValues: cfg.Consent.ShowValues,
+		Logger:     logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pages: %w", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", httpx.Health())
 	mux.Handle("GET /ready", httpx.Ready(map[string]httpx.Check{
 		"hydra":    hydraClient.Ready,
-		"database": database,
+		"database": s.database,
 	}, 2*time.Second, logger))
+	emulated.Register(mux, emulated.Options{
+		Engine:          engine,
+		AuthorizedHosts: loginApps,
+		LegacyV1Paths:   cfg.EmulatedAPI.LegacyV1Paths,
+		Logger:          logger,
+		LogIP:           cfg.Observability.LogIP,
+	})
+	pages.Register(mux)
 
+	csp := map[string][]string{}
+	for d, sources := range cfg.UI.CSPExtra {
+		csp[d] = sources
+	}
 	return httpx.Chain(httpx.Routes(mux),
 		httpx.RealIP(trusted),
-		// traceparent is honoured from proxies and login apps only. Concat:
-		// an append could share the array RealIP holds.
-		httpx.Trace(slices.Concat(trusted, loginApps)),
+		// traceparent is honoured from the proxies and the login apps, by
+		// the sources the configuration of the moment declares (B2).
+		httpx.TraceFrom(func(ip netip.Addr) bool {
+			return httpx.Within(trusted, ip) || appSource(s.config.Snapshot(), ip)
+		}),
+		httpx.SecurityHeaders(httpx.CSP(csp), strings.HasPrefix(cfg.Server.BaseURL, "https://"), cfg.TLS.HSTSIncludeSubdomains),
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP),
 		httpx.Recover(logger),
 	), nil
+}
+
+// appSource tells whether ip is among the allowed_sources of an app.
+func appSource(s *store.Snapshot, ip netip.Addr) bool {
+	for _, a := range s.Apps {
+		if httpx.Within(a.AllowedSources, ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // newLoggers returns the application, access and warnings loggers. The access

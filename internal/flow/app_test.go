@@ -2,12 +2,15 @@ package flow
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -74,7 +77,7 @@ func challenge(gen int64, app string, kind Kind) string {
 }
 
 func callBy(op AppOp, gen int64, app, body string) AppCall {
-	return AppCall{Op: op, Challenge: challenge(gen, app, op.kind()), Caller: func(a string) bool { return a == app }, Body: json.RawMessage(body)}
+	return AppCall{Op: op, Challenge: challenge(gen, app, op.kind()), Caller: func(a store.App) bool { return a.ID == app }, Body: json.RawMessage(body)}
 }
 
 const (
@@ -103,14 +106,14 @@ func TestAppChecks(t *testing.T) {
 		{name: "EXP-1, hx reached", ev: callBy(AppAcceptLogin, 1000, "sql", loginBody),
 			stored: func() *Flow { f := atStep(t, 1, false, false); f.HydraExpiresAt = testNow.UnixMilli(); return f }(),
 			status: http.StatusNotFound, body: `{"error":"missing_session_error"...`},
-		{name: "EMU-3, forged", ev: AppCall{Op: AppGetLogin, Challenge: Keys{[]byte("another key of thirty-two bytes!")}.Challenge(lref, 1000, "sql", KindLogin), Caller: func(string) bool { return true }},
+		{name: "EMU-3, forged", ev: AppCall{Op: AppGetLogin, Challenge: Keys{[]byte("another key of thirty-two bytes!")}.Challenge(lref, 1000, "sql", KindLogin), Caller: func(store.App) bool { return true }},
 			stored: atStep(t, 1, false, false), status: http.StatusNotFound, body: `{"error":"missing_session_error"...`,
 			check: reportsHas("challenge.invalid", "forged")},
 		{name: "EMU-3, future step", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 1, false, false),
 			status: http.StatusNotFound, body: `{"error":"missing_session_error"...`},
-		{name: "EMU-3, other kind", ev: AppCall{Op: AppGetConsent, Challenge: challenge(1000, "sql", KindLogin), Caller: func(string) bool { return true }},
+		{name: "EMU-3, other kind", ev: AppCall{Op: AppGetConsent, Challenge: challenge(1000, "sql", KindLogin), Caller: func(store.App) bool { return true }},
 			stored: atStep(t, 1, true, false), status: http.StatusNotFound},
-		{name: "EMU-4", ev: AppCall{Op: AppGetLogin, Challenge: challenge(1000, "sql", KindLogin), Caller: func(a string) bool { return a == "2fa" }},
+		{name: "EMU-4", ev: AppCall{Op: AppGetLogin, Challenge: challenge(1000, "sql", KindLogin), Caller: func(a store.App) bool { return a.ID == "2fa" }},
 			stored: atStep(t, 1, false, false), status: http.StatusForbidden,
 			body:  `{"error":"request_forbidden","error_description":"The request is not allowed.","status_code":403}`,
 			check: reportsHas("security.ip_rejected", "emulated: app outside its sources")},
@@ -160,10 +163,10 @@ func TestAppLogin(t *testing.T) {
 			}},
 		{name: "EMU-8 I2, second step", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),
 			status: http.StatusOK, body: `"x_dispatcher_claims":{"email":"alice@example.org"}...`},
-		{name: "EMU-28 Q21, the login request of an app gone from the snapshot", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),
+		{name: "EMU-28 Q21, an app gone from the snapshot is no longer identified", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),
 			env:    without2FA,
-			status: http.StatusInternalServerError, body: `{"error":"server_error","error_description":"E1005","status_code":500}`,
-			check: reportsHas("flow.error", "E1005")},
+			status: http.StatusForbidden, body: `{"error":"request_forbidden"...`,
+			check: reportsHas("security.ip_rejected", "emulated: app outside its sources")},
 		{name: "EMU-9, accepted step", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: atStep(t, 1, true, false), status: http.StatusGone, body: loopBody},
 		{name: "EMU-9, past step", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: atStep(t, 2, false, false), status: http.StatusGone, body: loopBody},
 		{name: "EMU-9, accepted flow", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: acceptedFlow(t), status: http.StatusGone, body: loopBody},
@@ -294,9 +297,8 @@ func TestAppConsent(t *testing.T) {
 			stored: atStep(t, 1, true, true), status: http.StatusBadRequest, body: `{"error":"invalid_request","error_description":"E1001","status_code":400}`},
 		{name: "EMU-15, a consent accept with an invalid body on an accepted flow", ev: callBy(AppAcceptConsent, 1000, "2fa", `{"context":[]}`),
 			stored: acceptedFlow(t), status: http.StatusBadRequest},
-		{name: "EMU-28 Q21, the consent request of an app gone from the snapshot", ev: callBy(AppGetConsent, 1000, "2fa", ""), stored: atStep(t, 2, true, false),
-			env:    without2FA,
-			status: http.StatusInternalServerError, body: `{"error":"server_error","error_description":"E1005","status_code":500}`},
+		{name: "EMU-28 Q21, nor on its consent", ev: callBy(AppGetConsent, 1000, "2fa", ""), stored: atStep(t, 2, true, false),
+			env: without2FA, status: http.StatusForbidden},
 		{name: "EMU-23", ev: callBy(AppRejectConsent, 1000, "sql", rejectBody), stored: atStep(t, 1, true, false),
 			says: hydraSays{RejectLogin: {redirectTo: hydraDone}}, status: http.StatusOK, body: `{"redirect_to":"` + hydraDone + `"}`,
 			calls: []Op{RejectLogin}, write: finished},
@@ -342,6 +344,26 @@ func TestAppRejectErrors(t *testing.T) {
 	}
 }
 
+// EMU-28: the requests an app is served refuse an app gone from the
+// snapshot, whose receive_claims went with it, though the caller's
+// identification on the same snapshot already stops it (EMU-4).
+func TestRequestsForAnAppGone(t *testing.T) {
+	env := testEnv()
+	without2FA(&env)
+	if _, err := atStep(t, 2, false, false).LoginRequestFor(env, lref, 2); !errors.Is(err, errAppGone) {
+		t.Errorf("login request: %v", err)
+	}
+	if _, err := atStep(t, 2, true, false).ConsentRequestFor(env, lref, 2); !errors.Is(err, errAppGone) {
+		t.Errorf("consent request: %v", err)
+	}
+	if out := testEnvSurface().served(nil, errAppGone); out.Response.Status != http.StatusInternalServerError || rawJSON(out.Response.Body) != `{"error":"server_error","error_description":"E1005","status_code":500}` {
+		t.Errorf("served: %+v", out.Response)
+	}
+}
+
+// testEnvSurface is the emulated API's surface, for its answers.
+func testEnvSurface() surface { return surface{api: true} }
+
 func TestAppStoredCorrupt(t *testing.T) {
 	f := atStep(t, 1, true, false)
 	f.Hydra.Client = json.RawMessage(`[]`)
@@ -376,5 +398,28 @@ func TestPast(t *testing.T) {
 	early := Outcome{Write: &Flow{HydraExpiresAt: testNow.Add(time.Millisecond).UnixMilli()}}
 	if out := early.past(Input{Event: Loop{}, Env: env}); out.Write == nil {
 		t.Error("a write before hx dropped")
+	}
+}
+
+// E1004 says whether Hydra was saturated (hydra.max_in_flight), for the 503
+// with Retry-After of the handlers, or down.
+func TestOverloaded(t *testing.T) {
+	entry := Entry{LoginChallenge: hydraL, Cookie: cookie}
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("login request: %w", hydra.ErrOverloaded), true},
+		{errDown, false},
+	} {
+		p := play(t, testEnv(), entry, nil, nil, hydraSays{GetLogin: {err: tc.err}})
+		if p.Response.Code != E1004 || p.Response.Overloaded != tc.want {
+			t.Errorf("%v: %+v", tc.err, p.Response)
+		}
+	}
+	p := play(t, testEnv(), callBy(AppRejectLogin, 1000, "sql", rejectBody), atStep(t, 1, false, false), nil,
+		hydraSays{RejectLogin: {err: fmt.Errorf("reject: %w", hydra.ErrOverloaded)}})
+	if p.Response.Status != http.StatusInternalServerError || !p.Response.Overloaded {
+		t.Errorf("emulated API: %+v", p.Response)
 	}
 }

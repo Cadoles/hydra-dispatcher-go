@@ -24,6 +24,7 @@ func loadSeed(t *testing.T, content string) config.Seed {
 	cfg, _, err := config.Load(path, []string{
 		"DISPATCHER_SERVER_BASE_URL=http://dispatcher.hydra.test",
 		"DISPATCHER_SERVER_TRUSTED_PROXIES=10.0.0.10",
+		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=10.0.1.0/24",
 		"DISPATCHER_HYDRA_ADMIN_URL=http://hydra:4445",
 		"DISPATCHER_STORE_DSN=postgres://dispatcher@postgres/dispatcher",
 		"DISPATCHER_SECRETS_COOKIE_KEY=" + strings.Repeat("ab", 32),

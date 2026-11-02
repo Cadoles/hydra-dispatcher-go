@@ -1,0 +1,353 @@
+// Package front serves the browser (lot P5): the choice of the flow (GET and
+// POST /), the return of the login apps (/oauth2/auth), Hydra's consent
+// (/consent) and logout (/logout), and the pages' static files. The flow
+// engine decides; the handlers read the request, render its answer, and set
+// the dispatcher_flow_csrf cookie.
+package front
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	ory "github.com/ory/hydra-client-go/v26"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+)
+
+// Engine runs the transition of an event to its end: flow.Orchestrator.
+type Engine interface {
+	Handle(ctx context.Context, ev flow.Event) flow.Result
+}
+
+// Logout is Hydra's admin API for a logout, which the engine does not handle
+// yet (P9): read, then accept at once.
+type Logout interface {
+	LogoutRequest(ctx context.Context, challenge string) (*ory.OAuth2LogoutRequest, error)
+	AcceptLogout(ctx context.Context, challenge string) (string, error)
+}
+
+// Snapshots gives the configuration of the moment, as store.Live does, for
+// the pages the engine does not answer.
+type Snapshots interface {
+	Snapshot() *store.Snapshot
+}
+
+// Options configure the handlers.
+type Options struct {
+	Engine Engine
+	Hydra  Logout
+	Config Snapshots
+	// BaseURL and CookiePath are server.base_url and server.cookie_path.
+	BaseURL    string
+	CookiePath string
+	// ShowValues is consent.show_values.
+	ShowValues bool
+	Logger     *slog.Logger
+}
+
+// Handler serves the pages.
+type Handler struct {
+	o        Options
+	pages    *pages
+	catalogs i18n.Catalogs
+	// origin is the scheme and host of BaseURL, for the forms' origin check.
+	origin string
+	// secure cookies in HTTPS, prefixed __Host- when their path is /.
+	secure bool
+	prefix string
+}
+
+// maxForm bounds the body of a form: a Hydra 2.2 challenge is about 1.5 KiB.
+const maxForm = 64 << 10
+
+// Cookie names, without the __Host- prefix of HTTPS.
+const (
+	csrfCookie   = "dispatcher_flow_csrf"
+	localeCookie = "dispatcher_locale"
+)
+
+// New parses the templates and the catalogs, and renders each page in each
+// locale: a template that fails stops the start, not a login.
+func New(o Options) (*Handler, error) {
+	catalogs, err := i18n.Embedded()
+	if err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(o.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	h := &Handler{o: o, catalogs: catalogs, origin: u.Scheme + "://" + u.Host, secure: u.Scheme == "https"}
+	if h.secure && o.CookiePath == "/" {
+		h.prefix = "__Host-"
+	}
+	if h.pages, err = parsePages(); err != nil {
+		return nil, err
+	}
+	if err := h.check(); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+// Register adds the routes to mux.
+func (h *Handler) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /{$}", h.entry)
+	mux.HandleFunc("POST /{$}", h.choose)
+	mux.HandleFunc("GET /oauth2/auth", h.loop)
+	mux.HandleFunc("GET /consent", h.consentGet)
+	mux.HandleFunc("POST /consent", h.consentPost)
+	mux.HandleFunc("GET /logout", h.logout)
+	mux.HandleFunc("POST /locale/{code}", h.locale)
+	mux.HandleFunc("GET /static/{name}", h.static)
+}
+
+// entry is GET / (ENT): Hydra's login challenge, or the ref of
+// x_dispatcher_restart_url.
+func (h *Handler) entry(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Entry{
+		LoginChallenge: q.Get("login_challenge"),
+		Ref:            q.Get("ref"),
+		Cookie:         h.cookie(r, csrfCookie),
+	}))
+}
+
+// choose is POST / (POS), the choice form.
+func (h *Handler) choose(w http.ResponseWriter, r *http.Request) {
+	if !h.form(w, r) {
+		return
+	}
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Choose{
+		FlowID:         r.PostForm.Get("flow"),
+		LoginChallenge: r.PostForm.Get("login_challenge"),
+		Token:          r.PostForm.Get("csrf_token"),
+		Cookie:         h.cookie(r, csrfCookie),
+		SameOrigin:     h.sameOrigin(r),
+	}))
+}
+
+// loop is GET /oauth2/auth (BCL), where the step accepts send the browser
+// back.
+func (h *Handler) loop(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Loop{
+		Ref:            q.Get("ref"),
+		LoginChallenge: q.Get("login_challenge"),
+		Cookie:         h.cookie(r, csrfCookie),
+	}))
+}
+
+// consentGet is GET /consent (CST).
+func (h *Handler) consentGet(w http.ResponseWriter, r *http.Request) {
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Consent{
+		Challenge: r.URL.Query().Get("consent_challenge"),
+		Cookie:    h.cookie(r, csrfCookie),
+	}))
+}
+
+// consentPost is POST /consent, the consent screen's answer: accept, or any
+// other button refuses.
+func (h *Handler) consentPost(w http.ResponseWriter, r *http.Request) {
+	if !h.form(w, r) {
+		return
+	}
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Consent{
+		Challenge:  r.PostForm.Get("consent_challenge"),
+		Cookie:     h.cookie(r, csrfCookie),
+		Post:       true,
+		Accept:     r.PostForm.Get("action") == "accept",
+		Token:      r.PostForm.Get("csrf_token"),
+		SameOrigin: h.sameOrigin(r),
+	}))
+}
+
+// form reads the body of a form, at most maxForm; an unreadable one is an
+// invalid challenge (E1001).
+func (h *Handler) form(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxForm)
+	if err := r.ParseForm(); err != nil {
+		h.fail(w, r, flow.Response{Kind: flow.ErrorPage, Code: flow.E1001}, h.o.Config.Snapshot())
+		return false
+	}
+	return true
+}
+
+// sameOrigin tells whether a form comes from the dispatcher's own pages:
+// Sec-Fetch-Site same-origin or none (typed in), else an Origin of the
+// dispatcher's. Without either, it does not.
+func (h *Handler) sameOrigin(r *http.Request) bool {
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		return site == "same-origin" || site == "none"
+	}
+	return r.Header.Get("Origin") == h.origin
+}
+
+// cookie returns the value of the dispatcher's cookie name, "" without one.
+func (h *Handler) cookie(r *http.Request, name string) string {
+	c, err := r.Cookie(h.prefix + name)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+func (h *Handler) setCookie(w http.ResponseWriter, name, value string, maxAge time.Duration, httpOnly bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     h.prefix + name,
+		Value:    value,
+		Path:     h.o.CookiePath,
+		MaxAge:   int(maxAge / time.Second),
+		HttpOnly: httpOnly,
+		Secure:   h.secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// respond writes the engine's answer: a redirection (303), a page, or an
+// error page. The CSRF cookie set lives challenge_ttl, extended at each flow
+// created (A4).
+func (h *Handler) respond(w http.ResponseWriter, r *http.Request, res flow.Result) {
+	resp, cfg := res.Response, res.Config
+	if cfg == nil {
+		cfg = h.o.Config.Snapshot()
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if resp.SetCSRF != "" {
+		h.setCookie(w, csrfCookie, resp.SetCSRF, cfg.Settings.ChallengeTTL, true)
+	}
+	switch resp.Kind {
+	case flow.Redirect:
+		http.Redirect(w, r, resp.URL, http.StatusSeeOther)
+	case flow.ChoicePage:
+		h.render(w, r, http.StatusOK, "select", h.choicePage(r, cfg, resp.Choice))
+	case flow.ConsentPage:
+		h.render(w, r, http.StatusOK, "consent", h.consentPage(r, cfg, resp.Consent))
+	case flow.ErrorPage:
+		h.fail(w, r, resp, cfg)
+	default:
+		// The engine answering the emulated API to a page: a bug.
+		h.fail(w, r, flow.Response{Kind: flow.ErrorPage, Code: flow.E1000}, cfg)
+	}
+}
+
+// statuses are those of the error codes (Observabilité, codes d'erreur).
+var statuses = map[flow.Code]int{
+	flow.E1000: http.StatusInternalServerError,
+	flow.E1001: http.StatusBadRequest,
+	flow.E1002: http.StatusBadRequest,
+	flow.E1003: http.StatusBadRequest,
+	flow.E1004: http.StatusBadGateway,
+	flow.E1005: http.StatusInternalServerError,
+	flow.E1006: http.StatusBadGateway,
+	flow.E1007: http.StatusInternalServerError,
+	flow.E1008: http.StatusForbidden,
+}
+
+// fail renders the error page of resp: its code's status, or 503 with
+// Retry-After when Hydra was saturated (hydra.max_in_flight).
+func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Response, cfg *store.Snapshot) {
+	status, ok := statuses[resp.Code]
+	if !ok {
+		resp.Code, status = flow.E1000, http.StatusInternalServerError
+	}
+	if resp.Overloaded {
+		w.Header().Set("Retry-After", "1")
+		status = http.StatusServiceUnavailable
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	p := h.page(r, cfg, nil)
+	p.Error = &pageError{Code: string(resp.Code), MessageKey: "error." + string(resp.Code), TraceID: httpx.TraceID(r.Context()), Link: resp.Link}
+	h.render(w, r, status, "error", p)
+}
+
+// logout accepts Hydra's logout request at once (P5; the confirmation and
+// the propagation to the apps come with P9), then follows Hydra.
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	cfg := h.o.Config.Snapshot()
+	challenge := r.URL.Query().Get("logout_challenge")
+	if !hydraChallenge(challenge) {
+		h.fail(w, r, flow.Response{Kind: flow.ErrorPage, Code: flow.E1001}, cfg)
+		return
+	}
+	if _, err := h.o.Hydra.LogoutRequest(r.Context(), challenge); err != nil {
+		h.fail(w, r, h.hydraError(r, "logout_request", err), cfg)
+		return
+	}
+	to, err := h.o.Hydra.AcceptLogout(r.Context(), challenge)
+	switch {
+	case err == nil && to == "":
+		err = errors.New("hydra: logout accepted without redirect_to")
+		fallthrough
+	case err != nil:
+		h.fail(w, r, h.hydraError(r, "accept_logout", err), cfg)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, to, http.StatusSeeOther)
+}
+
+// hydraError is the page of a Hydra error on the logout, in the classes of
+// the engine (B1, Q11): an unknown challenge E1001, one gone E1002, a
+// refusal E1007, Hydra unavailable E1004.
+func (h *Handler) hydraError(r *http.Request, op string, err error) flow.Response {
+	var re *hydra.RequestError
+	resp := flow.Response{Kind: flow.ErrorPage, Code: flow.E1004}
+	switch {
+	case errors.As(err, &re) && re.Status == http.StatusNotFound:
+		resp.Code = flow.E1001
+	case errors.As(err, &re) && (re.Status == http.StatusUnauthorized || re.Status == http.StatusGone):
+		resp.Code = flow.E1002
+	case errors.As(err, &re):
+		resp.Code = flow.E1007
+	default:
+		resp.Overloaded = errors.Is(err, hydra.ErrOverloaded)
+	}
+	if resp.Code == flow.E1004 || resp.Code == flow.E1007 {
+		h.o.Logger.ErrorContext(r.Context(), "flow.error", "detail", string(resp.Code), "op", op, "err", err)
+	}
+	return resp
+}
+
+// hydraChallenge tells whether c may be a Hydra challenge (Q10): not empty,
+// at most 64 KiB, in the base64url alphabet with its = padding.
+func hydraChallenge(c string) bool {
+	if c == "" || len(c) > 64<<10 {
+		return false
+	}
+	for _, b := range []byte(c) {
+		if !('0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || b == '-' || b == '_' || b == '=') {
+			return false
+		}
+	}
+	return true
+}
+
+// locale is POST /locale/{code}: the dispatcher_locale cookie, for a year,
+// then back to the page of the Referer when it is the dispatcher's, else to
+// /. A form from elsewhere changes nothing (E1008).
+func (h *Handler) locale(w http.ResponseWriter, r *http.Request) {
+	cfg := h.o.Config.Snapshot()
+	if !h.sameOrigin(r) {
+		h.fail(w, r, flow.Response{Kind: flow.ErrorPage, Code: flow.E1008}, cfg)
+		return
+	}
+	if code := r.PathValue("code"); h.supported(cfg, code) {
+		h.setCookie(w, localeCookie, code, 365*24*time.Hour, false)
+	}
+	to := strings.TrimRight(h.o.BaseURL, "/") + "/"
+	if ref, err := url.Parse(r.Referer()); err == nil && ref.Scheme+"://"+ref.Host == h.origin {
+		to = ref.String()
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, to, http.StatusSeeOther)
+}

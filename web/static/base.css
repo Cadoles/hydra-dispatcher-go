@@ -1,0 +1,72 @@
+/* Base styles of the dispatcher's pages. A theme overrides the variables
+   below in theme.css. */
+:root {
+  --color-text: #1f2328;
+  --color-muted: #59636e;
+  --color-background: #f6f8fa;
+  --color-surface: #ffffff;
+  --color-border: #d1d9e0;
+  --color-accent: #0b5cad;
+  --color-accent-text: #ffffff;
+  --color-alert: #b42318;
+  --radius: 0.5rem;
+  --space: 1rem;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: calc(var(--space) * 2) var(--space);
+  font-family: var(--font);
+  color: var(--color-text);
+  background: var(--color-background);
+  line-height: 1.5;
+}
+header, main, footer { width: 100%; max-width: 32rem; }
+main {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: calc(var(--space) * 1.5);
+}
+h1 { font-size: 1.4rem; margin: 0 0 var(--space); }
+.lead { color: var(--color-muted); margin-top: 0; }
+.client { display: flex; align-items: center; gap: 0.5rem; margin-bottom: var(--space); font-weight: 600; }
+.client .logo { width: 2.5rem; height: 2.5rem; object-fit: contain; }
+fieldset.flows { border: 0; padding: 0; margin: 0 0 var(--space); display: grid; gap: 0.5rem; }
+fieldset.flows legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+label.flow {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  column-gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+label.flow:has(input:checked) { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+label.flow .icon { width: 1.75rem; height: 1.75rem; }
+label.flow .description { grid-column: 2 / -1; color: var(--color-muted); font-size: 0.9rem; }
+button {
+  font: inherit;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-text);
+  cursor: pointer;
+}
+button.secondary { background: transparent; color: var(--color-accent); }
+button + button { margin-left: 0.5rem; }
+.message, [role="alert"] { color: var(--color-alert); }
+.scopes { padding-left: 1.2rem; }
+.scopes .scope { font-weight: 600; }
+.trace { color: var(--color-muted); font-size: 0.85rem; margin-bottom: 0; }
+footer { margin-top: var(--space); text-align: center; }
+.locales button { background: transparent; color: var(--color-accent); border: 0; padding: 0.25rem 0.5rem; }
+.locales button[aria-current] { color: var(--color-text); cursor: default; }

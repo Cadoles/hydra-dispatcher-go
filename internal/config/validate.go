@@ -85,6 +85,14 @@ func (c *Config) validate() (warnings []string, err error) {
 	} else {
 		trusted = *c.Server.TrustedProxies
 	}
+	// No default either (B2): the emulated API is the most sensitive surface
+	// (step accepts, claims), and the admin networks were too wide a default.
+	emulated := List{}
+	if c.Security.EmulatedAPIAuthorizedHosts == nil {
+		fail("security.emulated_api_authorized_hosts", "is required: the networks the login apps call the emulated API from")
+	} else {
+		emulated = *c.Security.EmulatedAPIAuthorizedHosts
+	}
 	admin := c.Security.AdminAuthorizedHosts
 	allowlists := false
 	for _, l := range []struct {
@@ -94,7 +102,7 @@ func (c *Config) validate() (warnings []string, err error) {
 	}{
 		{"server.trusted_proxies", trusted, "X-Forwarded-For is trusted from every address, the allowlists can be bypassed"},
 		{"security.admin_authorized_hosts", admin, "open to every address"},
-		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts, "open to every address"},
+		{"security.emulated_api_authorized_hosts", emulated, "open to every address"},
 		{"security.metrics_authorized_hosts", *c.Security.MetricsAuthorizedHosts, "open to every address"},
 	} {
 		ps, err := l.hosts.Prefixes()
@@ -173,6 +181,12 @@ func (c *Config) validate() (warnings []string, err error) {
 				fail(path, "%q would allow inline or arbitrary scripts", src)
 			}
 		}
+	}
+
+	oneOf("consent.claims_filter", c.Consent.ClaimsFilter, ClaimsPermissive, ClaimsStrict)
+	if c.Consent.ClaimsFilter == ClaimsStrict {
+		// The standard scopes alone would drop every business claim.
+		fail("consent.claims_filter", "strict needs the scope catalogue of the database, which phase 3 brings: use permissive")
 	}
 
 	o := c.Observability

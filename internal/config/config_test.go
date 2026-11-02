@@ -42,6 +42,8 @@ func required(extra map[string]string) map[string]string {
 		"DISPATCHER_STORE_DSN":              "postgres://lasql:lasql@postgres:5432/dispatcher",
 		"DISPATCHER_SECRETS_COOKIE_KEY":     hexKey,
 		"DISPATCHER_SECRETS_CHALLENGE_KEY":  base64Key,
+		// The networks of the login apps.
+		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS": "10.0.1.0/24",
 	}
 	for k, v := range extra {
 		m[k] = v
@@ -131,8 +133,9 @@ func TestEveryKeyIsRead(t *testing.T) {
 		t.Fatalf("%d keys, want %d", len(got), len(defaultKeys))
 	}
 	for i, k := range got {
-		// postgres is the only store; pinning is refused until implemented.
-		if k.path == "store.backend" || k.path == "tls.pinned_spki_sha256" {
+		// postgres is the only store; pinning and strict claims are refused
+		// until implemented.
+		if k.path == "store.backend" || k.path == "tls.pinned_spki_sha256" || k.path == "consent.claims_filter" {
 			continue
 		}
 		if reflect.DeepEqual(k.field.Interface(), defaultKeys[i].field.Interface()) {
@@ -371,8 +374,8 @@ admin:
 	}{
 		{"server.listen", c.Server.Listen, ":7000"},
 		{"security.admin_authorized_hosts", c.Security.AdminAuthorizedHosts, List{"10.1.0.0/16", "127.0.0.1"}},
-		// Unset: follows the admin list, after overrides.
-		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts, List{"10.1.0.0/16", "127.0.0.1"}},
+		// No default: never the admin list (B2).
+		{"security.emulated_api_authorized_hosts", *c.Security.EmulatedAPIAuthorizedHosts, List{"10.0.1.0/24"}},
 		// Set to "": no address, not the admin list.
 		{"security.metrics_authorized_hosts", len(*c.Security.MetricsAuthorizedHosts), 0},
 		{"admin.ui.enabled", c.Admin.UI.Enabled, false},
@@ -545,6 +548,9 @@ func TestEnvKeys(t *testing.T) {
 		"DISPATCHER_UI_THEME_DIR",
 		"DISPATCHER_UI_RELOAD",
 		"DISPATCHER_UI_REMEMBER_LAST_FLOW",
+		"DISPATCHER_EMULATED_API_LEGACY_V1_PATHS",
+		"DISPATCHER_CONSENT_CLAIMS_FILTER",
+		"DISPATCHER_CONSENT_SHOW_VALUES",
 		"DISPATCHER_OBSERVABILITY_LOG_LEVEL",
 		"DISPATCHER_OBSERVABILITY_LOG_FORMAT",
 		"DISPATCHER_OBSERVABILITY_ACCESS_LOG_SAMPLE",
@@ -665,7 +671,9 @@ dispatcher:
 // it gives no item.
 func TestEmptyExpansion(t *testing.T) {
 	env := required(map[string]string{"METRICS": ""})
-	delete(env, "DISPATCHER_SERVER_TRUSTED_PROXIES") // the file sets it
+	// The file sets them.
+	delete(env, "DISPATCHER_SERVER_TRUSTED_PROXIES")
+	delete(env, "DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS")
 	c, _, err := Load(writeFile(t, `
 server:
   trusted_proxies: ${UNSET}
@@ -901,7 +909,7 @@ func TestDocuments(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	_, _, err := Load("", nil)
-	for _, path := range []string{"server.base_url", "server.trusted_proxies", "hydra.admin_url", "store.dsn", "secrets.cookie_key", "secrets.challenge_key"} {
+	for _, path := range []string{"server.base_url", "server.trusted_proxies", "security.emulated_api_authorized_hosts", "hydra.admin_url", "store.dsn", "secrets.cookie_key", "secrets.challenge_key"} {
 		if err == nil || !strings.Contains(err.Error(), path) {
 			t.Errorf("empty configuration: err = %v, want it to name %s", err, path)
 		}
@@ -937,6 +945,8 @@ func TestValidation(t *testing.T) {
 		{"shared key", map[string]string{"DISPATCHER_SECRETS_WEBHOOK_SIGNING_KEY": hexKey}, "secrets.webhook_signing_key: shares a key with secrets.cookie_key"},
 		{"shared previous key", map[string]string{"DISPATCHER_SECRETS_CHALLENGE_KEYS_PREVIOUS": hexKey}, "secrets.challenge_key: shares a key with secrets.cookie_key"},
 		{"previous key only", map[string]string{"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS": hexKey2}, "secrets.encryption_key: is required with secrets.encryption_keys_previous"},
+		{"claims filter", map[string]string{"DISPATCHER_CONSENT_CLAIMS_FILTER": "loose"}, "consent.claims_filter"},
+		{"strict claims before the catalogue", map[string]string{"DISPATCHER_CONSENT_CLAIMS_FILTER": "strict"}, "consent.claims_filter: strict needs the scope catalogue"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -983,6 +993,20 @@ func TestTrustedProxiesRequired(t *testing.T) {
 	}
 }
 
+// security.emulated_api_authorized_hosts has no default (B2): the admin
+// networks it copied were too wide for the step accepts and the claims.
+func TestEmulatedAPIHostsRequired(t *testing.T) {
+	env := required(map[string]string{"DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": "10.9.0.0/16"})
+	delete(env, "DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS")
+	if _, _, err := Load("", envOf(env)); err == nil || !strings.Contains(err.Error(), "security.emulated_api_authorized_hosts: is required") {
+		t.Errorf("unset: err = %v", err)
+	}
+	c, _, err := Load(writeFile(t, "security:\n  emulated_api_authorized_hosts: [10.5.0.0/24]\n"), envOf(env))
+	if err != nil || !slices.Equal(*c.Security.EmulatedAPIAuthorizedHosts, List{"10.5.0.0/24"}) {
+		t.Errorf("set by the file: err = %v", err)
+	}
+}
+
 func TestWarnings(t *testing.T) {
 	_, warnings, err := Load("", envOf(required(map[string]string{"DISPATCHER_SECURITY_METRICS_AUTHORIZED_HOSTS": "0.0.0.0/0,::/0"})))
 	if err != nil {
@@ -1023,7 +1047,8 @@ func TestWarnings(t *testing.T) {
 	if !hasWarning(warnings, "server.trusted_proxies is empty: behind a reverse proxy") {
 		t.Errorf("no trusted proxies: warnings = %q", warnings)
 	}
-	_, warnings, _ = Load("", envOf(required(map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": "", "DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": ""})))
+	_, warnings, _ = Load("", envOf(required(map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": "", "DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS": "",
+		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS": ""})))
 	if hasWarning(warnings, "server.trusted_proxies is empty") {
 		t.Errorf("no trusted proxies, no allowlist: warnings = %q", warnings)
 	}

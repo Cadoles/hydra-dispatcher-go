@@ -1,0 +1,19 @@
+{{define "title"}}{{.T "choice.title"}}{{end}}
+{{define "content"}}
+<h1>{{.T "choice.title"}}</h1>
+{{if .Client.Name}}<p class="lead">{{.T "choice.client" .Client.Name}}</p>{{end}}
+{{if .Error}}<p class="message" role="alert">{{.T .Error.MessageKey}}</p>{{end}}
+{{if .Flows}}
+<form method="post" action="{{.Form.Action}}">
+{{template "csrf" .}}
+<input type="hidden" name="login_challenge" value="{{.Form.LoginChallenge}}">
+<fieldset class="flows">
+<legend>{{.T "choice.title"}}</legend>
+{{range .Flows}}{{template "flow_card" .}}{{end}}
+</fieldset>
+<button type="submit" autofocus>{{.T "choice.submit"}}</button>
+</form>
+{{else}}
+<p>{{.T "choice.none"}}</p>
+{{end}}
+{{end}}

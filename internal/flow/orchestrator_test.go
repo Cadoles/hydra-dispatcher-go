@@ -219,7 +219,7 @@ func param(t *testing.T, r Result, name string) string {
 // consent, each through the emulated API.
 func (w *world) app(t *testing.T, app string, login Result, subject, claims string) {
 	t.Helper()
-	caller := func(a string) bool { return a == app }
+	caller := func(a store.App) bool { return a.ID == app }
 	c := param(t, login, "login_challenge")
 	for _, call := range []AppCall{
 		{Op: AppGetLogin, Challenge: c},

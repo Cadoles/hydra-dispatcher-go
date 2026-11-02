@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"testing"
 )
@@ -32,5 +33,16 @@ func TestNewSnapshot(t *testing.T) {
 	}
 	if _, ok := s.App("c"); ok {
 		t.Error("App(c) found")
+	}
+}
+
+func TestAppWarnings(t *testing.T) {
+	got := appWarnings([]App{
+		{ID: "open", AuthMode: "network"},
+		{ID: "sourced", AuthMode: "network", AllowedSources: []netip.Prefix{netip.MustParsePrefix("10.0.1.7/32")}},
+		{ID: "certified", AuthMode: "mtls", ClientCertFingerprint: "ab"},
+	})
+	if len(got) != 1 || !strings.Contains(got[0], "app open has no allowed_sources") {
+		t.Errorf("warnings %q", got)
 	}
 }

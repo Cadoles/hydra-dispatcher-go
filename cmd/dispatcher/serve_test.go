@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,7 +22,9 @@ import (
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
 // requiredEnv is the least configuration serve accepts.
@@ -29,11 +32,28 @@ func requiredEnv(hydraAdminURL string) []string {
 	return []string{
 		"DISPATCHER_SERVER_BASE_URL=http://dispatcher.hydra.test",
 		"DISPATCHER_SERVER_TRUSTED_PROXIES=10.0.0.10",
+		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=10.0.1.0/24",
 		"DISPATCHER_HYDRA_ADMIN_URL=" + hydraAdminURL,
 		"DISPATCHER_STORE_DSN=postgres://dispatcher@postgres/dispatcher",
 		"DISPATCHER_SECRETS_COOKIE_KEY=" + strings.Repeat("ab", 32),
 		"DISPATCHER_SECRETS_CHALLENGE_KEY=" + strings.Repeat("cd", 32),
 	}
+}
+
+// fixedSnapshot is a configuration that does not change.
+type fixedSnapshot struct{ s *store.Snapshot }
+
+func (f fixedSnapshot) Snapshot() *store.Snapshot { return f.s }
+
+// testServices are those of a handler without a database: the state store
+// in memory, and one app, which calls from 192.168.5.7.
+func testServices(t *testing.T, database httpx.Check) services {
+	t.Helper()
+	mem := state.NewMemory()
+	t.Cleanup(func() { _ = mem.Close() })
+	app := store.App{ID: "sql", LoginURL: "http://sql/login", ConsentURL: "http://sql/consent", AuthMode: "network",
+		AllowedSources: []netip.Prefix{netip.MustParsePrefix("192.168.5.7/32")}}
+	return services{database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app}, nil, store.DefaultSettings())}}
 }
 
 func testConfig(t *testing.T, hydraAdminURL string) *config.Config {
@@ -61,7 +81,7 @@ func TestHandler(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	newServer := func() *httptest.Server {
-		h, err := newHandler(testConfig(t, hydra.URL), logger, logger, database)
+		h, err := newHandler(testConfig(t, hydra.URL), logger, logger, testServices(t, database))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,7 +124,24 @@ func TestHandler(t *testing.T) {
 		}
 	}
 
-	resp, err := http.Post(srv.URL+"/health", "text/plain", nil)
+	// The pages and the emulated API are served, with the security headers.
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || resp.Header.Get("Content-Security-Policy") == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+		t.Errorf("GET / without a challenge: %d %v", resp.StatusCode, resp.Header)
+	}
+	if resp, err = http.Get(srv.URL + "/admin/oauth2/auth/requests/login?login_challenge=x"); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("emulated API from outside its allowlist: %d", resp.StatusCode)
+	}
+
+	resp, err = http.Post(srv.URL+"/health", "text/plain", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +211,7 @@ func TestLoggersLevel(t *testing.T) {
 	logger, accessLogger, _ := newLoggers(&buf, cfg.Observability)
 	logger.Info("flow.started")
 	logger.Warn("challenge.invalid")
-	h, err := newHandler(cfg, logger, accessLogger, func(context.Context) error { return nil })
+	h, err := newHandler(cfg, logger, accessLogger, testServices(t, func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +227,8 @@ func TestLoggersLevel(t *testing.T) {
 }
 
 // traceparent is honoured from the proxies and the login apps, as RealIP
-// tells them, and from them only: no more from every private address.
+// tells them, and from them only: no more from every private address, nor
+// from the whole allowlist of the emulated API, only the apps' sources (B2).
 func TestHandlerTrace(t *testing.T) {
 	cfg, _, err := config.Load("", append(requiredEnv("http://127.0.0.1:1"),
 		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=192.168.5.0/24"))
@@ -198,7 +236,7 @@ func TestHandlerTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	h, err := newHandler(cfg, logger, logger, func(context.Context) error { return nil })
+	h, err := newHandler(cfg, logger, logger, testServices(t, func(context.Context) error { return nil }))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +254,8 @@ func TestHandlerTrace(t *testing.T) {
 		// is not read either.
 		{"another private host", "10.0.0.99:1", "", false},
 		{"another private host claiming a login app", "10.0.0.99:1", "192.168.5.7", false},
+		// In the allowlist of the emulated API, but no app's source.
+		{"allowlisted, no app", "192.168.5.8:1", "", false},
 	} {
 		r := httptest.NewRequest(http.MethodGet, "/health", nil)
 		r.RemoteAddr = tt.remote

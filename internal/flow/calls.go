@@ -59,7 +59,7 @@ func (r *run) hydraFailure(f *Flow, err error) Outcome {
 		}
 		return s.fail(E1007)
 	}
-	return s.fail(E1004)
+	return s.unavailable(err)
 }
 
 // rejectLogin rejects L for reason and finishes f, answering ok with Hydra's
@@ -248,7 +248,7 @@ func (r *run) rejectConsent(f *Flow, c string, reason Reason, body ory.RejectOAu
 		case unknown, gone:
 			return s.absent()
 		case unavailable:
-			return s.fail(E1004)
+			return s.unavailable(d.err())
 		}
 		return s.fail(E1007)
 	case f == nil:

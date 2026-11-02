@@ -1,0 +1,2 @@
+{{define "flow_card"}}<label class="flow"><input type="radio" name="flow" value="{{.ID}}" required{{if .Selected}} checked{{end}}>{{if .IconURL}}<img class="icon" src="{{.IconURL}}" alt="">{{end}}<span class="title">{{.Title}}</span>{{if .Description}}<span class="description">{{.Description}}</span>{{end}}</label>
+{{end}}

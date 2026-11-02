@@ -218,11 +218,16 @@ func (r *run) toStep(ref string, f *Flow, k int, kind Kind) Outcome {
 
 // choicePage is the choice page of f (CHX-5).
 func (r *run) choicePage(f *Flow, o offer, invalid bool) Outcome {
+	var oidc struct {
+		UILocales []string `json:"ui_locales"`
+	}
+	_ = json.Unmarshal(f.Hydra.OIDCContext, &oidc) // none read is none asked
 	return Outcome{Response: Response{Kind: ChoicePage, Choice: &ChoiceScreen{
 		Flows:          o.flows,
 		LoginChallenge: f.LoginChallenge,
 		CSRF:           f.CSRF,
 		Client:         f.Hydra.Client,
 		Invalid:        invalid,
+		UILocales:      oidc.UILocales,
 	}}}
 }

@@ -1,0 +1,20 @@
+{{define "title"}}{{.T "consent.title"}}{{end}}
+{{define "content"}}
+<h1>{{.T "consent.title"}}</h1>
+<p class="lead">{{.T "consent.intro" .Client.Name}}</p>
+{{if .Scopes}}
+<ul class="scopes">
+{{range .Scopes}}<li><span class="scope">{{.Label}}</span>{{if .Claims}}
+<ul>{{range .Claims}}<li>{{.Label}}{{if .Value}} : <span class="value">{{.Value}}</span>{{end}}</li>{{end}}</ul>{{end}}</li>
+{{end}}</ul>
+{{else}}
+<p>{{.T "consent.nothing"}}</p>
+{{end}}
+{{if .Audience}}<p class="audience">{{.T "consent.audience"}} : {{range $i, $a := .Audience}}{{if $i}}, {{end}}{{$a}}{{end}}</p>{{end}}
+<form method="post" action="{{.Form.Action}}">
+{{template "csrf" .}}
+<input type="hidden" name="consent_challenge" value="{{.Form.ConsentChallenge}}">
+<button type="submit" name="action" value="accept" autofocus>{{.T "consent.accept"}}</button>
+<button type="submit" name="action" value="reject" class="secondary">{{.T "consent.reject"}}</button>
+</form>
+{{end}}

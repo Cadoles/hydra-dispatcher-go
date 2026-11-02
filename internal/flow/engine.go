@@ -182,8 +182,11 @@ type Response struct {
 	// SetCSRF is the dispatcher_flow_csrf value to set, its Max-Age
 	// extended (A4); "" sets nothing.
 	SetCSRF string
-	Status  int
-	Body    any
+	// Overloaded marks an E1004 of hydra.max_in_flight reached: 503 with
+	// Retry-After, rather than the code's status.
+	Overloaded bool
+	Status     int
+	Body       any
 }
 
 // ChoiceScreen is what the choice page shows.
@@ -197,6 +200,8 @@ type ChoiceScreen struct {
 	Client json.RawMessage
 	// Invalid is set when the flow posted is not one offered (POS-2).
 	Invalid bool
+	// UILocales are the oidc_context's ui_locales, for the page's language.
+	UILocales []string
 }
 
 // ConsentScreen is what the consent screen shows.
@@ -208,6 +213,8 @@ type ConsentScreen struct {
 	Audience  []string
 	// Claims are those the flow sends in the id_token.
 	Claims Object
+	// UILocales are the oidc_context's ui_locales, for the page's language.
+	UILocales []string
 }
 
 // Report is something to log: an event of the catalogue, also sent to
@@ -499,6 +506,15 @@ func (s surface) fail(code Code) Outcome {
 	case E1000, E1004, E1005, E1006, E1007:
 		o = o.report(Report{Event: "flow.error", Detail: string(code), Sentry: true})
 	}
+	return o
+}
+
+// unavailable is E1004 for Hydra unavailable or answering what it should
+// not (B1, Q11); Overloaded when the call was not even made, max_in_flight
+// calls being already in flight.
+func (s surface) unavailable(err error) Outcome {
+	o := s.fail(E1004)
+	o.Response.Overloaded = errors.Is(err, hydra.ErrOverloaded)
 	return o
 }
 

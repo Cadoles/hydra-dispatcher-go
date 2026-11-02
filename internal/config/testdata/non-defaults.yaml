@@ -57,6 +57,11 @@ ui:
   reload: true
   remember_last_flow: false
   csp_extra: { font-src: ["https://fonts.gstatic.com"] }
+emulated_api:
+  legacy_v1_paths: false
+consent:
+  claims_filter: permissive
+  show_values: true
 observability:
   log_level: debug
   log_format: text

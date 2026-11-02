@@ -118,7 +118,7 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	case gone:
 		return s.absent() // ENT-10, ENT-11: the 410 of 2.1 is not followed
 	case unavailable:
-		return s.fail(E1004) // ENT-14
+		return s.unavailable(read.Err) // ENT-14
 	default:
 		return s.fail(E1007)
 	}
@@ -272,7 +272,7 @@ func (r *run) advance(ref string, f *Flow) Outcome {
 	case unknown, gone:
 		return s.ended(f).writing(f.Reduce()) // BCL-9: no rejection
 	case unavailable:
-		return s.fail(E1004) // BCL-10
+		return s.unavailable(read.Err) // BCL-10
 	default:
 		return s.fail(E1007)
 	}
@@ -303,7 +303,7 @@ func (r *run) consent(ev Consent) Outcome {
 	case gone:
 		return s.absent() // CST-3, CST-4
 	case unavailable:
-		return s.fail(E1004) // CST-19
+		return s.unavailable(read.Err) // CST-19
 	default:
 		return s.fail(E1007)
 	}
@@ -357,6 +357,7 @@ func (r *run) consent(ev Consent) Outcome {
 		Scopes:    nonNil(req.RequestedScope),
 		Audience:  nonNil(req.RequestedAccessTokenAudience),
 		Claims:    r.consentBody(f, req).Session.IdToken.(Object),
+		UILocales: req.GetOidcContext().UiLocales,
 	}}}
 	if f.ConsentChallenge != ev.Challenge {
 		g := f.clone()
