@@ -55,6 +55,12 @@ type AppError struct {
 const (
 	missingSession     = "missing_session_error"
 	missingSessionText = "Could not find session metadata in cache"
+	// forbidden is Hydra's error for a request it does not allow, the
+	// refusal of an app outside its sources (EMU-4) as of an address outside
+	// the allowlist (P4). Symfony answered its allowlist's refusal as any
+	// error, 500 server_error (capture 26).
+	forbidden     = "request_forbidden"
+	forbiddenText = "The request is not allowed."
 )
 
 func appError(status int, name, description string) Outcome {
@@ -87,7 +93,7 @@ func (r *run) appCall(ev AppCall) Outcome {
 		// EMU-3 (Q17): an unknown challenge, for the failure limiter (P11).
 		return s.absent().report(Report{Event: "challenge.invalid", Detail: "forged"})
 	case ChallengeOtherApp:
-		return Outcome{Response: Response{Kind: AppForbidden}}.report(Report{Event: "security.ip_rejected", Detail: "emulated: app outside its sources"}) // EMU-4
+		return appError(http.StatusForbidden, forbidden, forbiddenText).report(Report{Event: "security.ip_rejected", Detail: "emulated: app outside its sources"}) // EMU-4
 	case ChallengeFinished:
 		return s.ended(f) // EMU-5
 	case ChallengeExpired:

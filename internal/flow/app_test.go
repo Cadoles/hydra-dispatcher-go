@@ -26,7 +26,7 @@ type appCase struct {
 	reread *Flow
 	says   hydraSays
 	// status and body (its JSON, or a part of it when the body ends with
-	// "...") are the answer wanted; status 0 is AppForbidden.
+	// "...") are the answer wanted.
 	status int
 	body   string
 	calls  []Op
@@ -43,10 +43,7 @@ func (tc appCase) run(t *testing.T) {
 		}
 		p := play(t, env, tc.ev, tc.stored, tc.reread, tc.says)
 		r := p.Response
-		switch {
-		case tc.status == 0 && r.Kind != AppForbidden:
-			t.Errorf("answer %v %d %s; want the allowlist's refusal", r.Kind, r.Status, rawJSON(r.Body))
-		case tc.status != 0 && (r.Kind != AppJSON || r.Status != tc.status):
+		if r.Kind != AppJSON || r.Status != tc.status {
 			t.Errorf("answer %v %d %s; want %d", r.Kind, r.Status, rawJSON(r.Body), tc.status)
 		}
 		if want, part := strings.CutSuffix(tc.body, "..."); tc.body != "" {
@@ -114,7 +111,9 @@ func TestAppChecks(t *testing.T) {
 		{name: "EMU-3, other kind", ev: AppCall{Op: AppGetConsent, Challenge: challenge(1000, "sql", KindLogin), Caller: func(string) bool { return true }},
 			stored: atStep(t, 1, true, false), status: http.StatusNotFound},
 		{name: "EMU-4", ev: AppCall{Op: AppGetLogin, Challenge: challenge(1000, "sql", KindLogin), Caller: func(a string) bool { return a == "2fa" }},
-			stored: atStep(t, 1, false, false), status: 0, check: reportsHas("security.ip_rejected", "emulated: app outside its sources")},
+			stored: atStep(t, 1, false, false), status: http.StatusForbidden,
+			body:  `{"error":"request_forbidden","error_description":"The request is not allowed.","status_code":403}`,
+			check: reportsHas("security.ip_rejected", "emulated: app outside its sources")},
 		{name: "EMU-5, GET", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: finishedFlow(t, "", 0), status: http.StatusGone, body: loopBody},
 		{name: "EMU-5 Q25, PUT", ev: callBy(AppAcceptLogin, 1000, "sql", loginBody), stored: finishedFlow(t, "", 0), status: http.StatusOK, body: loopBody},
 		{name: "EMU-6, GET", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: expired(atStep(t, 1, false, false)),

@@ -15,6 +15,21 @@ Hydra 2.1 models).
   browser and the login apps: their calls to the emulated API carry the
   bodies hydra-sql-go and hydra-passwordless send (taken from `14`), but come
   from the host through Caddy.
+- `26`, on 2026-11-02: Symfony in `APP_ENV=prod`, the capture layer up for
+  `recorder`, `caddy` and `hydra-dispatcher` only. Caddy replaces the
+  `X-Forwarded-For` of a request from the host, which then always comes from
+  an allowed private address: the four calls of `21` were sent instead from a
+  throwaway container on the `backend` network straight to the recorder's
+  front leg, with `X-Forwarded-For: 203.0.113.10` (a documentation address,
+  outside `HYDRA_ADMIN_AUTHORIZED_HOSTS`), which Symfony's `TRUSTED_PROXIES`
+  take as the client:
+
+  ```sh
+  docker run --rm --network hydra-dev_backend --entrypoint sh curlimages/curl:8.11.1 -c '
+    curl -H "Host: dispatcher.hydra.test" -H "X-Forwarded-For: 203.0.113.10" \
+      "http://recorder:8080/oauth2/auth/requests/login?login_challenge=<32 hex>"
+    # then PUT login/accept, GET consent, PUT consent/accept, bodies of 21'
+  ```
 
 `internal/hydra` tests read some of these files by name: renaming or removing
 a directory means updating `emulated_test.go` and `client_test.go`.
@@ -61,6 +76,7 @@ a directory means updating `emulated_test.go` and `client_test.go`.
 | `23-csrf-mismatch` | The choice posted with a `dispatcher_flow_csrf` cookie the page did not set. | |
 | `24-back-after-final-accept` | sql up to the dispatcher's consent screen, then back to `/oauth2/auth` and `/` with Hydra's login challenge. | |
 | `25-back-after-the-end` | sql completed (consent screen accepted), then back to `/oauth2/auth`, `/` and `/consent`. | |
+| `26-allowlist-refusal` | The four calls of `21`, from an address outside the emulated API's allowlist. | |
 
 `INCOMPLETE`: hydra-passwordless hangs up as soon as it has decoded the JSON,
 and the recorder of the time lost those exchanges. Its calls are missing
@@ -129,6 +145,17 @@ the recorder. Never capture against a real identity provider or real accounts.
 - In `APP_ENV=prod`, the consent screen's title is the untranslated key
   `view.consent.title`.
 
+## What `26` shows
+
+- **A call from outside the allowlist**: **500**
+  `{"error":"server_error","error_description":"request_failed","status_code":500,"trace_id":…}`
+  on all four calls, not the 403 of Symfony's `doc/api.md`, and no call to
+  Hydra. The `access_control` of `^/oauth2/auth/requests` raises an
+  `AccessDeniedException` (403, "The user doesn't have ROLE_NO_ACCESS"),
+  which the emulated API's exception handling answers as any other error.
+- Artifacts: `User-Agent` `curl/8.11.1`; `X-Forwarded-For` as sent, the
+  upstream receiving the throwaway container's address after it.
+
 ## Not captured yet
 
 Needed by the contract tests of phase 1, most useful first:
@@ -142,8 +169,7 @@ Needed by the contract tests of phase 1, most useful first:
 6. Variants of `/` (auto-selection, preferred-app `acr_values`,
    `unmet_authentication_requirements`, `metadata.dispatcher.flows`,
    `ui_locales`) and of `/consent` (`skip_consent`, `consent_auto_accept`).
-7. Refusal by the emulated API's allowlist (403).
-8. hydra-passwordless's calls to the emulated logout endpoints (404 today).
+7. hydra-passwordless's calls to the emulated logout endpoints (404 today).
 
 Capture the error scenarios with `APP_ENV=prod`: in dev, Symfony answers with
 its debug exception page. Hydra's own answers, for 2.1, 2.2 and 2.3, are in

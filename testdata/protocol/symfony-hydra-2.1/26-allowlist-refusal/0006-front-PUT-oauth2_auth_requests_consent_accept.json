@@ -1,0 +1,78 @@
+{
+  "seq": 6,
+  "leg": "front",
+  "time": "2026-11-02T10:17:43.606613068Z",
+  "duration_ms": 268,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/consent/accept?consent_challenge=d0c4733721db9e548ded957728963e6e",
+    "headers": {
+      "Accept": [
+        "*/*"
+      ],
+      "Content-Length": [
+        "153"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "curl/8.11.1"
+      ],
+      "X-Forwarded-For": [
+        "203.0.113.10"
+      ]
+    },
+    "body": {
+      "grant_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "remember": true,
+      "session": {
+        "id_token": {
+          "email": "test2@test.com",
+          "firstname": "Isabelle",
+          "lastname": "Durand"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Length": [
+        "129"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Mon, 02 Nov 2026 10:17:43 GMT"
+      ],
+      "Expires": [
+        "Mon, 02 Nov 2026 10:17:43 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a19bc3-d09f-72e0-99e7-a36dea0c5683"
+      ]
+    },
+    "body": {
+      "error": "server_error",
+      "error_description": "request_failed",
+      "status_code": 500,
+      "trace_id": "01a19bc3-d09f-72e0-99e7-a36dea0c5683"
+    }
+  }
+}

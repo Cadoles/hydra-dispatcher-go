@@ -168,9 +168,6 @@ const (
 	ErrorPage
 	// AppJSON: the emulated API's answer, Response.Status and Response.Body.
 	AppJSON
-	// AppForbidden: the emulated API refuses the caller, as its allowlist
-	// does (EMU-4), in the form P4 gives that refusal.
-	AppForbidden
 )
 
 // Response is the answer the handler gives.

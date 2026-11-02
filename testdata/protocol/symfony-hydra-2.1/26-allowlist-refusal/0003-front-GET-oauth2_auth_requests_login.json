@@ -1,0 +1,57 @@
+{
+  "seq": 3,
+  "leg": "front",
+  "time": "2026-11-02T10:17:42.670042524Z",
+  "duration_ms": 315,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/login?login_challenge=d0c4733721db9e548ded957728963e6e",
+    "headers": {
+      "Accept": [
+        "*/*"
+      ],
+      "User-Agent": [
+        "curl/8.11.1"
+      ],
+      "X-Forwarded-For": [
+        "203.0.113.10"
+      ]
+    }
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "Cache-Control": [
+        "max-age=0, must-revalidate, private"
+      ],
+      "Content-Length": [
+        "129"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Mon, 02 Nov 2026 10:17:42 GMT"
+      ],
+      "Expires": [
+        "Mon, 02 Nov 2026 10:17:42 GMT"
+      ],
+      "Server": [
+        "FrankenPHP Caddy"
+      ],
+      "X-Powered-By": [
+        "PHP/8.5.12"
+      ],
+      "X-Trace-Id": [
+        "01a19bc3-cd0c-715b-a10d-f5fa9272d528"
+      ]
+    },
+    "body": {
+      "error": "server_error",
+      "error_description": "request_failed",
+      "status_code": 500,
+      "trace_id": "01a19bc3-cd0c-715b-a10d-f5fa9272d528"
+    }
+  }
+}
