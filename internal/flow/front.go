@@ -75,7 +75,7 @@ func (r *run) entry(ev Entry) Outcome {
 		}
 		return r.create(ref, ev)
 	case Finished:
-		return s.ended(f) // ENT-7, ENT-16
+		return r.endedPage(f) // ENT-7, ENT-16, ENT-21
 	case Expired:
 		return r.expire(f) // ENT-8, EXP-2
 	case Accepted:
@@ -177,7 +177,7 @@ func (r *run) choose(ev Choose) Outcome {
 	case Absent:
 		return s.absent() // POS-8
 	case Finished:
-		return s.ended(f) // POS-7
+		return r.endedPage(f) // POS-7, POS-11
 	case Expired:
 		return r.expire(f)
 	case Accepted:
@@ -237,7 +237,7 @@ func (r *run) loop(ev Loop) Outcome {
 	case Absent:
 		return s.absent() // BCL-1
 	case Finished:
-		return s.ended(f) // BCL-2
+		return r.endedPage(f) // BCL-2, BCL-17
 	case Expired:
 		return r.expire(f) // BCL-13
 	}
@@ -342,12 +342,7 @@ func (r *run) consent(ev Consent) Outcome {
 	case Absent:
 		return s.absent() // CST-6 (T2): never accepted from the remember cookie
 	case Finished:
-		// CST-16 (Q13): with the cookie, or without it for a consent settled
-		// past exp, which only CST-22's reject is (Q31): the browser lost the
-		// cookie with exp, and the redirect_to of a login_required reject
-		// grants nothing.
-		replay := csrf || f.ConsentAt > f.ExpiresAt
-		if f.ConsentRedirect != "" && replay && r.now()-f.ConsentAt < consentReplay.Milliseconds() {
+		if r.replays(f, csrf) {
 			return s.redirect(f.ConsentRedirect) // CST-16 (Q13)
 		}
 		return s.ended(f) // CST-7
@@ -403,15 +398,46 @@ func (r *run) consent(ev Consent) Outcome {
 // pastExp answers a page on the accepted flow f of ref past exp, without the
 // cookie, which the browser lost with exp (ENT-20, POS-10, BCL-16; Q31,
 // revue R15): the consent the flow showed is rejected, as /consent does
-// (CST-22); without one, there is nothing to reject, Hydra 2.1 refusing a
-// reject of L: page E1002. Never the resume target: the apps know the ref
-// (ENT-18), and the consent challenge would let one that reaches Hydra's
-// admin accept the consent itself.
+// (CST-22). Never that consent challenge: the apps know the ref (ENT-18),
+// and it would let one that reaches Hydra's admin accept the consent itself.
+// A consent Hydra no longer knows (404, 401, 410) finishes the flow without
+// a reject, as CST-18. Without a consent shown, hr (revue R16): Hydra 2.1
+// refuses a reject of L, and the login_verifier of hr is only followed with
+// Hydra's login cookie, the browser's, which then reaches /consent and
+// CST-22; in 2.1, an hr already followed ends in an error at the client.
 func (r *run) pastExp(ref string, f *Flow) Outcome {
+	s := r.page()
 	if f.ConsentChallenge == "" {
-		return r.page().ended(f)
+		return s.redirect(f.HydraRedirect)
+	}
+	if read := r.Answers.Consent; read != nil {
+		switch classify(read.Err) {
+		case unknown, gone:
+			r.use(GetConsent)
+			return s.ended(f).writing(f.Reduce())
+		}
 	}
 	return r.consent(Consent{Challenge: f.ConsentChallenge, ref: ref})
+}
+
+// replays tells whether the finished flow f gives its cr again (CST-16,
+// Q13): within 10 s of ct, the cookie matching, or without it for a consent
+// rejected past exp (ct > exp, which only CST-22 and the pages of ENT-20,
+// POS-10 and BCL-16 make, Q31): the browser lost the cookie with exp, and
+// the redirect_to of a login_required reject grants nothing.
+func (r *run) replays(f *Flow, csrf bool) bool {
+	return f.ConsentRedirect != "" && (csrf || f.ConsentAt > f.ExpiresAt) && r.now()-f.ConsentAt < consentReplay.Milliseconds()
+}
+
+// endedPage answers a page other than /consent on the finished flow f: page
+// E1002 with its link, or, within 10 s of a consent rejected past exp, that
+// reject's cr, as /consent replays it (ENT-21, POS-11, BCL-17; revue R16): a
+// second load, or a concurrent page whose own reject Hydra 2.1 refused (409).
+func (r *run) endedPage(f *Flow) Outcome {
+	if r.replays(f, false) {
+		return r.page().redirect(f.ConsentRedirect)
+	}
+	return r.page().ended(f)
 }
 
 // notOurs rejects the consent of a flow the dispatcher did not accept, or

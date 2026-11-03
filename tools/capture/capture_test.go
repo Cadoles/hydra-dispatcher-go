@@ -31,7 +31,9 @@ func names(t *testing.T, dir string) []string {
 // TestCollect moves the exchanges written since the listing, the .json
 // files only, and fails when there are none.
 func TestCollect(t *testing.T) {
+	was := settle
 	settle = 0
+	t.Cleanup(func() { settle = was })
 	inbox, into := t.TempDir(), t.TempDir()
 	in := Inbox(inbox)
 	write(t, inbox, "0001-front-GET-root.json")

@@ -539,9 +539,11 @@ func (d *driver) secondLogin() error {
 // secondLoginOtherSubject signs in with hydra-sql, then in the same browser
 // as someone else: the dispatcher refuses at the final accept, page E1003,
 // and finishes the flow, which a reload of the choice page shows: E1002
-// (FIN-3, ENT-7). Hydra's admin cannot tell the reject itself: 2.1 reads a
-// rejected login request in 200 until its verifier is followed, and 2.2 no
-// longer tells a handled request from a pending one; go 05:0103 shows it.
+// (FIN-3, ENT-7). The reject itself is not read on Hydra's admin: 2.2 no
+// longer tells a handled request from a pending one, and 2.1 answers 410 to
+// a login request once its verifier is followed (login_used of
+// internal/hydra/testdata/errors), which the dispatcher never does after
+// E1003; no fixture reads a rejected one before. go 05:0103 shows the reject.
 func (d *driver) secondLoginOtherSubject() error {
 	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept"}); err != nil {
 		return fmt.Errorf("first login: %w", err)

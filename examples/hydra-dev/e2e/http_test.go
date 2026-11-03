@@ -30,7 +30,9 @@ func TestWalk(t *testing.T) {
 	// B under another host name: a jar keeps cookies per host, not per port.
 	bURL, _ := url.Parse(b.URL)
 	bHost := "localhost:" + bURL.Port()
+	var seenA []string
 	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenA = append(seenA, r.URL.Path+" cookie="+r.Header.Get("Cookie"))
 		http.SetCookie(w, &http.Cookie{Name: "a", Value: "1", Path: "/"})
 		switch r.URL.Path {
 		case "/303":
@@ -63,6 +65,11 @@ func TestWalk(t *testing.T) {
 	}
 	if strings.Join(seen, "\n") != strings.Join(want, "\n") {
 		t.Errorf("requests\n%s\nwant\n%s", strings.Join(seen, "\n"), strings.Join(want, "\n"))
+	}
+	// The cookie A set comes back to A, and only to A.
+	wantA := []string{"/303 cookie=", "/307 cookie=a=1", "/callback cookie=a=1"}
+	if strings.Join(seenA, "\n") != strings.Join(wantA, "\n") {
+		t.Errorf("requests to A\n%s\nwant\n%s", strings.Join(seenA, "\n"), strings.Join(wantA, "\n"))
 	}
 	if p.Body != "" || p.URL.String() != "http://oidc.client.test/auth/callback?code=x&state=s" || len(p.Trail) != 3 {
 		t.Errorf("walk ended on %s (%d hops, body %q); want the redirect_uri, unfollowed", p.URL, len(p.Trail), p.Body)
