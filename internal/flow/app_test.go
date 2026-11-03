@@ -161,6 +161,22 @@ func TestAppLogin(t *testing.T) {
 					t.Error("I7, Hydra's challenge served")
 				}
 			}},
+		{name: "EMU-8 I7 Q34, Hydra's id of L never served", ev: callBy(AppGetLogin, 1000, "sql", ""),
+			stored: withLoginID(atStep(t, 1, false, false), hydraL),
+			status: http.StatusOK,
+			check: func(t *testing.T, p played) {
+				if got := rawJSON(p.Response.Body); strings.Contains(got, hydraL) || strings.Contains(got, `"hid"`) {
+					t.Errorf("I7, L served: %s", got)
+				}
+			}},
+		{name: "EMU-18 I7 Q34, nor on the consent request", ev: callBy(AppGetConsent, 1000, "sql", ""),
+			stored: withLoginID(atStep(t, 1, true, false), hydraL),
+			status: http.StatusOK,
+			check: func(t *testing.T, p played) {
+				if got := rawJSON(p.Response.Body); strings.Contains(got, hydraL) || strings.Contains(got, `"hid"`) {
+					t.Errorf("I7, L served: %s", got)
+				}
+			}},
 		{name: "EMU-8 I2, second step", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),
 			status: http.StatusOK, body: `"x_dispatcher_claims":{"email":"alice@example.org"}...`},
 		{name: "EMU-28 Q21, an app gone from the snapshot is no longer identified", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: atStep(t, 2, false, false),

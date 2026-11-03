@@ -58,6 +58,9 @@ type fakeHydra struct {
 	client *ory.OAuth2Client
 	// noLogoutRedirect accepts the logout without a redirect_to.
 	noLogoutRedirect bool
+	// login is the last login challenge read, which the consent request
+	// names, as Hydra 2.1 does (Q34).
+	login string
 }
 
 func (h *fakeHydra) called(op string) error {
@@ -71,6 +74,9 @@ func (h *fakeHydra) LoginRequest(_ context.Context, challenge string) (*ory.OAut
 	if err := h.called("get_login"); err != nil {
 		return nil, err
 	}
+	h.mu.Lock()
+	h.login = challenge
+	h.mu.Unlock()
 	r := &ory.OAuth2LoginRequest{
 		Challenge:      challenge,
 		Client:         ory.OAuth2Client{ClientId: ory.PtrString("c1"), ClientName: ory.PtrString("Test Client"), ClientUri: ory.PtrString("http://oidc.client.test/")},
@@ -105,8 +111,12 @@ func (h *fakeHydra) ConsentRequest(_ context.Context, challenge string) (*ory.OA
 	if h.client != nil {
 		client = h.client
 	}
+	h.mu.Lock()
+	login := h.login
+	h.mu.Unlock()
 	return &ory.OAuth2ConsentRequest{
 		Challenge:      challenge,
+		LoginChallenge: ory.PtrString(login),
 		Subject:        ory.PtrString(h.accepted.Subject),
 		LoginSessionId: ory.PtrString(sessionID),
 		Context:        json.RawMessage(ctx),

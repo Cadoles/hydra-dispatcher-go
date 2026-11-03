@@ -18,6 +18,7 @@ type hydraSays map[Op]said
 type said struct {
 	login       *ory.OAuth2LoginRequest
 	requestedAt time.Time
+	loginID     string
 	consent     *ory.OAuth2ConsentRequest
 	redirectTo  string
 	err         error
@@ -97,7 +98,7 @@ func play(t *testing.T, env Env, ev Event, stored, reread *Flow, says hydraSays)
 func answer(a *Answers, c Call, s said) {
 	switch c.Op {
 	case GetLogin:
-		a.Login = &LoginRead{Request: s.login, RequestedAt: s.requestedAt, Err: s.err}
+		a.Login = &LoginRead{Request: s.login, RequestedAt: s.requestedAt, LoginID: s.loginID, Err: s.err}
 	case GetConsent:
 		a.Consent = &ConsentRead{Request: s.consent, Err: s.err}
 	case AcceptLogin:

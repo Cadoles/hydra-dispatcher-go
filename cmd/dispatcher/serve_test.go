@@ -519,3 +519,26 @@ func TestServeConfigWarnings(t *testing.T) {
 		t.Errorf("err = %v, logs = %q", err, logs.String())
 	}
 }
+
+// DEC-1: the challenges are decrypted for Hydra 2.2 and 2.3 when Hydra's
+// secrets are given, read on the admin API otherwise.
+func TestHydraSource(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		secrets config.List
+		mode    string
+	}{
+		{"2.1", config.List{"youReallyNeedToChangeThis"}, "fallback"},
+		{"2.2", nil, "fallback"},
+		{"2.2", config.List{"youReallyNeedToChangeThis"}, "decrypt"},
+		{"2.3", config.List{"a-newer-system-secret-01234", "youReallyNeedToChangeThis"}, "decrypt"},
+	} {
+		source, err := hydraSource(config.Hydra{Version: tc.version, SystemSecrets: tc.secrets, LoginConsentTTL: config.Duration(30 * time.Minute)}, nil)
+		if err != nil || hydraMode(source) != tc.mode {
+			t.Errorf("%s with %d secrets: %s, %v; want %s", tc.version, len(tc.secrets), hydraMode(source), err, tc.mode)
+		}
+	}
+	if _, err := hydraSource(config.Hydra{Version: "2.2", SystemSecrets: config.List{""}}, nil); err == nil {
+		t.Error("an empty secret accepted")
+	}
+}

@@ -300,19 +300,30 @@ type Answers struct {
 	ConsentHook   *ConsentHookAnswer
 }
 
-// LoginRead is the answer to GetLogin, from the source of the login request
-// (P3d): RequestedAt is Hydra's requested_at when the challenge is
-// decrypted, the time of the first read in fallback.
+// LoginRead is the answer to GetLogin, from the Source (P3d, P7):
+// RequestedAt is Hydra's requested_at when the challenge is decrypted, the
+// time of the first read in fallback.
 type LoginRead struct {
 	Request     *ory.OAuth2LoginRequest
 	RequestedAt time.Time
-	Err         error
+	// LoginID is Hydra's id of L, which its consent request names as
+	// login_challenge (Q34): L itself on Hydra 2.1, the decrypted flow's id
+	// on 2.2 and 2.3, "" in fallback on 2.2, where nothing gives it.
+	LoginID string
+	Err     error
+	// Decrypted tells that the request was read from the challenge, without
+	// calling Hydra.
+	Decrypted bool
+	// Reports are what the read logs (DEC-4 to DEC-6, Q32).
+	Reports []Report
 }
 
-// ConsentRead is the answer to GetConsent.
+// ConsentRead is the answer to GetConsent, as LoginRead.
 type ConsentRead struct {
-	Request *ory.OAuth2ConsentRequest
-	Err     error
+	Request   *ory.OAuth2ConsentRequest
+	Err       error
+	Decrypted bool
+	Reports   []Report
 }
 
 // Done is the answer to an accept or a reject: Hydra's redirect_to.
@@ -380,6 +391,8 @@ func classify(err error) failure {
 	switch {
 	case err == nil:
 		return none
+	case errors.Is(err, ErrChallengeExpired):
+		return gone // DEC-4, as Hydra 2.2's 401
 	case !errors.As(err, &re):
 		return unavailable
 	case re.Status == http.StatusNotFound:

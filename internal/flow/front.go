@@ -132,6 +132,7 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	if err != nil {
 		return s.fail(E1004)
 	}
+	snap.LoginID = read.LoginID // Q34
 	since := read.RequestedAt
 	if since.IsZero() {
 		since = r.Env.Now
@@ -151,6 +152,12 @@ func (r *run) create(ref string, ev Entry) Outcome {
 		CSRF:           csrfValue(ev.Cookie, r.Env.Draw),
 		ExpiresAt:      exp.UnixMilli(),
 		HydraExpiresAt: end.UnixMilli(),
+	}
+	if f.ExpiresAt <= r.now() && r.now() < f.HydraExpiresAt {
+		// ENT-22 (Q33): read in the last minute of L at Hydra, with Hydra's
+		// requested_at (P7), the flow would be born expired; past hx, the
+		// write is refused instead (ECR-8).
+		return r.expire(f)
 	}
 	out := r.choice(ref, f)
 	out.Response.SetCSRF = f.CSRF
@@ -352,8 +359,9 @@ func (r *run) consent(ev Consent) Outcome {
 		// accepted at Hydra all the same, by someone else.
 		return r.notOurs(f, ev.Challenge)
 	}
-	if f.HydraSessionID != req.GetLoginSessionId() || f.Sent == nil || f.Sent.Subject != req.GetSubject() {
-		return r.notOurs(f, ev.Challenge) // CST-9, CST-10
+	if f.HydraSessionID != req.GetLoginSessionId() || f.Sent == nil || f.Sent.Subject != req.GetSubject() ||
+		f.Hydra.LoginID != "" && f.Hydra.LoginID != req.GetLoginChallenge() {
+		return r.notOurs(f, ev.Challenge) // CST-9, CST-10, CST-23 (Q34)
 	}
 	if r.now() > f.ExpiresAt {
 		// CST-22 (Q31): L is accepted, its reject would be refused by

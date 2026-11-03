@@ -51,6 +51,8 @@ const (
 	maxCause = 200
 	// readyTTL is how long Ready reuses Hydra's answer.
 	readyTTL = time.Second
+	// userAgent is the dispatcher's, on every call.
+	userAgent = "hydra-dispatcher-go"
 )
 
 // tls12Suites are the TLS 1.2 suites the ANSSI TLS guide recommends: ECDHE
@@ -120,6 +122,9 @@ func (e *RequestError) RedirectTo() string {
 type Client struct {
 	oauth2   ory.OAuth2API
 	metadata ory.MetadataAPI
+	// http and admin make the reads (see read), on the SDK's HTTP client.
+	http     *http.Client
+	admin    string
 	inFlight chan struct{}
 
 	// readySlot lets one readiness probe call Hydra at a time; readyAt and
@@ -158,11 +163,13 @@ func New(h config.Hydra, t config.TLS) (*Client, error) {
 			return http.ErrUseLastResponse
 		},
 	}
-	cfg.UserAgent = "hydra-dispatcher-go"
+	cfg.UserAgent = userAgent
 	api := ory.NewAPIClient(cfg)
 	return &Client{
 		oauth2:    api.OAuth2API,
 		metadata:  api.MetadataAPI,
+		http:      cfg.HTTPClient,
+		admin:     cfg.Servers[0].URL,
 		inFlight:  make(chan struct{}, h.MaxInFlight),
 		readySlot: make(chan struct{}, 1),
 	}, nil
@@ -247,30 +254,53 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 // InFlight returns the number of calls running, for hydra_in_flight.
 func (c *Client) InFlight() int { return len(c.inFlight) }
 
-// classify turns an SDK error into an UnavailableError or a RequestError. A
-// 4xx is a RequestError only with Hydra's error document: a 404 page from
-// elsewhere (Hydra's public port, a proxy), a gateway's refusal or a body cut
-// short is a broken setup or network, not an unknown challenge.
+// classify turns the error of a call into an UnavailableError or a
+// RequestError. A 4xx is a RequestError only with Hydra's error document: a
+// 404 page from elsewhere (Hydra's public port, a proxy), a gateway's refusal
+// or a body cut short is a broken setup or network, not an unknown challenge.
 func classify(op string, resp *http.Response, err error) error {
 	unavailable := &UnavailableError{Op: op, err: withoutURL(err)}
 	if resp == nil { // no answer: refused, timed out, cancelled
 		return unavailable
 	}
 	unavailable.Status = resp.StatusCode
-	var apiErr *ory.GenericOpenAPIError
+	body, read := errorBody(err)
 	switch {
 	case resp.StatusCode < 300: // a 2xx not decoded, incomplete or cut short
-	case !errors.As(err, &apiErr): // the SDK reads any other body whole first
+	case !read: // the body of any other answer is read whole first
 		unavailable.detail = " while reading the body"
 	case resp.StatusCode >= 500:
-		unavailable.detail = serverCause(resp, apiErr.Body())
+		unavailable.detail = serverCause(resp, body)
 	case resp.StatusCode < 400: // a redirect
-	case !hydraError(resp.StatusCode, apiErr.Body()):
+	case !hydraError(resp.StatusCode, body):
 		unavailable.detail = " without Hydra's error document"
 	default:
-		return &RequestError{Op: op, Status: resp.StatusCode, Body: apiErr.Body()}
+		return &RequestError{Op: op, Status: resp.StatusCode, Body: body}
 	}
 	return unavailable
+}
+
+// statusError is an answer other than a 2xx to a read, its body read whole,
+// as the SDK's GenericOpenAPIError carries it for the other calls.
+type statusError struct {
+	status string
+	body   []byte
+}
+
+func (e *statusError) Error() string { return e.status }
+
+// errorBody returns the body of an answer other than a 2xx, and whether it
+// was read whole.
+func errorBody(err error) ([]byte, bool) {
+	var apiErr *ory.GenericOpenAPIError
+	var statusErr *statusError
+	switch {
+	case errors.As(err, &apiErr):
+		return apiErr.Body(), true
+	case errors.As(err, &statusErr):
+		return statusErr.body, true
+	}
+	return nil, false
 }
 
 // serverCause returns " (error: error_description)" from the error document
@@ -359,22 +389,33 @@ func stringMember(doc map[string]json.RawMessage, name string) string {
 	return s
 }
 
-// answer decodes the body of a 2xx with decode, in place of the SDK's model:
-// the SDK refuses a client whose jwks has a key without alg, kid or use (see
-// DecodeClient), and decodes an XML Content-Type as XML. The SDK leaves the
-// whole body in resp.Body, so its decoding error on a 2xx is moot; a body it
-// could not read stays an error.
-func answer[T any](resp *http.Response, err error, decode func([]byte) (*T, error)) (*T, *http.Response, error) {
-	var apiErr *ory.GenericOpenAPIError
-	if resp == nil || resp.StatusCode >= 300 || err != nil && !errors.As(err, &apiErr) {
-		return nil, resp, err
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp, err
-	}
-	v, err := decode(body)
-	return v, resp, err
+// read is a GET of the admin API whose 2xx decode decodes, once: the SDK
+// would decode it into its own model first, which refuses a client whose jwks
+// has a key without alg, kid or use (see DecodeClient) and reads an XML
+// Content-Type as XML. It goes through the SDK's HTTP client, transport and
+// redirect policy included, as the SDK's own calls.
+func read[T any](c *Client, ctx context.Context, op, path, param, challenge string, decode func([]byte) (*T, error)) (*T, error) {
+	return call(c, op, func() (*T, *http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.admin+path+"?"+url.Values{param: {challenge}}.Encode(), nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", userAgent)
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, resp, err
+		}
+		body, err := io.ReadAll(resp.Body)
+		switch {
+		case err != nil:
+			return nil, resp, err
+		case resp.StatusCode >= 300:
+			return nil, resp, &statusError{status: resp.Status, body: body}
+		}
+		v, err := decode(body)
+		return v, resp, err
+	})
 }
 
 func redirectTo(r *ory.OAuth2RedirectTo, resp *http.Response, err error) (string, *http.Response, error) {
@@ -387,11 +428,9 @@ func redirectTo(r *ory.OAuth2RedirectTo, resp *http.Response, err error) (string
 	return r.RedirectTo, resp, nil
 }
 
+// LoginRequest reads the login request of challenge.
 func (c *Client) LoginRequest(ctx context.Context, challenge string) (*ory.OAuth2LoginRequest, error) {
-	return call(c, "get_login_request", func() (*ory.OAuth2LoginRequest, *http.Response, error) {
-		_, resp, err := c.oauth2.GetOAuth2LoginRequest(ctx).LoginChallenge(challenge).Execute()
-		return answer(resp, err, decodeLoginRequest)
-	})
+	return read(c, ctx, "get_login_request", "/admin/oauth2/auth/requests/login", "login_challenge", challenge, decodeLoginRequest)
 }
 
 // AcceptLogin accepts the login request and returns Hydra's redirect_to.
@@ -407,11 +446,9 @@ func (c *Client) RejectLogin(ctx context.Context, challenge string, body ory.Rej
 	})
 }
 
+// ConsentRequest reads the consent request of challenge.
 func (c *Client) ConsentRequest(ctx context.Context, challenge string) (*ory.OAuth2ConsentRequest, error) {
-	return call(c, "get_consent_request", func() (*ory.OAuth2ConsentRequest, *http.Response, error) {
-		_, resp, err := c.oauth2.GetOAuth2ConsentRequest(ctx).ConsentChallenge(challenge).Execute()
-		return answer(resp, err, decodeConsentRequest)
-	})
+	return read(c, ctx, "get_consent_request", "/admin/oauth2/auth/requests/consent", "consent_challenge", challenge, decodeConsentRequest)
 }
 
 func (c *Client) AcceptConsent(ctx context.Context, challenge string, body ory.AcceptOAuth2ConsentRequest) (string, error) {
@@ -426,11 +463,9 @@ func (c *Client) RejectConsent(ctx context.Context, challenge string, body ory.R
 	})
 }
 
+// LogoutRequest reads the logout request of challenge.
 func (c *Client) LogoutRequest(ctx context.Context, challenge string) (*ory.OAuth2LogoutRequest, error) {
-	return call(c, "get_logout_request", func() (*ory.OAuth2LogoutRequest, *http.Response, error) {
-		_, resp, err := c.oauth2.GetOAuth2LogoutRequest(ctx).LogoutChallenge(challenge).Execute()
-		return answer(resp, err, decodeLogoutRequest)
-	})
+	return read(c, ctx, "get_logout_request", "/admin/oauth2/auth/requests/logout", "logout_challenge", challenge, decodeLogoutRequest)
 }
 
 func (c *Client) AcceptLogout(ctx context.Context, challenge string) (string, error) {

@@ -99,6 +99,11 @@ type LoginSnapshot struct {
 	// requires Hydra's subject at the final accept.
 	Skip    bool   `json:"skip,omitempty"`
 	Subject string `json:"sub,omitempty"`
+	// LoginID is Hydra's id of L, which its consent request names as
+	// login_challenge: /consent requires it there (CST-23, Q34). "" when
+	// nothing gave it (fallback on Hydra 2.2), and in the flows written
+	// before P7. Never served to an app: on Hydra 2.1, it is L (I7).
+	LoginID string `json:"hid,omitempty"`
 }
 
 // SentLogin is the final login accept sent to Hydra, after the webhook:

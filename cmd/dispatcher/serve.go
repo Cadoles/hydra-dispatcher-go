@@ -21,6 +21,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -231,10 +232,15 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	for _, k := range cfg.Secrets.ChallengeKeysPrevious {
 		keys = append(keys, k)
 	}
+	source, err := hydraSource(cfg.Hydra, hydraClient)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("hydra.mode", "mode", hydraMode(source), "hydra_version", cfg.Hydra.Version)
 	engine := &flow.Orchestrator{
 		Store:           s.states,
 		Config:          s.config,
-		Source:          flow.Fallback{Hydra: hydraClient},
+		Source:          source,
 		Hydra:           hydraClient,
 		Webhooks:        flow.StubWebhooks{},
 		BaseURL:         cfg.Server.BaseURL,
@@ -352,4 +358,27 @@ func logFormat(groups []string, a slog.Attr) slog.Attr {
 		}
 	}
 	return a
+}
+
+// hydraSource is the source of Hydra's requests (Versions Hydra, DEC-1): the
+// decryption of the challenges for Hydra 2.2 and 2.3 when Hydra's secrets
+// are given, falling back to the admin API; the admin API alone otherwise.
+func hydraSource(h config.Hydra, admin flow.AdminReader) (flow.Source, error) {
+	fallback := flow.Fallback{Hydra: admin}
+	if h.Version == "2.1" || len(h.SystemSecrets) == 0 {
+		return fallback, nil
+	}
+	codec, err := flowcodec.New(flowcodec.Version(h.Version), h.SystemSecrets)
+	if err != nil {
+		return nil, fmt.Errorf("hydra.system_secrets: %w", err)
+	}
+	return flow.Decrypt{Codec: codec, Fallback: fallback, TTL: h.LoginConsentTTL.Std()}, nil
+}
+
+// hydraMode names the mode of source, for the startup log and hydra_mode.
+func hydraMode(source flow.Source) string {
+	if _, ok := source.(flow.Decrypt); ok {
+		return "decrypt"
+	}
+	return "fallback"
 }

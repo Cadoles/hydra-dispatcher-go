@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -77,7 +79,9 @@ func (h *fakeHydra) ConsentRequest(_ context.Context, challenge string) (*ory.OA
 	}
 	ctx, _ := json.Marshal(h.accepted.Context)
 	return &ory.OAuth2ConsentRequest{
-		Challenge:      challenge,
+		Challenge: challenge,
+		// Hydra 2.1 names L itself (Q34).
+		LoginChallenge: ory.PtrString(hydraL),
 		Subject:        ory.PtrString(h.accepted.Subject),
 		LoginSessionId: h.login.SessionId,
 		Context:        json.RawMessage(ctx),
@@ -243,24 +247,64 @@ func (w *world) app(t *testing.T, app string, login Result, subject, claims stri
 	}
 }
 
-// B3: the calls to Hydra of an authentication, in fallback, the engine's
-// and the orchestrator's (Stratégie de tests).
+// fakeCodec decrypts the fake Hydra's challenges, whatever they are: the
+// flow of its login request, completed by the login accept it kept, as Hydra
+// seals them (P7).
+type fakeCodec struct{ h *fakeHydra }
+
+// hydraFlowID is the id of the fake Hydra's flow, which its consent request
+// names as login_challenge once decrypted (Q34).
+const hydraFlowID = "91d4f7afaf83455f8e2b8992cba303ef"
+
+func (c fakeCodec) LoginChallenge(string) (*flowcodec.Flow, error)   { return c.flow(false) }
+func (c fakeCodec) ConsentChallenge(string) (*flowcodec.Flow, error) { return c.flow(true) }
+
+func (c fakeCodec) flow(consent bool) (*flowcodec.Flow, error) {
+	r := c.h.login
+	client, _ := json.Marshal(r.Client)
+	oidc, _ := json.Marshal(r.OidcContext)
+	f := &flowcodec.Flow{
+		ID: hydraFlowID, RequestedAt: testNow.Add(-time.Minute), ClientID: r.Client.GetClientId(), Client: client,
+		RequestURL: r.RequestUrl, OpenIDConnectContext: oidc, RequestedScope: r.RequestedScope,
+		SessionID: r.GetSessionId(), Subject: r.Subject, LoginSkip: r.Skip,
+	}
+	if consent {
+		ctx, _ := json.Marshal(c.h.accepted.Context)
+		f.ConsentChallengeID, f.Subject, f.Context = "consent-id", c.h.accepted.Subject, ctx
+		f.ACR, f.AMR, f.ConsentSkip = c.h.accepted.GetAcr(), c.h.accepted.Amr, c.h.consentSkip
+	}
+	return f, nil
+}
+
+// B3: the calls to Hydra of an authentication, the engine's and the
+// orchestrator's (Stratégie de tests): in fallback, and decrypted (P7), where
+// only the accepts are left.
 func TestHydraCalls(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		flow   string
-		screen bool
-		calls  []string
+		name    string
+		flow    string
+		screen  bool
+		decrypt bool
+		calls   []string
 	}{
-		{"B3, two steps, choice page, consent skipped by Hydra", "hydra-sql-2fa", false,
+		{"B3, two steps, choice page, consent skipped by Hydra", "hydra-sql-2fa", false, false,
 			[]string{"get_login", "get_login", "accept_login", "get_consent", "accept_consent"}},
-		{"B3, two steps, consent screen shown", "hydra-sql-2fa", true,
+		{"B3, two steps, consent screen shown", "hydra-sql-2fa", true, false,
 			[]string{"get_login", "get_login", "accept_login", "get_consent", "get_consent", "accept_consent"}},
-		{"B3, one step", "hydra-sql", false,
+		{"B3, one step", "hydra-sql", false, false,
 			[]string{"get_login", "accept_login", "get_consent", "accept_consent"}},
+		{"B3 P7, two steps, choice page, consent skipped, decrypted", "hydra-sql-2fa", false, true,
+			[]string{"accept_login", "accept_consent"}},
+		{"B3 P7, two steps, consent screen shown, decrypted", "hydra-sql-2fa", true, true,
+			[]string{"accept_login", "accept_consent"}},
+		{"B3 P7, one step, decrypted", "hydra-sql", false, true,
+			[]string{"accept_login", "accept_consent"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
+			if tc.decrypt {
+				w.o.Source = Decrypt{Codec: fakeCodec{w.hydra}, Fallback: Fallback{Hydra: w.hydra}, TTL: w.o.LoginConsentTTL, Now: func() time.Time { return w.now }}
+			}
 			w.hydra.consentSkip = !tc.screen
 			if r := w.handle(Entry{LoginChallenge: hydraL}); r.Response.Kind != ChoicePage {
 				t.Fatalf("GET /: %+v", r.Response)
@@ -297,10 +341,53 @@ func TestHydraCalls(t *testing.T) {
 			if f := w.stored(); f == nil || !f.Done || f.ConsentRedirect != callbackURL {
 				t.Errorf("T1, flow after the consent %+v", f)
 			}
+			if tc.decrypt && strings.Contains(w.logs.String(), "hydra.decrypt_fallback") {
+				t.Errorf("a fallback: %s", w.logs.String())
+			}
 			// After the end, every return gives E1002 without a call (T1, I9).
 			calls := len(w.hydra.calls)
 			if r := w.handle(Loop{Ref: lref, Cookie: w.cookie}); r.Response.Code != E1002 || len(w.hydra.calls) != calls {
 				t.Errorf("RA6, a return after the end: %+v", r.Response)
+			}
+		})
+	}
+}
+
+// failingCodec opens no challenge: err for every one.
+type failingCodec struct{ err error }
+
+func (c failingCodec) LoginChallenge(string) (*flowcodec.Flow, error)   { return nil, c.err }
+func (c failingCodec) ConsentChallenge(string) (*flowcodec.Flow, error) { return nil, c.err }
+
+// A fallback the decryption could not avoid is logged as a warning, which
+// names the step that failed (DEC-6); a forged challenge is not (DEC-5, Q32).
+func TestDecryptFallbackLogged(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		hydra   error
+		warning string
+	}{
+		{"DEC-6, another format", fmt.Errorf("%w: no client", flowcodec.ErrFormat), nil, `"msg":"hydra.decrypt_fallback"`},
+		{"DEC-5, a secret missing", flowcodec.ErrInvalid, nil, `"msg":"hydra.decrypt_fallback"`},
+		{"DEC-5, forged", flowcodec.ErrInvalid, err404, `"msg":"challenge.invalid","surface":"front","detail":"forged"`},
+		{"DEC-2, Hydra 2.1", flowcodec.ErrNotEncrypted, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.o.Source = Decrypt{Codec: failingCodec{tc.err}, Fallback: Fallback{Hydra: w.hydra}, TTL: w.o.LoginConsentTTL}
+			if tc.hydra != nil {
+				w.hydra.errs["get_login"] = tc.hydra
+			}
+			w.handle(Entry{LoginChallenge: hydraL})
+			logs := w.logs.String()
+			if !slices.Equal(w.hydra.calls, []string{"get_login"}) {
+				t.Errorf("calls %v: the fallback reads the admin API once", w.hydra.calls)
+			}
+			switch {
+			case tc.warning == "" && (strings.Contains(logs, "decrypt_fallback") || strings.Contains(logs, "challenge.invalid")),
+				tc.warning != "" && !strings.Contains(logs, `"level":"WARN","msg"`+strings.TrimPrefix(tc.warning, `"msg"`)):
+				t.Errorf("logs %s; want %s", logs, tc.warning)
 			}
 		})
 	}

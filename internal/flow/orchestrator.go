@@ -17,11 +17,10 @@ import (
 )
 
 // Hydra is the admin API the orchestrator calls, as internal/hydra's client
-// does; the login request is read through the LoginSource.
+// does; the login and consent requests are read through the Source.
 type Hydra interface {
 	AcceptLogin(ctx context.Context, challenge string, body ory.AcceptOAuth2LoginRequest) (string, error)
 	RejectLogin(ctx context.Context, challenge string, body ory.RejectOAuth2Request) (string, error)
-	ConsentRequest(ctx context.Context, challenge string) (*ory.OAuth2ConsentRequest, error)
 	AcceptConsent(ctx context.Context, challenge string, body ory.AcceptOAuth2ConsentRequest) (string, error)
 	RejectConsent(ctx context.Context, challenge string, body ory.RejectOAuth2Request) (string, error)
 }
@@ -50,7 +49,7 @@ type Snapshots interface {
 type Orchestrator struct {
 	Store    state.StateStore
 	Config   Snapshots
-	Source   LoginSource
+	Source   Source
 	Hydra    Hydra
 	Webhooks Webhooks
 	// BaseURL, LoginConsentTTL and Keys are server.base_url,
@@ -125,7 +124,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			}
 			continue
 		case out.Call != nil:
-			o.call(ctx, *out.Call, &in.Answers)
+			reports = append(reports, o.call(ctx, *out.Call, &in.Answers)...)
 			continue
 		case out.Write == nil:
 			return o.result(ctx, in, out, reports)
@@ -220,7 +219,7 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			switch {
 			case r.Sentry:
 				level = slog.LevelError
-			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Audit:
+			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Audit:
 				level = slog.LevelWarn
 			}
 			o.Log.Log(ctx, level, r.Event, "surface", surface, "detail", r.Detail, "audit", r.Audit)
@@ -229,20 +228,23 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}
 }
 
-// call makes a call a transition asked for, its answer kept for the request.
-func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) {
+// call makes a call a transition asked for, its answer kept for the request,
+// and returns what a read reports (DEC-4 to DEC-6).
+func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 	done := func(to string, err error) *Done { return &Done{Call: c, RedirectTo: to, Err: err} }
 	switch c.Op {
 	case GetLogin:
-		r, at, err := o.Source.LoginRequest(ctx, c.Challenge)
-		a.Login = &LoginRead{Request: r, RequestedAt: at, Err: err}
+		read := o.Source.LoginRequest(ctx, c.Challenge)
+		a.Login = &read
+		return read.Reports
 	case AcceptLogin:
 		a.Accept = done(o.Hydra.AcceptLogin(ctx, c.Challenge, c.AcceptLogin))
 	case RejectLogin:
 		a.Reject = done(o.Hydra.RejectLogin(ctx, c.Challenge, c.Reject))
 	case GetConsent:
-		r, err := o.Hydra.ConsentRequest(ctx, c.Challenge)
-		a.Consent = &ConsentRead{Request: r, Err: err}
+		read := o.Source.ConsentRequest(ctx, c.Challenge)
+		a.Consent = &read
+		return read.Reports
 	case AcceptConsent:
 		a.ConsentAccept = done(o.Hydra.AcceptConsent(ctx, c.Challenge, c.AcceptConsent))
 	case RejectConsent:
@@ -254,6 +256,7 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) {
 		h := o.Webhooks.Consent(ctx, c)
 		a.ConsentHook = &h
 	}
+	return nil
 }
 
 func (o *Orchestrator) now() time.Time {

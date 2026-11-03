@@ -233,6 +233,12 @@ func rejectedAgo(t *testing.T, ago time.Duration) *Flow {
 	return f
 }
 
+// withLoginID sets Hydra's id of L in f's snapshot (Q34).
+func withLoginID(f *Flow, id string) *Flow {
+	f.Hydra.LoginID = id
+	return f
+}
+
 // atExp sets f's exp to now: its step challenges are still valid (I1, exp
 // inclusive), nothing expires yet.
 func atExp(f *Flow) *Flow {
@@ -327,6 +333,33 @@ func TestEntry(t *testing.T) {
 					t.Errorf("exp %d hx %d", f.ExpiresAt, f.HydraExpiresAt)
 				}
 			}},
+		{name: "ENT-1 Q34, Hydra's id of L kept", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), loginID: "91d4f7afaf83455f8e2b8992cba303ef"}},
+			kind: ChoicePage, calls: []Op{GetLogin},
+			write: func(t *testing.T, f *Flow) {
+				if f.Hydra.LoginID != "91d4f7afaf83455f8e2b8992cba303ef" {
+					t.Errorf("hid %q", f.Hydra.LoginID)
+				}
+			}},
+		{name: "ENT-22 Q33, read in the last minute of L: rejected at once", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(-29*time.Minute - 30*time.Second)}, RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished, check: rejected(RejectLogin, "login_required")},
+		{name: "ENT-22, exp at now: born expired", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(-29 * time.Minute)}, RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished},
+		{name: "ENT-22, Hydra 401 on the reject", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: withClient(t, `{"client_uri":"`+clientURI+`"}`), requestedAt: testNow.Add(-29*time.Minute - 30*time.Second)}, RejectLogin: {err: err401}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin, RejectLogin}, write: finished},
+		{name: "ENT-1, exp 1 ms after now: a flow", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(-29*time.Minute + time.Millisecond)}},
+			kind: ChoicePage, calls: []Op{GetLogin},
+			write: func(t *testing.T, f *Flow) {
+				if f.ExpiresAt != testNow.UnixMilli()+1 {
+					t.Errorf("exp %d", f.ExpiresAt)
+				}
+			}},
+		{name: "ENT-11 DEC-4, a challenge read past its lifetime", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
 		{name: "ECR-8, L already past its end at Hydra: no write", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
 			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(-31 * time.Minute)}},
 			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
@@ -923,6 +956,19 @@ func TestConsent(t *testing.T) {
 			stored: acceptedFlow(t), says: hydraSays{GetConsent: read(nil)}, kind: ErrorPage, code: E1008, calls: []Op{GetConsent}},
 		{name: "CST-11 I1, at exp: not yet CST-22", ev: Consent{Challenge: hydraC}, stored: atExp(acceptedFlow(t)), says: hydraSays{GetConsent: read(nil)},
 			kind: ErrorPage, code: E1008, calls: []Op{GetConsent}},
+		{name: "CST-23 Q34, the consent request of another login", ev: get, stored: withLoginID(acceptedFlow(t), hydraL),
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) {
+				r.LoginChallenge = ory.PtrString("0123456789abcdef0123456789abcdef")
+			}), RejectConsent: {redirectTo: hydraDone}},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+		{name: "CST-23, before CST-22 and the cookie", ev: Consent{Challenge: hydraC}, stored: withLoginID(expired(acceptedFlow(t)), hydraL),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+		{name: "CST-23, the login of the flow: the screen", ev: get, stored: withLoginID(acceptedFlow(t), hydraL),
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.LoginChallenge = ory.PtrString(hydraL) })},
+			kind: ConsentPage, calls: []Op{GetConsent}, write: func(t *testing.T, f *Flow) {}},
+		{name: "CST-4 DEC-4, a consent challenge read past its lifetime", ev: get, stored: acceptedFlow(t),
+			says: hydraSays{GetConsent: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
 		{name: "CST-14 I1, accepted at exp", ev: post(true), stored: atExp(acceptedFlow(t)), says: hydraSays{GetConsent: read(nil), AcceptConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, AcceptConsent}, write: finishedWithCR},
 		{name: "CST-12, Hydra's skip", ev: get, stored: acceptedFlow(t),
