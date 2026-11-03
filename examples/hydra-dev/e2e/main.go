@@ -675,8 +675,8 @@ func (d *driver) backToSQL2FA() error {
 
 // expiredOnConsent stays on the consent screen past the flow's lifetime
 // (challenge_ttl, lowered in the seed beforehand), then accepts. The flow is
-// accepted on Hydra already: the e2e reports how it ends, which must not be a
-// granted authorization (EXP-2).
+// accepted on Hydra already: the dispatcher rejects the consent, and the
+// client gets login_required, on Hydra 2.1 as on 2.2 (CST-22, Q31).
 func (d *driver) expiredOnConsent() error {
 	if d.wait <= 0 {
 		return errors.New("needs -wait, longer than the challenge_ttl of the seed")
@@ -685,22 +685,18 @@ func (d *driver) expiredOnConsent() error {
 	if err != nil {
 		return err
 	}
-	switch {
-	case !o.saw("consent"):
+	if !o.saw("consent") {
 		return fmt.Errorf("no consent screen with prompt=consent: %v", o.seen)
-	case o.code != "":
-		d.note("ended on the page %s", o.code)
-		return nil
-	case d.kind(o.end) == "callback":
-		refused, err := d.client.callbackError(o.end.URL)
-		if err != nil {
-			return err
-		}
-		if refused == "" {
-			return errors.New("the expired flow was granted")
-		}
-		d.note("back to the client with %s", refused)
-		return nil
 	}
-	return errUnexpected(o.end)
+	if d.kind(o.end) != "callback" {
+		return fmt.Errorf("%w: pages %v, ended on %s %s", errNoCallback, o.seen, o.code, endURL(o))
+	}
+	refused, err := d.client.callbackError(o.end.URL)
+	if err != nil {
+		return err
+	}
+	if refused != "login_required" {
+		return fmt.Errorf("callback error %q, want login_required", refused)
+	}
+	return nil
 }

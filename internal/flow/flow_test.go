@@ -45,7 +45,8 @@ func TestStateAt(t *testing.T) {
 		{"accepted", base(func(f *Flow) { f.HydraRedirect = "http://hydra/consent" }), Accepted},
 		{"finished", base(func(f *Flow) { f.Done = true; f.ExpiresAt = now - 1 }), Finished},
 		{"expired, exp passed (EXP-2)", base(func(f *Flow) { f.ExpiresAt = now - 1 }), Expired},
-		{"expired, accepted", base(func(f *Flow) { f.ExpiresAt, f.HydraRedirect = now-1, "http://hydra/consent" }), Expired},
+		{"accepted past exp (Q31)", base(func(f *Flow) { f.ExpiresAt, f.HydraRedirect = now-1, "http://hydra/consent" }), Accepted},
+		{"finished past exp and accepted", base(func(f *Flow) { f.ExpiresAt, f.HydraRedirect, f.Done = now-1, "http://hydra/consent", true }), Finished},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.flow.StateAt(testNow); got != tc.want {

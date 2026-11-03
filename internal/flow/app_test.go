@@ -170,6 +170,7 @@ func TestAppLogin(t *testing.T) {
 		{name: "EMU-9, accepted step", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: atStep(t, 1, true, false), status: http.StatusGone, body: loopBody},
 		{name: "EMU-9, past step", ev: callBy(AppGetLogin, 1000, "sql", ""), stored: atStep(t, 2, false, false), status: http.StatusGone, body: loopBody},
 		{name: "EMU-9, accepted flow", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: acceptedFlow(t), status: http.StatusGone, body: loopBody},
+		{name: "EMU-9 Q31, accepted flow past exp: no reject", ev: callBy(AppGetLogin, 1000, "2fa", ""), stored: expired(acceptedFlow(t)), status: http.StatusGone, body: loopBody},
 		{name: "EMU-10", ev: callBy(AppAcceptLogin, 1000, "sql", loginBody), stored: atStep(t, 1, false, false),
 			status: http.StatusOK, body: loopBody,
 			write: func(t *testing.T, f *Flow) {
@@ -217,6 +218,8 @@ func TestAppLogin(t *testing.T) {
 			status: http.StatusOK, body: loopBody},
 		{name: "EMU-13 Q27, the step's own subject", ev: callBy(AppAcceptLogin, 1000, "2fa", `{"subject":"alice@example.org"}`),
 			stored: func() *Flow { f := atStep(t, 2, true, false); f.Steps[1].Subject = "alice@example.org"; return f }(),
+			status: http.StatusOK, body: loopBody},
+		{name: "EMU-13 Q31, accepted flow past exp: no reject", ev: callBy(AppAcceptLogin, 1000, "2fa", `{"subject":"bob"}`), stored: expired(acceptedFlow(t)),
 			status: http.StatusOK, body: loopBody},
 		{name: "EMU-13, accepted flow", ev: callBy(AppAcceptLogin, 1000, "2fa", `{"subject":"bob"}`), stored: acceptedFlow(t),
 			status: http.StatusOK, body: loopBody},

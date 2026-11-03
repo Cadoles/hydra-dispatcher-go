@@ -329,14 +329,22 @@ func (r *run) consent(ev Consent) Outcome {
 			return s.redirect(f.ConsentRedirect) // CST-16 (Q13)
 		}
 		return s.ended(f) // CST-7
-	case Expired:
-		return r.expire(f)
 	case Accepted:
 	default:
-		return r.notOurs(f, ev.Challenge) // CST-8: not accepted by the dispatcher
+		// CST-8: not accepted by the dispatcher, expired or not; L is
+		// accepted at Hydra all the same, by someone else.
+		return r.notOurs(f, ev.Challenge)
 	}
 	if f.HydraSessionID != req.GetLoginSessionId() || f.Sent == nil || f.Sent.Subject != req.GetSubject() {
 		return r.notOurs(f, ev.Challenge) // CST-9, CST-10
+	}
+	if r.now() > f.ExpiresAt {
+		// CST-22 (Q31): L is accepted, its reject would be refused by
+		// Hydra 2.1 (409); the consent is rejected instead, the client
+		// getting login_required from either version. Before the cookie,
+		// as on the other pages (ENT-8): its Max-Age is challenge_ttl, the
+		// browser has lost it by now.
+		return r.rejectConsent(f, ev.Challenge, ReasonExpired, rejection(ReasonExpired, "The authentication took too long."), s.redirect)
 	}
 	if !csrf {
 		return s.fail(E1008) // CST-11, after the checks of A3 (Q30)

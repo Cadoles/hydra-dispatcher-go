@@ -145,11 +145,14 @@ const (
 	StepLogin
 	StepConsent
 	StepDone
-	// Accepted: accepted on Hydra by the dispatcher (HydraRedirect set).
+	// Accepted: accepted on Hydra by the dispatcher (HydraRedirect set),
+	// past ExpiresAt too: only its consent is left, which /consent rejects
+	// once ExpiresAt is past (CST-22, Q31).
 	Accepted
 	// Finished: done, reduced, kept until HydraExpiresAt.
 	Finished
-	// Expired: past ExpiresAt, not done; the key lives until HydraExpiresAt.
+	// Expired: past ExpiresAt, neither done nor accepted on Hydra; the key
+	// lives until HydraExpiresAt.
 	Expired
 )
 
@@ -170,10 +173,10 @@ func (f *Flow) StateAt(now time.Time) State {
 		return Absent
 	case f.Done:
 		return Finished
-	case t > f.ExpiresAt:
-		return Expired
 	case f.HydraRedirect != "":
 		return Accepted
+	case t > f.ExpiresAt:
+		return Expired
 	case f.FlowID == "" || f.Current < 1 || f.Current > len(f.Steps):
 		return Choice
 	}

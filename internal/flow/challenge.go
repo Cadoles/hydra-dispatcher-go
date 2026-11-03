@@ -73,7 +73,9 @@ const (
 	ChallengeOtherApp
 	// ChallengeFinished: the flow is finished (EMU-5).
 	ChallengeFinished
-	// ChallengeExpired: the flow is past ExpiresAt (EMU-6).
+	// ChallengeExpired: the flow is past ExpiresAt, not accepted on Hydra
+	// (EMU-6). An accepted flow's challenges get the answers of an accepted
+	// flow: its expiry is its consent's (Q31).
 	ChallengeExpired
 	// ChallengeStale: one of the 16 former generations (EMU-7).
 	ChallengeStale
@@ -122,7 +124,7 @@ func (k Keys) Verify(f *Flow, challenge string, kind Kind, apps []string, caller
 		return Check{Verdict: ChallengeOtherApp, App: app}
 	case f.Done:
 		return Check{Verdict: ChallengeFinished, App: app}
-	case now.UnixMilli() > f.ExpiresAt:
+	case now.UnixMilli() > f.ExpiresAt && f.HydraRedirect == "":
 		return Check{Verdict: ChallengeExpired, App: app}
 	case gen < f.Gen:
 		return Check{Verdict: ChallengeStale, App: app}
