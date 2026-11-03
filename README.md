@@ -5,8 +5,12 @@ chains several real login apps into a flow (MFA, identity provider choice,
 protocol choice) by replaying Hydra's login/consent protocol towards each of
 them.
 
-Go rewrite of the Symfony `hydra-dispatcher`. Work in progress: phase 1, the
-binary serves `/health` and `/ready`, and keeps its configuration in Postgres.
+Go rewrite of the Symfony `hydra-dispatcher`. Work in progress, phase 1 (plan
+and journal in `hydra-dev/conception`): the binary serves the pages (choice of
+the flow, consent, errors, logout accepted at once until the confirmation of
+P9), the emulated admin API the login apps call (v2 paths and v1 aliases),
+`/health` and `/ready`; it keeps its configuration in Postgres and the flows in
+progress in memory.
 
 ## Commands
 
@@ -53,8 +57,14 @@ environment are used.
   or a comma-separated string; keys 32 bytes in hex or base64.
 - Unknown keys are errors. Required: `server.base_url`,
   `server.trusted_proxies` (the reverse proxies' addresses only, `[]` when
-  clients connect directly), `hydra.admin_url`, `store.dsn`,
-  `secrets.cookie_key`, `secrets.challenge_key`.
+  clients connect directly), `security.emulated_api_authorized_hosts` (the
+  networks the login apps call from, `[]` closes the emulated API),
+  `hydra.admin_url`, `store.dsn`, `secrets.cookie_key`,
+  `secrets.challenge_key`.
+- `server.base_url` is written as browsers send their `Origin`: scheme and
+  host in lowercase, no default port, no user. A path in it is a prefix the
+  reverse proxy removes before the dispatcher; the pages put it back before
+  their URLs, and `server.cookie_path` must cover it.
 
 ## Development
 
@@ -82,8 +92,12 @@ go vet -tags integration ./...
 go tool staticcheck -tags integration ./...
 ```
 
-The emulated API's golden files (`internal/hydra/testdata/emulated`) are
-rewritten with `go test ./internal/hydra -args -update`; review the diff.
+The golden files are rewritten with `-update`; review the diff:
+
+- the emulated API's (`internal/hydra/testdata/emulated`):
+  `go test ./internal/hydra -args -update`;
+- the pages of the embedded theme, in each locale
+  (`internal/front/testdata/pages`): `go test ./internal/front -args -update`.
 
 The full stack (Hydra, login apps, Postgres, Redis) runs from the sibling
 `hydra-dev` repository.
