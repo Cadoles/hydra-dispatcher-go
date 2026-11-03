@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,8 +60,12 @@ type Handler struct {
 	o        Options
 	pages    *pages
 	catalogs i18n.Catalogs
-	// origin is the scheme and host of BaseURL, for the forms' origin check.
+	// origin is the scheme and host of BaseURL, for the forms' origin check;
+	// internal/config has them written as browsers serialize an Origin.
 	origin string
+	// path is the path of BaseURL without its final slash: a proxy removes
+	// it before the dispatcher, the pages put it before their URLs.
+	path string
 	// secure cookies in HTTPS, prefixed __Host- when their path is /.
 	secure bool
 	prefix string
@@ -86,7 +91,7 @@ func New(o Options) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Handler{o: o, catalogs: catalogs, origin: u.Scheme + "://" + u.Host, secure: u.Scheme == "https"}
+	h := &Handler{o: o, catalogs: catalogs, origin: u.Scheme + "://" + u.Host, path: strings.TrimSuffix(u.EscapedPath(), "/"), secure: u.Scheme == "https"}
 	if h.secure && o.CookiePath == "/" {
 		h.prefix = "__Host-"
 	}
@@ -108,7 +113,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /consent", h.consentPost)
 	mux.HandleFunc("GET /logout", h.logout)
 	mux.HandleFunc("POST /locale/{code}", h.locale)
-	mux.HandleFunc("GET /static/{name}", h.static)
+	mux.HandleFunc("GET /static/{name...}", h.static)
 }
 
 // entry is GET / (ENT): Hydra's login challenge, or the ref of
@@ -318,6 +323,45 @@ func (h *Handler) hydraError(r *http.Request, op string, err error) flow.Respons
 	return resp
 }
 
+// pagePaths are the paths of the pages, below the base path: the change of
+// language goes back to them only.
+var pagePaths = []string{"/", "/oauth2/auth", "/consent"}
+
+// back returns the page raw names, as a path below the base path with its
+// query, without the _locale that would win over the cookie. raw is a path
+// (the return field of the language form, which the page writes) or an
+// absolute URL of the dispatcher's origin (the Referer). Anything else gives
+// false: a URL of another origin, a path that is not a page's (/logout,
+// /static), a scheme-relative //host, a backslash that some browsers read as
+// a slash, a user. The way back is then built on the dispatcher's own origin:
+// the input never chooses the host (Sécurité, Redirections).
+func (h *Handler) back(raw string) (string, bool) {
+	if raw == "" || strings.Contains(raw, "\\") {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	switch {
+	case err != nil || u.User != nil || u.Opaque != "":
+		return "", false
+	case u.Scheme == "" && u.Host == "":
+		if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+			return "", false
+		}
+	case u.Scheme+"://"+u.Host != h.origin:
+		return "", false
+	}
+	p, ok := strings.CutPrefix(u.EscapedPath(), h.path)
+	if !ok || !slices.Contains(pagePaths, p) {
+		return "", false
+	}
+	q := u.Query()
+	q.Del("_locale")
+	if len(q) == 0 {
+		return h.path + p, true
+	}
+	return h.path + p + "?" + q.Encode(), true
+}
+
 // hydraChallenge tells whether c may be a Hydra challenge (Q10): not empty,
 // at most 64 KiB, in the base64url alphabet with its = padding.
 func hydraChallenge(c string) bool {
@@ -333,21 +377,28 @@ func hydraChallenge(c string) bool {
 }
 
 // locale is POST /locale/{code}: the dispatcher_locale cookie, for a year,
-// then back to the page of the Referer when it is the dispatcher's, else to
-// /. A form from elsewhere changes nothing (E1008).
+// then back to the page the form's return field names, else to the page of
+// the Referer, else to the pages' root. A form from elsewhere changes
+// nothing (E1008).
 func (h *Handler) locale(w http.ResponseWriter, r *http.Request) {
 	cfg := h.o.Config.Snapshot()
 	if !h.sameOrigin(r) {
 		h.fail(w, r, flow.Response{Kind: flow.ErrorPage, Code: flow.E1008}, cfg)
 		return
 	}
+	if !h.form(w, r) {
+		return
+	}
 	if code := r.PathValue("code"); h.supported(cfg, code) {
 		h.setCookie(w, localeCookie, code, 365*24*time.Hour, false)
 	}
-	to := strings.TrimRight(h.o.BaseURL, "/") + "/"
-	if ref, err := url.Parse(r.Referer()); err == nil && ref.Scheme+"://"+ref.Host == h.origin {
-		to = ref.String()
+	to := h.path + "/"
+	if back, ok := h.back(r.PostForm.Get("return")); ok {
+		to = back
+	} else if back, ok := h.back(r.Referer()); ok {
+		to = back
 	}
+	to = h.origin + to
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, to, http.StatusSeeOther)
 }

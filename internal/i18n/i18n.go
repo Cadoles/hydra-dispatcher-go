@@ -38,6 +38,23 @@ func Embedded() (Catalogs, error) {
 	return c, nil
 }
 
+// Locales returns the locales the binary has a catalog for, sorted, without
+// reading them: those internal/store accepts in its locale settings.
+func Locales() []string {
+	entries, _ := files.ReadDir(".") // embedded: cannot fail
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, strings.TrimSuffix(e.Name(), path.Ext(e.Name())))
+	}
+	return out
+}
+
+// Has tells whether the catalog of locale holds key, without falling back.
+func (c Catalogs) Has(locale, key string) bool {
+	_, ok := c[locale][key]
+	return ok
+}
+
 // Locales returns the locales of the catalogs, sorted.
 func (c Catalogs) Locales() []string {
 	out := make([]string, 0, len(c))

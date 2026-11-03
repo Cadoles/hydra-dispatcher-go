@@ -850,7 +850,11 @@ func TestConsent(t *testing.T) {
 			},
 			says: hydraSays{GetConsent: read(nil), ConsentHook: {hookErr: errDown}},
 			kind: ErrorPage, code: E1006, calls: []Op{GetConsent, ConsentHook}},
-		{name: "CST-13", ev: get, stored: acceptedFlow(t), says: hydraSays{GetConsent: read(nil)},
+		{name: "CST-13", ev: get, stored: func() *Flow {
+			f := acceptedFlow(t)
+			f.Steps[1].AccessToken = Object{"roles": json.RawMessage(`["admin"]`)}
+			return f
+		}(), says: hydraSays{GetConsent: read(nil)},
 			kind: ConsentPage, calls: []Op{GetConsent},
 			write: func(t *testing.T, f *Flow) {
 				if f.ConsentChallenge != hydraC || f.StateAt(testNow) != Accepted {
@@ -861,6 +865,11 @@ func TestConsent(t *testing.T) {
 				c := p.Response.Consent
 				if c.Challenge != hydraC || c.CSRF != cookie || !slices.Equal(c.Scopes, []string{"openid", "email"}) || rawJSON(c.Claims) != `{"email":"alice@example.org","step":"2fa"}` {
 					t.Errorf("screen %+v", c)
+				}
+				// What is shown is what is sent: the access token's claims and
+				// the subject too.
+				if c.Subject != "alice" || rawJSON(c.AccessClaims) != `{"roles":["admin"]}` {
+					t.Errorf("subject %q, access token %s", c.Subject, rawJSON(c.AccessClaims))
 				}
 			}},
 		{name: "CST-13, cc already kept", ev: get, stored: func() *Flow { f := acceptedFlow(t); f.ConsentChallenge = hydraC; return f }(),

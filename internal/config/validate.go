@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -44,11 +45,16 @@ func (c *Config) validate() (warnings []string, err error) {
 	if c.Server.Listen == "" {
 		fail("server.listen", "is required")
 	}
-	if err := httpURL(c.Server.BaseURL); err != nil {
-		fail("server.base_url", "%v", err)
+	base, baseErr := publicURL(c.Server.BaseURL)
+	if baseErr != nil {
+		fail("server.base_url", "%v", baseErr)
 	}
-	if !strings.HasPrefix(c.Server.CookiePath, "/") {
+	switch {
+	case !strings.HasPrefix(c.Server.CookiePath, "/"):
 		fail("server.cookie_path", "%q does not start with /", c.Server.CookiePath)
+	case base != nil && !pathMatch(strings.TrimSuffix(base.EscapedPath(), "/")+"/", c.Server.CookiePath):
+		fail("server.cookie_path", "%q does not cover %q, the path of server.base_url: browsers would not send the cookies to the pages",
+			c.Server.CookiePath, strings.TrimSuffix(base.EscapedPath(), "/")+"/")
 	}
 	nonNegative("server.replicas_hint", c.Server.ReplicasHint)
 	if c.State.RedisDSN == "" {
@@ -272,6 +278,43 @@ func httpURL(s string) error {
 		return fmt.Errorf("%q has a query or a fragment", redacted(u))
 	}
 	return nil
+}
+
+// publicURL checks server.base_url, the address the browsers see. Its scheme
+// and host are written as a browser serializes its Origin, in lowercase and
+// without the scheme's default port nor a user, since the forms' origin
+// check and the Referer of the change of language compare them as written
+// (Sécurité, protection des formulaires). Its path, clean, is the prefix a
+// proxy removes before the dispatcher: the pages put it before their URLs.
+func publicURL(s string) (*url.URL, error) {
+	if err := httpURL(s); err != nil {
+		return nil, err
+	}
+	u, _ := url.Parse(s)
+	defaultPort := u.Port() == "" && strings.HasSuffix(u.Host, ":") ||
+		u.Scheme == "http" && u.Port() == "80" || u.Scheme == "https" && u.Port() == "443"
+	p := strings.TrimSuffix(u.EscapedPath(), "/")
+	switch {
+	case u.User != nil:
+		// No quote: the user part may hold a password.
+		return nil, errors.New("holds a user, which no browser sends in its Origin")
+	case !strings.HasPrefix(s, u.Scheme+"://"):
+		return nil, fmt.Errorf("%q: write its scheme in lowercase, as browsers send their Origin", redacted(u))
+	case u.Host != strings.ToLower(u.Host):
+		return nil, fmt.Errorf("%q: write its host in lowercase, as browsers send their Origin", redacted(u))
+	case defaultPort:
+		return nil, fmt.Errorf("%q: leave out the default port of %s, as browsers do in their Origin", redacted(u), u.Scheme)
+	case p != "" && path.Clean(p) != p:
+		return nil, fmt.Errorf("%q: its path is not clean (%q)", redacted(u), path.Clean(p))
+	}
+	return u, nil
+}
+
+// pathMatch reports whether a cookie of path cookiePath is sent to the
+// request path p (RFC 6265, 5.1.4).
+func pathMatch(p, cookiePath string) bool {
+	return p == cookiePath || strings.HasPrefix(p, cookiePath) &&
+		(strings.HasSuffix(cookiePath, "/") || p[len(cookiePath)] == '/')
 }
 
 // absoluteURL parses an absolute http(s) URL. Errors hide its password,

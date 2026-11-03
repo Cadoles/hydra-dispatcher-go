@@ -7,15 +7,18 @@ import (
 	"testing"
 )
 
-// Each locale has every key of the others, and the catalogs are those of
-// the settings' registry (internal/store, catalogLocales).
+// Each locale has every key of the others, and Locales, which the settings'
+// registry reads (internal/store), names the catalogs.
 func TestCatalogs(t *testing.T) {
 	c, err := Embedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(c.Locales(), []string{"en", "fr"}) {
-		t.Fatalf("locales %v", c.Locales())
+	if !slices.Equal(c.Locales(), []string{"en", "fr"}) || !slices.Equal(Locales(), c.Locales()) {
+		t.Fatalf("locales %v, Locales %v", c.Locales(), Locales())
+	}
+	if !c.Has("fr", "choice.title") || c.Has("fr", "nope") || c.Has("de", "choice.title") {
+		t.Error("Has")
 	}
 	for _, a := range c.Locales() {
 		for _, b := range c.Locales() {

@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
 )
 
 // Settings are what the setting table holds, one row per key: a key absent
@@ -47,9 +49,8 @@ func DefaultSettings() Settings {
 	}
 }
 
-// catalogLocales are the locales the pages have a catalog for. internal/i18n
-// will hold them.
-var catalogLocales = []string{"fr", "en"}
+// catalogLocales are the locales the pages have a catalog for.
+var catalogLocales = i18n.Locales()
 
 // setting is a key of the registry. Its value is the JSON of the field,
 // durations in seconds as Symfony stored them.

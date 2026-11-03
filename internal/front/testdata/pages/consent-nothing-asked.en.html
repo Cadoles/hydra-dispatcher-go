@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Allow access to your data</title>
+<link rel="stylesheet" href="/static/base.css?v=737a015ac8fc">
+<link rel="stylesheet" href="/static/theme.css?v=2ede3c5a8501">
+</head>
+<body>
+<header></header>
+<main>
+
+<h1>Allow access to your data</h1>
+<p class="lead"> asks for access to the following data:</p>
+
+<p>No personal data is sent.</p>
+
+
+<form method="post" action="/consent?consent_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">
+<input type="hidden" name="csrf_token" value="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef">
+<input type="hidden" name="consent_challenge" value="c2FtcGxlX2NoYWxsZW5nZQ==">
+<button type="submit" name="action" value="accept">Allow</button>
+<button type="submit" name="action" value="reject" class="secondary">Deny</button>
+</form>
+
+</main>
+<footer><form method="post" class="locales" aria-label="Language"><input type="hidden" name="return" value="/"><button type="submit" formaction="/locale/en" lang="en" aria-current="true" disabled>English</button><button type="submit" formaction="/locale/fr" lang="fr">Français</button></form></footer>
+</body>
+</html>

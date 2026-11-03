@@ -22,7 +22,7 @@ func TestSecurityHeaders(t *testing.T) {
 		SecurityHeaders(csp, tc.https, tc.subdomains)(http.NotFoundHandler()).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
 		h := w.Header()
 		if h.Get("Content-Security-Policy") != csp || h.Get("X-Frame-Options") != "DENY" || h.Get("X-Content-Type-Options") != "nosniff" ||
-			h.Get("Referrer-Policy") != "strict-origin-when-cross-origin" || h.Get("Cross-Origin-Opener-Policy") != "same-origin" ||
+			h.Get("Referrer-Policy") != "strict-origin-when-cross-origin" || h.Get("Cross-Origin-Opener-Policy") != "" ||
 			h.Get("Permissions-Policy") == "" || h.Get("Strict-Transport-Security") != tc.hsts {
 			t.Errorf("https %v: %v", tc.https, h)
 		}

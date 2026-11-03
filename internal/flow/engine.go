@@ -211,8 +211,13 @@ type ConsentScreen struct {
 	Client    *ory.OAuth2Client
 	Scopes    []string
 	Audience  []string
-	// Claims are those the flow sends in the id_token.
-	Claims Object
+	// Subject is the subject accepted, the sub of the tokens.
+	Subject string
+	// Claims are those the flow sends in the id_token, AccessClaims those it
+	// sends in the access token: the screen shows both (Page de consent: what
+	// is shown is what is sent).
+	Claims       Object
+	AccessClaims Object
 	// UILocales are the oidc_context's ui_locales, for the page's language.
 	UILocales []string
 }

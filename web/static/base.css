@@ -70,3 +70,4 @@ button + button { margin-left: 0.5rem; }
 footer { margin-top: var(--space); text-align: center; }
 .locales button { background: transparent; color: var(--color-accent); border: 0; padding: 0.25rem 0.5rem; }
 .locales button[aria-current] { color: var(--color-text); cursor: default; }
+.locales .flag { width: 1.2em; height: auto; margin-right: 0.3em; vertical-align: -0.15em; }

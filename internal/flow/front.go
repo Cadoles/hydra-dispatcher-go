@@ -350,14 +350,17 @@ func (r *run) consent(ev Consent) Outcome {
 		return r.acceptConsent(f, ev.Challenge, req) // CST-12
 	}
 	// CST-13: the screen; C kept as the flow's resume target (Q14).
+	session := r.consentBody(f, req).Session
 	out := Outcome{Response: Response{Kind: ConsentPage, Consent: &ConsentScreen{
-		Challenge: ev.Challenge,
-		CSRF:      f.CSRF,
-		Client:    req.Client,
-		Scopes:    nonNil(req.RequestedScope),
-		Audience:  nonNil(req.RequestedAccessTokenAudience),
-		Claims:    r.consentBody(f, req).Session.IdToken.(Object),
-		UILocales: req.GetOidcContext().UiLocales,
+		Challenge:    ev.Challenge,
+		CSRF:         f.CSRF,
+		Client:       req.Client,
+		Scopes:       nonNil(req.RequestedScope),
+		Audience:     nonNil(req.RequestedAccessTokenAudience),
+		Subject:      req.GetSubject(),
+		Claims:       session.IdToken.(Object),
+		AccessClaims: session.AccessToken.(Object),
+		UILocales:    req.GetOidcContext().UiLocales,
 	}}}
 	if f.ConsentChallenge != ev.Challenge {
 		g := f.clone()

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Choisissez votre mode de connexion</title>
+<link rel="stylesheet" href="/static/base.css?v=737a015ac8fc">
+<link rel="stylesheet" href="/static/theme.css?v=2ede3c5a8501">
+</head>
+<body>
+<header><div class="client"><img class="logo" src="https://client.example/logo.png" alt=""><span>Client</span></div></header>
+<main>
+
+<h1>Choisissez votre mode de connexion</h1>
+<p class="lead">pour vous connecter à Client</p>
+<p class="message" role="alert">Ce mode de connexion n&#39;est pas proposé : choisissez-en un dans la liste.</p>
+
+<form method="post" action="/?login_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">
+<input type="hidden" name="csrf_token" value="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef">
+<input type="hidden" name="login_challenge" value="c2FtcGxlX2NoYWxsZW5nZQ==">
+<fieldset class="flows">
+<legend>Choisissez votre mode de connexion</legend>
+<label class="flow"><input type="radio" name="flow" value="f" required><img class="icon" src="https://flow.example/icon.svg" alt=""><span class="title">F</span><span class="description">D</span></label>
+
+</fieldset>
+<button type="submit" autofocus>Continuer</button>
+</form>
+
+
+</main>
+<footer><form method="post" class="locales" aria-label="Langue"><input type="hidden" name="return" value="/"><button type="submit" formaction="/locale/en" lang="en">English</button><button type="submit" formaction="/locale/fr" lang="fr" aria-current="true" disabled>Français</button></form></footer>
+</body>
+</html>

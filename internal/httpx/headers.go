@@ -42,8 +42,14 @@ func CSP(extra map[string][]string) string {
 // durcissements 5 et 6): the content security policy, no framing, no MIME
 // sniffing, the full referrer for the dispatcher's own pages only (their
 // URLs carry Hydra's challenges, which no login app may see: I7; the change
-// of language goes back by it), the opener and permissions policies, and
-// HSTS when the dispatcher is served in HTTPS.
+// of language goes back by it), the permissions policy, and HSTS when the
+// dispatcher is served in HTTPS.
+//
+// No Cross-Origin-Opener-Policy: the pages are a step of the sign-in a
+// client may open in a popup, and same-origin there, as
+// same-origin-allow-popups, puts the popup in another browsing context
+// group, whose window.opener stays null back on the client's callback
+// (checked in Chrome): the popup never hands the sign-in back.
 func SecurityHeaders(csp string, https, hstsSubdomains bool) Middleware {
 	hsts := "max-age=31536000"
 	if hstsSubdomains {
@@ -56,7 +62,6 @@ func SecurityHeaders(csp string, https, hstsSubdomains bool) Middleware {
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
-			h.Set("Cross-Origin-Opener-Policy", "same-origin")
 			h.Set("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()")
 			if https {
 				h.Set("Strict-Transport-Security", hsts)

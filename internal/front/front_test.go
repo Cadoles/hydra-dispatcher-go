@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"html"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -25,6 +30,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/web"
 )
 
 const (
@@ -48,6 +54,10 @@ type fakeHydra struct {
 	errs        map[string]error
 	accepted    *ory.AcceptOAuth2LoginRequest
 	consent     *ory.AcceptOAuth2ConsentRequest
+	// client replaces the client of the login and consent requests.
+	client *ory.OAuth2Client
+	// noLogoutRedirect accepts the logout without a redirect_to.
+	noLogoutRedirect bool
 }
 
 func (h *fakeHydra) called(op string) error {
@@ -61,13 +71,17 @@ func (h *fakeHydra) LoginRequest(_ context.Context, challenge string) (*ory.OAut
 	if err := h.called("get_login"); err != nil {
 		return nil, err
 	}
-	return &ory.OAuth2LoginRequest{
+	r := &ory.OAuth2LoginRequest{
 		Challenge:      challenge,
 		Client:         ory.OAuth2Client{ClientId: ory.PtrString("c1"), ClientName: ory.PtrString("Test Client"), ClientUri: ory.PtrString("http://oidc.client.test/")},
 		RequestUrl:     "http://public.hydra.test/oauth2/auth?client_id=c1",
 		RequestedScope: []string{"openid", "profile", "email", "groups"},
 		SessionId:      ory.PtrString(sessionID),
-	}, nil
+	}
+	if h.client != nil {
+		r.Client = *h.client
+	}
+	return r, nil
 }
 
 func (h *fakeHydra) AcceptLogin(_ context.Context, _ string, body ory.AcceptOAuth2LoginRequest) (string, error) {
@@ -87,13 +101,17 @@ func (h *fakeHydra) ConsentRequest(_ context.Context, challenge string) (*ory.OA
 		return nil, err
 	}
 	ctx, _ := json.Marshal(h.accepted.Context)
+	client := &ory.OAuth2Client{ClientId: ory.PtrString("c1"), ClientName: ory.PtrString("Test Client")}
+	if h.client != nil {
+		client = h.client
+	}
 	return &ory.OAuth2ConsentRequest{
 		Challenge:      challenge,
 		Subject:        ory.PtrString(h.accepted.Subject),
 		LoginSessionId: ory.PtrString(sessionID),
 		Context:        json.RawMessage(ctx),
 		RequestedScope: []string{"openid", "profile", "email", "groups"},
-		Client:         &ory.OAuth2Client{ClientId: ory.PtrString("c1"), ClientName: ory.PtrString("Test Client")},
+		Client:         client,
 		Skip:           ory.PtrBool(h.consentSkip),
 		OidcContext:    &ory.OAuth2ConsentRequestOpenIDConnectContext{UiLocales: []string{"en-GB"}},
 	}, nil
@@ -119,6 +137,9 @@ func (h *fakeHydra) LogoutRequest(_ context.Context, challenge string) (*ory.OAu
 }
 
 func (h *fakeHydra) AcceptLogout(context.Context, string) (string, error) {
+	if h.noLogoutRedirect {
+		return "", h.called("accept_logout")
+	}
 	return loggedOut, h.called("accept_logout")
 }
 
@@ -145,6 +166,7 @@ func testSnapshot() *store.Snapshot {
 type world struct {
 	t       *testing.T
 	h       http.Handler
+	front   *Handler
 	o       *flow.Orchestrator
 	hydra   *fakeHydra
 	cookies map[string]string
@@ -154,6 +176,8 @@ type world struct {
 type worldOptions struct {
 	base       string
 	showValues bool
+	// snapshot replaces testSnapshot.
+	snapshot *store.Snapshot
 }
 
 func newWorld(t *testing.T, opts ...worldOptions) *world {
@@ -166,15 +190,19 @@ func newWorld(t *testing.T, opts ...worldOptions) *world {
 	mem := state.NewMemory()
 	t.Cleanup(func() { _ = mem.Close() })
 	cfg := snapshots{testSnapshot()}
+	if opt.snapshot != nil {
+		cfg = snapshots{opt.snapshot}
+	}
 	w.o = &flow.Orchestrator{
 		Store: mem, Config: cfg, Source: flow.Fallback{Hydra: w.hydra}, Hydra: w.hydra, Webhooks: flow.StubWebhooks{},
 		BaseURL: opt.base, LoginConsentTTL: 30 * time.Minute, Keys: flow.Keys{[]byte("0123456789abcdef0123456789abcdef")},
 	}
-	logger := slog.New(slog.NewJSONHandler(&w.logs, nil))
+	logger := slog.New(httpx.LogHandler(slog.NewJSONHandler(&w.logs, nil)))
 	h, err := New(Options{Engine: w.o, Hydra: w.hydra, Config: cfg, BaseURL: opt.base, CookiePath: "/", ShowValues: opt.showValues, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.front = h
 	mux := http.NewServeMux()
 	h.Register(mux)
 	w.h = httpx.Chain(httpx.Routes(mux), httpx.RealIP(nil), httpx.Trace(nil),
@@ -233,8 +261,14 @@ func location(t *testing.T, resp *http.Response, status int) *url.URL {
 }
 
 // app plays a login app on its step through the engine: read, accept, and
-// the same for its consent once the browser is back.
+// the same for its consent once the browser is back, claims in its id_token.
 func (w *world) app(login *url.URL, subject, claims string) {
+	w.t.Helper()
+	w.appSession(login, subject, `{"id_token":`+claims+`}`)
+}
+
+// appSession is app with the consent's whole session.
+func (w *world) appSession(login *url.URL, subject, session string) {
 	w.t.Helper()
 	ctx := context.Background()
 	anyApp := func(store.App) bool { return true }
@@ -251,7 +285,7 @@ func (w *world) app(login *url.URL, subject, claims string) {
 	cc := consent.Query().Get("consent_challenge")
 	for _, call := range []flow.AppCall{
 		{Op: flow.AppGetConsent, Challenge: cc, Caller: anyApp},
-		{Op: flow.AppAcceptConsent, Challenge: cc, Caller: anyApp, Body: json.RawMessage(`{"session":{"id_token":` + claims + `}}`)},
+		{Op: flow.AppAcceptConsent, Challenge: cc, Caller: anyApp, Body: json.RawMessage(`{"session":` + session + `}`)},
 	} {
 		if r := w.o.Handle(ctx, call).Response; r.Status != http.StatusOK {
 			w.t.Fatalf("%v: %+v", call.Op, r)
@@ -344,6 +378,7 @@ func TestChoicePage(t *testing.T) {
 		`value="hydra-sql"`, "Mot de passe", "Identifiant et mot de passe",
 		`value="hydra-sql-2fa"`, "Two factors", // no French title: the first one
 		`name="login_challenge" value="` + hydraL + `"`, `name="csrf_token" value="` + w.csrf() + `"`,
+		`<form method="post" action="/?login_challenge=` + hydraL + `">`,
 		`formaction="/locale/en"`, `/static/base.css?v=`,
 	} {
 		if !strings.Contains(body, want) {
@@ -359,11 +394,7 @@ func TestChoicePage(t *testing.T) {
 	if csrf == nil || len(csrf.Value) != 64 || !csrf.HttpOnly || csrf.SameSite != http.SameSiteLaxMode || csrf.Secure || csrf.Path != "/" || csrf.MaxAge != 3600 {
 		t.Errorf("A4, cookie %+v", csrf)
 	}
-	for _, h := range []string{"Content-Security-Policy", "X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Cross-Origin-Opener-Policy", "Permissions-Policy"} {
-		if resp.Header.Get(h) == "" {
-			t.Errorf("no %s", h)
-		}
-	}
+	securityHeaders(t, "choice page", resp)
 	if resp.Header.Get("Strict-Transport-Security") != "" {
 		t.Error("HSTS in HTTP")
 	}
@@ -386,8 +417,11 @@ func TestForms(t *testing.T) {
 	for _, header := range [][]string{
 		{"Sec-Fetch-Site", "cross-site"},
 		{"Sec-Fetch-Site", "same-site"},
+		{"Sec-Fetch-Site", "SAME-ORIGIN"},
 		{"Origin", "http://evil.example"},
-		nil, // neither header
+		{"Origin", "null"},     // a sandboxed frame, a data: URL
+		{"Origin", base + "/"}, // not an origin
+		nil,                    // neither header
 	} {
 		if resp := w.do(http.MethodPost, "/", form, header...); resp.StatusCode != http.StatusForbidden || !strings.Contains(text(t, resp), "E1008") {
 			t.Errorf("POS-9 %v: %d", header, resp.StatusCode)
@@ -396,10 +430,17 @@ func TestForms(t *testing.T) {
 	if resp := w.do(http.MethodPost, "/", form, "Origin", base); resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("Origin of the dispatcher: %d", resp.StatusCode)
 	}
+	// none: typed in, a bookmark (Sécurité, protection des formulaires).
+	if resp := w.do(http.MethodPost, "/", form, "Sec-Fetch-Site", "none"); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("Sec-Fetch-Site none: %d", resp.StatusCode)
+	}
 	// A body past 64 KiB is no form.
 	big := url.Values{"flow": {strings.Repeat("a", maxForm)}}
 	if resp := w.do(http.MethodPost, "/", big, sameOrigin...); resp.StatusCode != http.StatusBadRequest || !strings.Contains(text(t, resp), "E1001") {
 		t.Errorf("big form: %d", resp.StatusCode)
+	}
+	if resp := w.do(http.MethodPost, "/consent", big, sameOrigin...); resp.StatusCode != http.StatusBadRequest || !strings.Contains(text(t, resp), "E1001") {
+		t.Errorf("big consent form: %d", resp.StatusCode)
 	}
 	if resp := w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}}, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("CST-21: %d", resp.StatusCode)
@@ -459,19 +500,22 @@ func TestErrorLink(t *testing.T) {
 
 // The consent screen: the scopes asked with the claims they cover, the
 // other claims, the values with consent.show_values only; its language from
-// the consent request's ui_locales.
+// the consent request's ui_locales. What is shown is what is sent: the
+// access token's claims and the subject too.
 func TestConsentScreen(t *testing.T) {
 	for _, show := range []bool{false, true} {
 		w := newWorld(t, worldOptions{base: base, showValues: show})
 		w.hydra.consentSkip = false
-		w.app(w.choose("hydra-sql"), "alice", `{"email":"alice@example.org","name":"Alice","groups":["staff"]}`)
+		w.appSession(w.choose("hydra-sql"), "alice", `{"id_token":{"email":"alice@example.org","name":"Alice","groups":["staff"]},`+
+			`"access_token":{"roles":["admin"],"email":"alice@corp.example"}}`)
 		location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
 		resp := w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil)
 		body := text(t, resp)
 		for _, want := range []string{
 			`<html lang="en">`, "Test Client asks for access to the following data:",
 			"Identify you", "Your profile", "Full name", "Your email address", "Email address",
-			"Permission “groups”", "Other data", "groups",
+			"Permission “groups”", "Other data", "groups", "Technical identifier", "roles",
+			`<form method="post" action="/consent?consent_challenge=` + hydraC + `">`,
 			`name="consent_challenge" value="` + hydraC + `"`, `name="action" value="accept"`, `name="action" value="reject"`,
 		} {
 			if !strings.Contains(body, want) {
@@ -480,6 +524,16 @@ func TestConsentScreen(t *testing.T) {
 		}
 		if strings.Contains(body, "alice@example.org") != show {
 			t.Errorf("show_values %v: the email shown %v", show, !show)
+		}
+		// Both tokens' values, the subject's, the access token's claim.
+		for _, value := range []string{"alice@example.org · alice@corp.example", `<span class="value">alice</span>`, `<span class="value">[&#34;admin&#34;]</span>`} {
+			if strings.Contains(body, value) != show {
+				t.Errorf("show_values %v: %s shown %v", show, value, !show)
+			}
+		}
+		// A key pressed from the page before must not accept.
+		if strings.Contains(body, "autofocus") {
+			t.Error("a button of the consent has the focus")
 		}
 		// CST-15: refused.
 		resp = w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {w.csrf()}, "action": {"reject"}}, sameOrigin...)
@@ -578,4 +632,377 @@ func TestHTTPS(t *testing.T) {
 	if resp := w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.cookies["__Host-dispatcher_flow_csrf"]}}, "Origin", "https://dispatcher.example"); resp.StatusCode != http.StatusSeeOther {
 		t.Errorf("POST with the prefixed cookie: %d %s", resp.StatusCode, text(t, resp))
 	}
+}
+
+// securityHeaders checks the headers of every response (Sécurité,
+// durcissements 5 et 6), and that no Cross-Origin-Opener-Policy cuts a
+// sign-in opened in a popup from its opener.
+func securityHeaders(t *testing.T, what string, resp *http.Response) {
+	t.Helper()
+	for _, h := range []string{"Content-Security-Policy", "X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy", "X-Trace-ID"} {
+		if resp.Header.Get(h) == "" {
+			t.Errorf("%s: no %s", what, h)
+		}
+	}
+	if coop := resp.Header.Get("Cross-Origin-Opener-Policy"); coop != "" {
+		t.Errorf("%s: Cross-Origin-Opener-Policy %s", what, coop)
+	}
+}
+
+// Every answer has the security headers; the pages and the redirections are
+// never stored (CHX-5).
+func TestHeaders(t *testing.T) {
+	w := newWorld(t)
+	for _, tc := range []struct {
+		what    string
+		resp    *http.Response
+		status  int
+		noStore bool
+	}{
+		{"page", w.do(http.MethodGet, "/?login_challenge="+hydraL, nil), http.StatusOK, true},
+		{"redirection", w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, sameOrigin...), http.StatusSeeOther, true},
+		{"error page", w.do(http.MethodGet, "/consent", nil), http.StatusBadRequest, true},
+		{"change of language", w.do(http.MethodPost, "/locale/en", url.Values{}, sameOrigin...), http.StatusSeeOther, true},
+		{"logout", w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil), http.StatusSeeOther, true},
+		{"static file", w.do(http.MethodGet, "/static/base.css", nil), http.StatusOK, false},
+		{"unknown path", w.do(http.MethodGet, "/nope", nil), http.StatusNotFound, false},
+	} {
+		if tc.resp.StatusCode != tc.status {
+			t.Errorf("%s: %d, want %d", tc.what, tc.resp.StatusCode, tc.status)
+		}
+		securityHeaders(t, tc.what, tc.resp)
+		if cc := tc.resp.Header.Get("Cache-Control"); tc.noStore && cc != "no-store" {
+			t.Errorf("%s: Cache-Control %q", tc.what, cc)
+		}
+	}
+}
+
+// Without the browser's token or cookie: POS-3 shows the page again, without
+// message and without choosing; BCL-3 and CST-11 give E1008, the flow intact.
+func TestCSRF(t *testing.T) {
+	w := newWorld(t)
+	w.hydra.consentSkip = false
+	w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+	cookie := w.csrf()
+	resp := w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {strings.Repeat("0", 64)}}, sameOrigin...)
+	if body := text(t, resp); resp.StatusCode != http.StatusOK || strings.Contains(body, "n&#39;est pas proposé") || !strings.Contains(body, `name="csrf_token" value="`+cookie+`"`) {
+		t.Errorf("POS-3: %d\n%s", resp.StatusCode, body)
+	}
+	step := w.choose("hydra-sql")
+	w.cookies["dispatcher_flow_csrf"] = strings.Repeat("1", 64)
+	if resp := w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil); resp.StatusCode != http.StatusForbidden || !strings.Contains(text(t, resp), "E1008") {
+		t.Errorf("BCL-3: %d", resp.StatusCode)
+	}
+	w.cookies["dispatcher_flow_csrf"] = cookie
+	w.app(step, "alice", `{"email":"alice@example.org"}`)
+	location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
+	if resp := w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("CST-13: %d", resp.StatusCode)
+	}
+	for _, tc := range []struct{ name, token, cookie string }{
+		{"no token", "", cookie},
+		{"another token", strings.Repeat("2", 64), cookie},
+		{"another browser", cookie, strings.Repeat("3", 64)},
+	} {
+		w.cookies["dispatcher_flow_csrf"] = tc.cookie
+		resp := w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {tc.token}, "action": {"accept"}}, sameOrigin...)
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(text(t, resp), "E1008") {
+			t.Errorf("CST-11, %s: %d", tc.name, resp.StatusCode)
+		}
+	}
+	w.cookies["dispatcher_flow_csrf"] = cookie
+	if u := location(t, w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {cookie}, "action": {"accept"}}, sameOrigin...), http.StatusSeeOther); u.String() != callbackURL {
+		t.Errorf("CST-14 after the refusals: %s", u)
+	}
+}
+
+// The values of the client, of the flows and of the claims are escaped in
+// their context: text, attribute, URL, where javascript: and data: give
+// #ZgotmplZ.
+func TestEscaping(t *testing.T) {
+	snap := testSnapshot()
+	flows := slices.Clone(snap.Flows)
+	flows[0].Title = map[string]string{"fr": `"><img src=x onerror=alert(1)>`}
+	flows[0].Description = map[string]string{"fr": `<script>alert(2)</script>`}
+	flows[0].IconURL = map[string]string{"fr": `javascript:alert(3)`}
+	flows[1].IconURL = map[string]string{"fr": `data:image/svg+xml,<svg onload=alert(4)>`}
+	w := newWorld(t, worldOptions{base: base, showValues: true, snapshot: store.NewSnapshot(snap.Apps, flows, snap.Settings)})
+	w.hydra.consentSkip = false
+	w.hydra.client = &ory.OAuth2Client{ClientId: ory.PtrString("c1"), ClientName: ory.PtrString(`<script>alert("name")</script>%s`),
+		LogoUri: ory.PtrString("javascript:alert(5)"), ClientUri: ory.PtrString("javascript:alert(6)")}
+	pages := []string{text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil))}
+	step := location(t, w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, sameOrigin...), http.StatusSeeOther)
+	w.app(step, "alice", `{"email":"<img src=x onerror=alert(7)>","x<y":"</li><script>"}`)
+	location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
+	pages = append(pages, text(t, w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil)))
+	// Refused, then E1002 linked to the client_uri (RA6).
+	location(t, w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {w.csrf()}, "action": {"reject"}}, sameOrigin...), http.StatusSeeOther)
+	pages = append(pages, text(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil)))
+	for i, body := range pages {
+		for _, bad := range []string{"<script", "<img src=x", "javascript:", "data:image", "onload"} {
+			if strings.Contains(body, bad) {
+				t.Errorf("page %d holds %q:\n%s", i, bad, body)
+			}
+		}
+		if !strings.Contains(body, "#ZgotmplZ") {
+			t.Errorf("page %d without a refused URL:\n%s", i, body)
+		}
+	}
+}
+
+// The change of language goes back to the page its return field names, one a
+// POST showed again included (POS-2), even without a Referer; else to the
+// Referer's; never with the page's _locale, which would win over the cookie.
+func TestLocaleBack(t *testing.T) {
+	w := newWorld(t)
+	w.do(http.MethodGet, "/?login_challenge="+hydraL+"&_locale=fr", nil)
+	// Posted, as a browser does, to the form's action.
+	body := text(t, w.do(http.MethodPost, "/?login_challenge="+hydraL, url.Values{"flow": {"nope"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, sameOrigin...))
+	field := regexp.MustCompile(`<input type="hidden" name="return" value="([^"]+)">`).FindStringSubmatch(body)
+	if field == nil || html.UnescapeString(field[1]) != "/?login_challenge="+hydraL {
+		t.Fatalf("POS-2, return field %q:\n%s", field, body)
+	}
+	// No Referer: a browser or an extension that drops it.
+	to := location(t, w.do(http.MethodPost, "/locale/en", url.Values{"return": {html.UnescapeString(field[1])}}, sameOrigin...), http.StatusSeeOther)
+	if resp := w.do(http.MethodGet, to.RequestURI(), nil); to.String() != base+"/?login_challenge="+hydraL || resp.StatusCode != http.StatusOK || !strings.Contains(text(t, resp), `<html lang="en">`) {
+		t.Errorf("back from POS-2 to %s: %d", to, resp.StatusCode)
+	}
+	// The Referer without a field, its _locale dropped.
+	to = location(t, w.do(http.MethodPost, "/locale/fr", url.Values{}, "Sec-Fetch-Site", "same-origin", "Referer", base+"/consent?_locale=en&consent_challenge="+hydraC), http.StatusSeeOther)
+	if to.String() != base+"/consent?consent_challenge="+hydraC {
+		t.Errorf("back to the Referer: %s", to)
+	}
+	// Anything but a page of the dispatcher's goes to the pages' root, the
+	// field as the Referer: the input never chooses the host.
+	for _, bad := range []string{
+		"//evil.example/", "/\\evil.example/", "https://evil.example/", "javascript:alert(1)", "evil.example/",
+		base + "@evil.example/", "http://user@dispatcher.hydra.test/", "https://dispatcher.hydra.test/",
+		"/logout?logout_challenge=" + logoutU, "/static/base.css", "/locale/en", "/consent/../logout", "/%2F%2Fevil.example/",
+		"/?a=%0d%0aSet-Cookie:x=y", "/\x00",
+	} {
+		for _, how := range []struct {
+			form   url.Values
+			header []string
+		}{
+			{url.Values{"return": {bad}}, sameOrigin},
+			{url.Values{}, []string{"Sec-Fetch-Site", "same-origin", "Referer", bad}},
+		} {
+			resp := w.do(http.MethodPost, "/locale/en", how.form, how.header...)
+			if loc := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, base+"/") || loc != base+"/" && !strings.HasPrefix(loc, base+"/?") {
+				t.Errorf("%q (%v): %d %s", bad, how.form, resp.StatusCode, loc)
+			}
+		}
+	}
+	if _, ok := w.cookies["x"]; ok {
+		t.Error("a header written by the way back")
+	}
+	// A form from elsewhere changes nothing, its field neither.
+	if resp := w.do(http.MethodPost, "/locale/fr", url.Values{"return": {"/consent"}}, "Sec-Fetch-Site", "cross-site"); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-site: %d", resp.StatusCode)
+	}
+}
+
+// Under a path, the base URL's: the proxy removes it, the pages put it
+// before their URLs, as the engine before the apps' redirect_to.
+func TestBasePath(t *testing.T) {
+	const prefixed = "http://dispatcher.hydra.test/auth"
+	w := newWorld(t, worldOptions{base: prefixed})
+	body := text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil))
+	for _, want := range []string{`action="/auth/?login_challenge=` + hydraL + `"`, `formaction="/auth/locale/en"`, `href="/auth/static/base.css?v=`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page without %s:\n%s", want, body)
+		}
+	}
+	step := location(t, w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, "Origin", "http://dispatcher.hydra.test"), http.StatusSeeOther)
+	anyApp := func(store.App) bool { return true }
+	c := step.Query().Get("login_challenge")
+	w.o.Handle(context.Background(), flow.AppCall{Op: flow.AppGetLogin, Challenge: c, Caller: anyApp})
+	r := w.o.Handle(context.Background(), flow.AppCall{Op: flow.AppAcceptLogin, Challenge: c, Caller: anyApp, Body: json.RawMessage(`{"subject":"alice"}`)}).Response
+	back, err := url.Parse(r.Body.(ory.OAuth2RedirectTo).RedirectTo)
+	if err != nil || !strings.HasPrefix(back.Path, "/auth/") {
+		t.Fatalf("redirect_to %+v", r.Body)
+	}
+	if u := location(t, w.do(http.MethodGet, strings.TrimPrefix(back.RequestURI(), "/auth"), nil), http.StatusSeeOther); u.Host != "sql.hydra.test" {
+		t.Errorf("BCL-7 under the path: %s", u)
+	}
+	if u := location(t, w.do(http.MethodPost, "/locale/en", url.Values{}, sameOrigin...), http.StatusSeeOther); u.String() != prefixed+"/" {
+		t.Errorf("change of language without Referer: %s", u)
+	}
+	if !strings.Contains(body, `name="return" value="/auth/?login_challenge=`+hydraL+`"`) {
+		t.Errorf("return field under the path:\n%s", body)
+	}
+	for _, tc := range []struct{ field, want string }{
+		{"/auth/?login_challenge=" + hydraL, prefixed + "/?login_challenge=" + hydraL},
+		{"/auth/consent?consent_challenge=" + hydraC, prefixed + "/consent?consent_challenge=" + hydraC},
+		{"/?login_challenge=" + hydraL, prefixed + "/"}, // outside the path
+		{"/authx/", prefixed + "/"},
+	} {
+		if u := location(t, w.do(http.MethodPost, "/locale/en", url.Values{"return": {tc.field}}, sameOrigin...), http.StatusSeeOther); u.String() != tc.want {
+			t.Errorf("return %s: back to %s, want %s", tc.field, u, tc.want)
+		}
+	}
+}
+
+// Logout: Hydra saturated, a logout accepted without redirect_to.
+func TestLogoutHydra(t *testing.T) {
+	w := newWorld(t)
+	w.hydra.errs["get_logout"] = fmt.Errorf("logout request: %w", hydra.ErrOverloaded)
+	resp := w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil)
+	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "1" || !strings.Contains(text(t, resp), "E1004") {
+		t.Errorf("saturated: %d %v", resp.StatusCode, resp.Header)
+	}
+	w = newWorld(t)
+	w.hydra.noLogoutRedirect = true
+	resp = w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil)
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(text(t, resp), "E1004") || !strings.Contains(w.logs.String(), "logout accepted without redirect_to") {
+		t.Errorf("without redirect_to: %d\n%s", resp.StatusCode, w.logs.String())
+	}
+}
+
+// A page whose template fails is a 500 with the trace id, logged with it,
+// never half a page.
+func TestRenderFailure(t *testing.T) {
+	w := newWorld(t)
+	w.front.pages.templates["error"] = template.Must(template.New("layout").Parse(`<p>half{{.Nope}}</p>`))
+	resp := w.do(http.MethodGet, "/consent", nil)
+	body, trace := text(t, resp), resp.Header.Get("X-Trace-ID")
+	if resp.StatusCode != http.StatusInternalServerError || strings.Contains(body, "half") || !strings.Contains(body, trace) ||
+		!strings.Contains(w.logs.String(), `"trace_id":"`+trace+`"`) {
+		t.Errorf("%d %q\n%s", resp.StatusCode, body, w.logs.String())
+	}
+}
+
+// The start check stops a template that fails, a key a catalog lacks, a
+// form without the fields the handlers read (Thèmes, validation).
+func TestCheck(t *testing.T) {
+	if err := newWorld(t).front.check(); err != nil {
+		t.Fatalf("embedded pages: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		mod  func(h *Handler)
+		want []string
+	}{
+		{"keys lacking", func(h *Handler) {
+			delete(h.catalogs["en"], "consent.accept")
+			delete(h.catalogs["fr"], "claim.email")
+			delete(h.catalogs["en"], "locale.en")
+			delete(h.catalogs["fr"], "error.E1006")
+		}, []string{"catalog en: no text for consent.accept", "catalog fr: no text for claim.email", "catalog en: no text for locale.en", "catalog fr: no text for error.E1006"}},
+		{"fields lacking", func(h *Handler) {
+			h.pages.templates["select"] = template.Must(template.New("layout").Parse(`<form><input name="login_challenge" value="{{.Form.LoginChallenge}}"><input name="csrf_token" value="x"></form>`))
+		}, []string{"page select (flows, one refused) in en: ", "no field flow", `field csrf_token without the value "` + sampleCSRF + `"`}},
+		{"template failing", func(h *Handler) {
+			h.pages.templates["consent"] = template.Must(template.New("layout").Parse(`{{.Nope}}`))
+		}, []string{"page consent (nothing asked) in fr"}},
+	} {
+		w := newWorld(t)
+		tc.mod(w.front)
+		err := w.front.check()
+		for _, want := range tc.want {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: %v, want %q", tc.name, err, want)
+			}
+		}
+	}
+}
+
+// No name leaves static/.
+func TestStaticOutside(t *testing.T) {
+	w := newWorld(t)
+	for _, p := range []string{"/static/..%2fweb.go", "/static/%2e%2e%2ftemplates%2flayout.html.tmpl", "/static/%2e%2e", "/static/.", "/static/"} {
+		resp := w.do(http.MethodGet, p, nil)
+		if body := text(t, resp); resp.StatusCode == http.StatusOK || strings.Contains(body, "package web") || strings.Contains(body, "{{define") {
+			t.Errorf("%s: %d", p, resp.StatusCode)
+		}
+	}
+}
+
+// The theme contract (Thèmes, api: 1): the layout's blocks a theme
+// redefines, its theme.js and its flags loaded when it has them; the
+// embedded theme has none.
+func TestThemeContract(t *testing.T) {
+	w := newWorld(t)
+	body := text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil))
+	if strings.Contains(body, "<script") || strings.Contains(body, `class="flag"`) {
+		t.Errorf("embedded theme with a script or a flag:\n%s", body)
+	}
+	if resp := w.do(http.MethodGet, "/static/flags/fr.svg", nil); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("a flag in the embedded theme: %d", resp.StatusCode)
+	}
+	// A theme's files and blocks.
+	w.front.pages.hashes["theme.js"], w.front.pages.hashes["flags/fr.svg"] = "0123456789ab", "ba9876543210"
+	tpl := template.Must(template.ParseFS(web.FS, "templates/layout.html.tmpl", "templates/partials/*.html.tmpl", "templates/select.html.tmpl"))
+	w.front.pages.templates["select"] = template.Must(tpl.Parse(`{{define "head"}}<meta name="theme" content="demo">{{end}}` +
+		`{{define "header"}}<p>logo</p>{{end}}{{define "footer"}}<p>{{.LocaleURL "en"}} {{.Flag "fr"}} {{.Asset "nope.css"}}</p>{{end}}`))
+	body = text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil))
+	for _, want := range []string{
+		`<script src="/static/theme.js?v=0123456789ab" defer></script>`, `<meta name="theme" content="demo">`,
+		`<header><p>logo</p></header>`, `<footer><p>/locale/en /static/flags/fr.svg?v=ba9876543210 </p></footer>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("theme without %s:\n%s", want, body)
+		}
+	}
+	// The default footer shows the flags a theme has.
+	w.front.pages.templates["select"] = template.Must(template.ParseFS(web.FS, "templates/layout.html.tmpl", "templates/partials/*.html.tmpl", "templates/select.html.tmpl"))
+	if body := text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)); !strings.Contains(body, `<img class="flag" src="/static/flags/fr.svg?v=ba9876543210" alt="">Français`) {
+		t.Errorf("no flag in the switcher:\n%s", body)
+	}
+}
+
+var update = flag.Bool("update", false, "rewrite the golden pages of testdata/pages")
+
+// Each page of the embedded theme, in each locale, with check's sample data,
+// is that of testdata/pages (Stratégie de tests: rendu golden). go test
+// -update rewrites them; the diff then shows what a change did to the pages.
+func TestGoldenPages(t *testing.T) {
+	h := newWorld(t).front
+	cfg := h.sampleConfig()
+	slug := regexp.MustCompile(`[^a-z0-9]+`)
+	n := 0
+	for _, l := range cfg.Settings.SupportedLocales {
+		r := httptest.NewRequest(http.MethodGet, "/?_locale="+l, nil)
+		for _, s := range h.samples(r, cfg) {
+			if s.name == "error" && !(s.what == "E1002" && s.page.Error.Link != "" || s.what == "E1004" && s.page.Error.Link == "") {
+				continue
+			}
+			var buf bytes.Buffer
+			if err := h.pages.templates[s.name].ExecuteTemplate(&buf, "layout", s.page); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join("testdata", "pages", s.name+"-"+strings.Trim(slug.ReplaceAllString(strings.ToLower(s.what), "-"), "-")+"."+l+".html")
+			if *update {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("%v (run go test -update to create it)", err)
+			}
+			if got := buf.Bytes(); !bytes.Equal(got, want) {
+				gl, wl := strings.Split(string(got), "\n"), strings.Split(string(want), "\n")
+				i := 0
+				for i < len(gl) && i < len(wl) && gl[i] == wl[i] {
+					i++
+				}
+				t.Errorf("%s differs from line %d (go test -update to accept):\n got %q\nwant %q", path, i+1, line(gl, i), line(wl, i))
+			}
+			n++
+		}
+	}
+	if n != 12 {
+		t.Errorf("%d golden pages, want 12", n)
+	}
+}
+
+func line(lines []string, i int) string {
+	if i < len(lines) {
+		return lines[i]
+	}
+	return "(end)"
 }

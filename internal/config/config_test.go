@@ -922,6 +922,16 @@ func TestValidation(t *testing.T) {
 	}{
 		{"relative base URL", map[string]string{"DISPATCHER_SERVER_BASE_URL": "/dispatcher"}, "server.base_url"},
 		{"base URL with query", map[string]string{"DISPATCHER_SERVER_BASE_URL": "http://d.example/?"}, "server.base_url"},
+		// The browsers' Origin and Referer are compared with base_url as
+		// written: it must be written as they serialize it.
+		{"base URL with a user", map[string]string{"DISPATCHER_SERVER_BASE_URL": "https://user:secret@d.example"}, "server.base_url: holds a user"},
+		{"base URL scheme in uppercase", map[string]string{"DISPATCHER_SERVER_BASE_URL": "HTTPS://d.example"}, "server.base_url: \"https://d.example\": write its scheme in lowercase"},
+		{"base URL host in uppercase", map[string]string{"DISPATCHER_SERVER_BASE_URL": "https://D.example"}, "write its host in lowercase"},
+		{"base URL default port", map[string]string{"DISPATCHER_SERVER_BASE_URL": "https://d.example:443/"}, "leave out the default port of https"},
+		{"base URL empty port", map[string]string{"DISPATCHER_SERVER_BASE_URL": "http://d.example:/"}, "leave out the default port of http"},
+		{"base URL path not clean", map[string]string{"DISPATCHER_SERVER_BASE_URL": "https://d.example/a//b/"}, `its path is not clean ("/a/b")`},
+		{"cookie path beside the pages", map[string]string{"DISPATCHER_SERVER_BASE_URL": "https://d.example/auth", "DISPATCHER_SERVER_COOKIE_PATH": "/au"}, `server.cookie_path: "/au" does not cover "/auth/"`},
+		{"cookie path below the pages", map[string]string{"DISPATCHER_SERVER_COOKIE_PATH": "/auth"}, `server.cookie_path: "/auth" does not cover "/"`},
 		{"cookie path", map[string]string{"DISPATCHER_SERVER_COOKIE_PATH": "auth"}, "server.cookie_path"},
 		{"bad CIDR", map[string]string{"DISPATCHER_SERVER_TRUSTED_PROXIES": "REMOTE_ADDR"}, "server.trusted_proxies"},
 		{"replicas without Redis", map[string]string{"DISPATCHER_SERVER_REPLICAS_HINT": "3"}, "state.redis_dsn"},
@@ -956,6 +966,18 @@ func TestValidation(t *testing.T) {
 		})
 	}
 
+	// A port other than the default one, a path the cookies cover.
+	for _, env := range []map[string]string{
+		{"DISPATCHER_SERVER_BASE_URL": "https://d.example:8443"},
+		{"DISPATCHER_SERVER_BASE_URL": "http://[::1]:8080/"},
+		{"DISPATCHER_SERVER_BASE_URL": "https://d.example/auth/", "DISPATCHER_SERVER_COOKIE_PATH": "/auth"},
+		{"DISPATCHER_SERVER_BASE_URL": "https://d.example/auth", "DISPATCHER_SERVER_COOKIE_PATH": "/auth/"},
+		{"DISPATCHER_SERVER_BASE_URL": "https://d.example/a/auth", "DISPATCHER_SERVER_COOKIE_PATH": "/a"},
+	} {
+		if _, _, err := Load("", envOf(required(env))); err != nil {
+			t.Errorf("%v: %v", env, err)
+		}
+	}
 	// A key may stay in its own keyring, as during a rotation.
 	if _, _, err := Load("", envOf(required(map[string]string{"DISPATCHER_SECRETS_COOKIE_KEYS_PREVIOUS": hexKey}))); err != nil {
 		t.Errorf("active key also previous: %v", err)
