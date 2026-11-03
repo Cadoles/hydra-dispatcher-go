@@ -201,6 +201,30 @@ func finished(t *testing.T, f *Flow) {
 	}
 }
 
+// finishedWithCR wants f finished by its consent, Hydra's redirect_to and
+// the time kept for a double submission (Q13).
+func finishedWithCR(t *testing.T, f *Flow) {
+	t.Helper()
+	finished(t, f)
+	if f.ConsentRedirect != hydraDone || f.ConsentAt != testNow.UnixMilli() {
+		t.Errorf("Q13, cr %q ct %d", f.ConsentRedirect, f.ConsentAt)
+	}
+}
+
+// shownConsent is the accepted flow past exp whose consent screen was shown:
+// cc is Hydra's consent challenge.
+func shownConsent(t *testing.T) *Flow {
+	f := expired(acceptedFlow(t))
+	f.ConsentChallenge = hydraC
+	return f
+}
+
+// pastExpSays is Hydra on a page past exp without the cookie, on
+// shownConsent (ENT-20, POS-10, BCL-16): the consent read, then rejected.
+func pastExpSays() hydraSays {
+	return hydraSays{GetConsent: {consent: consentRequest(lref, nil)}, RejectConsent: {redirectTo: hydraDone}}
+}
+
 func inChoice(gen int64, csrf string) func(t *testing.T, f *Flow) {
 	return func(t *testing.T, f *Flow) {
 		t.Helper()
@@ -330,6 +354,22 @@ func TestEntry(t *testing.T) {
 			}},
 		{name: "ENT-5, no cookie, in choice", ev: Entry{LoginChallenge: hydraL}, stored: choiceFlow(t),
 			kind: ChoicePage, write: inChoice(1001, newCSRF)},
+		{name: "ENT-20 Q31, past exp, cookie lost: the consent shown rejected", ev: Entry{LoginChallenge: hydraL}, stored: shownConsent(t), says: pastExpSays(),
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
+		{name: "ENT-20, by ref", ev: Entry{Ref: lref}, stored: shownConsent(t), says: pastExpSays(),
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
+		{name: "ENT-20, another browser's cookie", ev: Entry{LoginChallenge: hydraL, Cookie: otherCSRF}, stored: shownConsent(t), says: pastExpSays(),
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
+		{name: "ENT-20, no consent shown: nothing to reject", ev: Entry{LoginChallenge: hydraL}, stored: expired(acceptedFlow(t)),
+			kind: ErrorPage, code: E1002, link: true},
+		{name: "ENT-20, the consent shown names another flow", ev: Entry{LoginChallenge: hydraL}, stored: shownConsent(t),
+			says: hydraSays{GetConsent: {consent: consentRequest("0123456789abcdef0123", nil)}}, kind: ErrorPage, code: E1007, calls: []Op{GetConsent}},
+		{name: "ENT-20 after A3", ev: Entry{LoginChallenge: hydraL}, stored: shownConsent(t),
+			says: hydraSays{GetConsent: {consent: consentRequest(lref, func(r *ory.OAuth2ConsentRequest) { r.Subject = ory.PtrString("bob") })}, RejectConsent: {redirectTo: hydraDone}},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: finished, check: rejected(RejectConsent, "access_denied")},
+		{name: "ENT-20, Hydra 401 on the reject", ev: Entry{LoginChallenge: hydraL}, stored: shownConsent(t),
+			says: hydraSays{GetConsent: {consent: consentRequest(lref, nil)}, RejectConsent: {err: err401}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent, RejectConsent}, write: finished},
 		{name: "ENT-6", ev: Entry{LoginChallenge: hydraL, Cookie: otherCSRF}, stored: acceptedFlow(t),
 			kind: ErrorPage, code: E1008},
 		{name: "ENT-7", ev: Entry{LoginChallenge: hydraL}, stored: finishedFlow(t, "", 0),
@@ -538,6 +578,13 @@ func TestChoose(t *testing.T) {
 			stored: acceptedFlow(t), kind: ErrorPage, code: E1008},
 		{name: "POS-7", ev: post("hydra-sql"), stored: finishedFlow(t, "", 0), kind: ErrorPage, code: E1002, link: true},
 		{name: "POS-8", ev: post("hydra-sql"), kind: ErrorPage, code: E1002},
+		{name: "POS-10 Q31, past exp, cookie lost: the consent shown rejected", ev: Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: cookie, SameOrigin: true},
+			stored: shownConsent(t), says: pastExpSays(),
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
+		{name: "POS-10, no consent shown", ev: Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: cookie, SameOrigin: true},
+			stored: expired(acceptedFlow(t)), kind: ErrorPage, code: E1002, link: true},
+		{name: "POS-9 before POS-10", ev: Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: cookie}, stored: shownConsent(t),
+			kind: ErrorPage, code: E1008},
 		{name: "POS-9", ev: Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: cookie, Cookie: cookie}, stored: choiceFlow(t),
 			kind: ErrorPage, code: E1008},
 		{name: "BCL-11, the first app gone at the start: nothing written", ev: post("hydra-sql"), stored: choiceFlow(t),
@@ -558,6 +605,11 @@ func TestLoop(t *testing.T) {
 		{name: "BCL-2", ev: Loop{Ref: lref}, stored: finishedFlow(t, "", 0), kind: ErrorPage, code: E1002, link: true},
 		{name: "BCL-3", ev: Loop{Ref: lref, Cookie: otherCSRF}, stored: atStep(t, 1, false, false), kind: ErrorPage, code: E1008},
 		{name: "BCL-3, accepted", ev: Loop{Ref: lref}, stored: acceptedFlow(t), kind: ErrorPage, code: E1008},
+		{name: "BCL-16 Q31, past exp, cookie lost: the consent shown rejected", ev: Loop{Ref: lref}, stored: shownConsent(t), says: pastExpSays(),
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
+		{name: "BCL-16, no consent shown", ev: Loop{Ref: lref}, stored: expired(acceptedFlow(t)), kind: ErrorPage, code: E1002, link: true},
+		{name: "BCL-3 before exp, the consent shown", ev: Loop{Ref: lref}, stored: func() *Flow { f := acceptedFlow(t); f.ConsentChallenge = hydraC; return f }(),
+			kind: ErrorPage, code: E1008},
 		{name: "BCL-4 RA5", ev: loop, stored: acceptedFlow(t), kind: Redirect, url: hydraDone},
 		{name: "BCL-4 Q31, past exp", ev: loop, stored: expired(acceptedFlow(t)), kind: Redirect, url: hydraDone},
 		{name: "BCL-4 Q14", ev: loop, stored: func() *Flow { f := acceptedFlow(t); f.ConsentChallenge = hydraC; return f }(),
@@ -749,13 +801,6 @@ func TestConsent(t *testing.T) {
 		return Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: accept, Token: cookie, SameOrigin: true}
 	}
 	read := func(mod func(r *ory.OAuth2ConsentRequest)) said { return said{consent: consentRequest(lref, mod)} }
-	finishedWithCR := func(t *testing.T, f *Flow) {
-		t.Helper()
-		finished(t, f)
-		if f.ConsentRedirect != hydraDone || f.ConsentAt != testNow.UnixMilli() {
-			t.Errorf("Q13, cr %q ct %d", f.ConsentRedirect, f.ConsentAt)
-		}
-	}
 	notOurs := func(t *testing.T, p played) {
 		t.Helper()
 		rejected(RejectConsent, "access_denied")(t, p)
@@ -769,6 +814,13 @@ func TestConsent(t *testing.T) {
 		if f.ConsentRedirect != "" {
 			t.Errorf("the A3 reject's redirect_to is kept: %q", f.ConsentRedirect)
 		}
+	}
+	// rejectedPastExp is a flow CST-22 finished ago: its consent rejected
+	// past exp, the browser without the cookie since.
+	rejectedPastExp := func(ago time.Duration) *Flow {
+		f := finishedFlow(t, "http://hydra/cr", ago)
+		f.ExpiresAt = f.ConsentAt - 1
+		return f
 	}
 	for _, tc := range []pageCase{
 		{name: "CST-1", ev: Consent{}, kind: ErrorPage, code: E1001},
@@ -886,6 +938,23 @@ func TestConsent(t *testing.T) {
 			kind: Redirect, url: "http://hydra/cr", calls: []Op{GetConsent}},
 		{name: "CST-16, POST", ev: post(true), stored: finishedFlow(t, "http://hydra/cr", 9*time.Second), says: hydraSays{GetConsent: read(nil)},
 			kind: Redirect, url: "http://hydra/cr", calls: []Op{GetConsent}},
+		{name: "CST-16 Q31, rejected past exp: replayed without the cookie", ev: Consent{Challenge: hydraC, Post: true, Accept: true, SameOrigin: true},
+			stored: rejectedPastExp(2 * time.Second), says: hydraSays{GetConsent: read(nil)},
+			kind: Redirect, url: "http://hydra/cr", calls: []Op{GetConsent}},
+		{name: "CST-16 Q31, rejected past exp, GET without the cookie", ev: Consent{Challenge: hydraC}, stored: rejectedPastExp(9 * time.Second),
+			says: hydraSays{GetConsent: read(nil)}, kind: Redirect, url: "http://hydra/cr", calls: []Op{GetConsent}},
+		{name: "CST-16 Q31, rejected past exp, beyond the 10 s: CST-7", ev: Consent{Challenge: hydraC}, stored: rejectedPastExp(10 * time.Second),
+			says: hydraSays{GetConsent: read(nil)}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}},
+		{name: "CST-16, settled before exp: the cookie still required", ev: Consent{Challenge: hydraC},
+			stored: func() *Flow {
+				f := finishedFlow(t, "http://hydra/cr", 2*time.Second)
+				f.ExpiresAt = testNow.Add(-time.Second).UnixMilli()
+				return f
+			}(),
+			says: hydraSays{GetConsent: read(nil)}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}},
+		{name: "CST-17 Q31, rejected past exp by a concurrent request", ev: Consent{Challenge: hydraC}, stored: expired(acceptedFlow(t)), reread: rejectedPastExp(0),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err409}},
+			kind: Redirect, url: "http://hydra/cr", calls: []Op{GetConsent, RejectConsent}},
 		{name: "CST-17, finished by a concurrent request", ev: post(true), stored: acceptedFlow(t), reread: finishedFlow(t, "http://hydra/theirs", 0),
 			says: hydraSays{GetConsent: read(nil), AcceptConsent: {err: err409}},
 			kind: Redirect, url: "http://hydra/theirs", calls: []Op{GetConsent, AcceptConsent}},
@@ -918,6 +987,21 @@ func TestConsent(t *testing.T) {
 		{name: "CST-22, Hydra's skip past exp", ev: get, stored: expired(acceptedFlow(t)),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Skip = ory.PtrBool(true) }), RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
+		{name: "CST-22, Hydra 404 on the reject", ev: get, stored: expired(acceptedFlow(t)),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err404}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent, RejectConsent}, write: finished},
+		{name: "CST-22, Hydra 410 on the reject", ev: get, stored: expired(acceptedFlow(t)),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err410}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent, RejectConsent}, write: finished},
+		{name: "CST-22, Hydra 409 on the reject, nothing changed", ev: get, stored: expired(acceptedFlow(t)),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err409}},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}},
+		{name: "CST-22, Hydra 400 on the reject", ev: get, stored: expired(acceptedFlow(t)),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err400}},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}},
+		{name: "CST-22, Hydra unavailable", ev: get, stored: expired(acceptedFlow(t)),
+			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: errDown}},
+			kind: ErrorPage, code: E1004, calls: []Op{GetConsent, RejectConsent}},
 		{name: "CST-22, Hydra 401 on the reject", ev: post(true), stored: expired(acceptedFlow(t)),
 			says: hydraSays{GetConsent: read(nil), RejectConsent: {err: err401}},
 			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent, RejectConsent}, write: finished},

@@ -27,8 +27,10 @@ type client struct {
 	state, nonce  string // of the last authorization request
 }
 
-// findClient returns the id Hydra gave the client named name: hydra-dev
-// imports it at each start of Hydra, under a new id.
+// findClient returns the id of the one client named name. hydra-dev imports
+// it at each start of Hydra, deleting the former first: several of that name
+// are copies left by an import whose delete missed (a JSON without
+// client_id), which the e2e does not choose between.
 func findClient(ctx context.Context, c *http.Client, admin *url.URL, name string) (string, error) {
 	var clients []struct {
 		ID   string `json:"client_id"`
@@ -37,12 +39,19 @@ func findClient(ctx context.Context, c *http.Client, admin *url.URL, name string
 	if err := getJSON(ctx, c, admin.JoinPath("/admin/clients").String(), &clients); err != nil {
 		return "", fmt.Errorf("clients of Hydra: %w", err)
 	}
+	var ids []string
 	for _, cl := range clients {
 		if cl.Name == name {
-			return cl.ID, nil
+			ids = append(ids, cl.ID)
 		}
 	}
-	return "", fmt.Errorf("no client named %q in Hydra: give its id by -client", name)
+	switch len(ids) {
+	case 0:
+		return "", fmt.Errorf("no client named %q in Hydra: give its id by -client", name)
+	case 1:
+		return ids[0], nil
+	}
+	return "", fmt.Errorf("%d clients named %q in Hydra (%s): give the id by -client, or make down in hydra-dev", len(ids), name, strings.Join(ids, ", "))
 }
 
 // authURL starts an authorization: openid profile email, as hydra-dev's test
@@ -154,7 +163,9 @@ func (c *client) loginSkip(ctx context.Context, challenge string) (bool, error) 
 // identity is what the final id_token must say.
 type identity struct {
 	Sub, Email string
-	AMR        []string
+	// ACR is the flow's: without one in the seed, min(2, steps) (FIN-1).
+	ACR string
+	AMR []string
 }
 
 func (want identity) check(claims map[string]any) error {
@@ -164,6 +175,9 @@ func (want identity) check(claims map[string]any) error {
 	}
 	if want.Email != "" && claims["email"] != want.Email {
 		problems = append(problems, fmt.Sprintf("email %v, want %s", claims["email"], want.Email))
+	}
+	if want.ACR != "" && claims["acr"] != want.ACR {
+		problems = append(problems, fmt.Sprintf("acr %v, want %s", claims["acr"], want.ACR))
 	}
 	if want.AMR != nil {
 		var amr []string

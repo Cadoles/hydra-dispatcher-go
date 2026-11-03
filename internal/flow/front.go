@@ -44,6 +44,9 @@ type Consent struct {
 	Accept     bool
 	Token      string
 	SameOrigin bool
+	// ref is the flow a page already read, when it rejects the consent of
+	// that flow (pastExp): the consent request must name it.
+	ref string
 }
 
 func (Entry) event()   {}
@@ -76,10 +79,13 @@ func (r *run) entry(ev Entry) Outcome {
 	case Expired:
 		return r.expire(f) // ENT-8, EXP-2
 	case Accepted:
-		if !sameCSRF(ev.Cookie, f.CSRF) {
-			return s.fail(E1008) // ENT-6, ENT-18
+		switch {
+		case sameCSRF(ev.Cookie, f.CSRF):
+			return s.redirect(f.ResumeURL(r.Env.BaseURL)) // ENT-4, ENT-19 (Q1)
+		case r.now() > f.ExpiresAt:
+			return r.pastExp(ref, f) // ENT-20
 		}
-		return s.redirect(f.ResumeURL(r.Env.BaseURL)) // ENT-4, ENT-19 (Q1)
+		return s.fail(E1008) // ENT-6, ENT-18
 	}
 	switch {
 	case !sameCSRF(ev.Cookie, f.CSRF) && byRef:
@@ -175,10 +181,13 @@ func (r *run) choose(ev Choose) Outcome {
 	case Expired:
 		return r.expire(f)
 	case Accepted:
-		if !csrf {
-			return s.fail(E1008) // POS-6
+		switch {
+		case csrf:
+			return s.redirect(f.ResumeURL(r.Env.BaseURL)) // POS-5 (Q1)
+		case r.now() > f.ExpiresAt:
+			return r.pastExp(ref, f) // POS-10
 		}
-		return s.redirect(f.ResumeURL(r.Env.BaseURL)) // POS-5 (Q1)
+		return s.fail(E1008) // POS-6
 	}
 	if !csrf {
 		// POS-3 (Q7): replaced as on GET /, the page shown again, no message.
@@ -233,6 +242,9 @@ func (r *run) loop(ev Loop) Outcome {
 		return r.expire(f) // BCL-13
 	}
 	if !sameCSRF(ev.Cookie, f.CSRF) {
+		if state == Accepted && r.now() > f.ExpiresAt {
+			return r.pastExp(ev.Ref, f) // BCL-16
+		}
 		return s.fail(E1008) // BCL-3 (Q7)
 	}
 	k := f.Current
@@ -316,6 +328,11 @@ func (r *run) consent(ev Consent) Outcome {
 	if !isRef(ref) {
 		return s.absent() // CST-6
 	}
+	if ev.ref != "" && ref != ev.ref {
+		// The consent the flow showed names another flow: never decided on
+		// this one.
+		return s.fail(E1007)
+	}
 	if !r.Loaded {
 		return Outcome{Load: ref}
 	}
@@ -325,7 +342,12 @@ func (r *run) consent(ev Consent) Outcome {
 	case Absent:
 		return s.absent() // CST-6 (T2): never accepted from the remember cookie
 	case Finished:
-		if f.ConsentRedirect != "" && csrf && r.now()-f.ConsentAt < consentReplay.Milliseconds() {
+		// CST-16 (Q13): with the cookie, or without it for a consent settled
+		// past exp, which only CST-22's reject is (Q31): the browser lost the
+		// cookie with exp, and the redirect_to of a login_required reject
+		// grants nothing.
+		replay := csrf || f.ConsentAt > f.ExpiresAt
+		if f.ConsentRedirect != "" && replay && r.now()-f.ConsentAt < consentReplay.Milliseconds() {
 			return s.redirect(f.ConsentRedirect) // CST-16 (Q13)
 		}
 		return s.ended(f) // CST-7
@@ -376,6 +398,20 @@ func (r *run) consent(ev Consent) Outcome {
 		out = out.writing(g)
 	}
 	return out
+}
+
+// pastExp answers a page on the accepted flow f of ref past exp, without the
+// cookie, which the browser lost with exp (ENT-20, POS-10, BCL-16; Q31,
+// revue R15): the consent the flow showed is rejected, as /consent does
+// (CST-22); without one, there is nothing to reject, Hydra 2.1 refusing a
+// reject of L: page E1002. Never the resume target: the apps know the ref
+// (ENT-18), and the consent challenge would let one that reaches Hydra's
+// admin accept the consent itself.
+func (r *run) pastExp(ref string, f *Flow) Outcome {
+	if f.ConsentChallenge == "" {
+		return r.page().ended(f)
+	}
+	return r.consent(Consent{Challenge: f.ConsentChallenge, ref: ref})
 }
 
 // notOurs rejects the consent of a flow the dispatcher did not accept, or

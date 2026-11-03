@@ -32,10 +32,14 @@ func (in Inbox) Listing() (map[string]bool, error) {
 	return names, nil
 }
 
+// settle is how long Collect waits first: the recorder writes once the
+// exchange is over.
+var settle = time.Second
+
 // Collect moves into dir the exchanges written since before, a Listing, and
 // returns how many. None is an error: the recorder is not running.
 func (in Inbox) Collect(before map[string]bool, dir string) (int, error) {
-	time.Sleep(time.Second) // the recorder writes once the exchange is over
+	time.Sleep(settle)
 	now, err := in.Listing()
 	if err != nil {
 		return 0, err

@@ -46,9 +46,9 @@ const (
 // signing in to hydra-sql. hydra-oidc's claims come from the IdP, and reach
 // its consent through the step's context (A2).
 var identities = map[string]identity{
-	"hydra-oidc":    {Sub: alice, Email: "alice@example.com", AMR: []string{"oidc"}},
-	"hydra-sql":     {Sub: isabelle, Email: isabelle, AMR: []string{"pwd"}},
-	"hydra-sql-2fa": {Sub: isabelle, Email: isabelle, AMR: []string{"pwd", "otp"}},
+	"hydra-oidc":    {Sub: alice, Email: "alice@example.com", ACR: "1", AMR: []string{"oidc"}},
+	"hydra-sql":     {Sub: isabelle, Email: isabelle, ACR: "1", AMR: []string{"pwd"}},
+	"hydra-sql-2fa": {Sub: isabelle, Email: isabelle, ACR: "2", AMR: []string{"pwd", "otp"}},
 }
 
 type scenario struct {
@@ -286,6 +286,8 @@ type login struct {
 
 // outcome is how an authorization went.
 type outcome struct {
+	// entry is the first page driven, the dispatcher's choice page.
+	entry *url.URL
 	// seen lists the pages met, in order: choice, consent, hydra-sql,
 	// hydra-2fa, idp, then callback or error.
 	seen []string
@@ -318,7 +320,7 @@ func (d *driver) authorize(l login) (outcome, error) {
 // drive acts on each page as l says, up to the client's redirect_uri or an
 // error page of the dispatcher.
 func (d *driver) drive(p page, l login) (outcome, error) {
-	var o outcome
+	o := outcome{entry: p.URL}
 	for range 12 {
 		kind := d.kind(p)
 		// A page met twice in a row refused what was sent: hydra-sql's
@@ -476,7 +478,7 @@ func (d *driver) granted(o outcome, want identity) error {
 		return err
 	}
 	if d.symfony {
-		want.Email, want.AMR = "", nil
+		want.Email, want.ACR, want.AMR = "", "", nil
 	}
 	return want.check(claims)
 }
@@ -535,8 +537,11 @@ func (d *driver) secondLogin() error {
 }
 
 // secondLoginOtherSubject signs in with hydra-sql, then in the same browser
-// as someone else: the dispatcher refuses at the final accept, page E1003
-// (FIN-3).
+// as someone else: the dispatcher refuses at the final accept, page E1003,
+// and finishes the flow, which a reload of the choice page shows: E1002
+// (FIN-3, ENT-7). Hydra's admin cannot tell the reject itself: 2.1 reads a
+// rejected login request in 200 until its verifier is followed, and 2.2 no
+// longer tells a handled request from a pending one; go 05:0103 shows it.
 func (d *driver) secondLoginOtherSubject() error {
 	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept"}); err != nil {
 		return fmt.Errorf("first login: %w", err)
@@ -547,6 +552,13 @@ func (d *driver) secondLoginOtherSubject() error {
 	}
 	if o.code != "E1003" {
 		return fmt.Errorf("pages %v, ended on %q %s, want the page E1003", o.seen, o.code, endURL(o))
+	}
+	p, err := d.b.get(o.entry.String())
+	if err != nil {
+		return err
+	}
+	if code := errorCode.FindString(p.Body); d.kind(p) != "error" || code != "E1002" {
+		return fmt.Errorf("choice page reloaded after E1003: %q, want the page E1002 of a finished flow: %w", code, errUnexpected(p))
 	}
 	return nil
 }
@@ -611,7 +623,8 @@ func promptConsent(button string) func(*driver) error {
 
 // backToChoice goes back to the choice page twice before signing in: from
 // the browser's history, posting the choice form again (POS-4), then by
-// reloading the choice page (ENT-3).
+// reloading the choice page (ENT-3). Both flows start with hydra-sql: the
+// step challenge, new in the generation POS-4 starts, tells them apart.
 func (d *driver) backToChoice() error {
 	choice, err := d.start("")
 	if err != nil {
@@ -620,6 +633,7 @@ func (d *driver) backToChoice() error {
 	if d.kind(choice) != "choice" {
 		return fmt.Errorf("no choice page: %w", errUnexpected(choice))
 	}
+	var challenges []string
 	for _, flow := range []string{"hydra-sql", "hydra-sql-2fa"} {
 		p, err := d.choose(choice, flow)
 		if err != nil {
@@ -628,6 +642,12 @@ func (d *driver) backToChoice() error {
 		if d.kind(p) != "hydra-sql" {
 			return fmt.Errorf("%s chosen: %w", flow, errUnexpected(p))
 		}
+		challenges = append(challenges, p.URL.Query().Get("login_challenge"))
+	}
+	// Symfony's step challenges are its own business (-symfony checks the
+	// subject only).
+	if !d.symfony && (challenges[0] == "" || challenges[1] == challenges[0]) {
+		return fmt.Errorf("the choice form posted again from the history: step challenge %q, then %q; want a new one (POS-4)", challenges[0], challenges[1])
 	}
 	p, err := d.b.get(choice.URL.String())
 	if err != nil {

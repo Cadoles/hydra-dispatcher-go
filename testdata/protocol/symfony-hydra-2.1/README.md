@@ -50,8 +50,8 @@ a directory means updating `emulated_test.go` and `client_test.go`.
 - `hydra`: the dispatcher to Hydra's admin API (`/admin/oauth2/auth/requests/...`).
 - `seq` follows arrival across both legs: the Hydra calls a front request
   caused come right after it. Numbering runs from `01` to `08`, then starts
-  again at `0001` in `11` (second session): it is unique within a directory
-  only.
+  again at `0001` in `11` (second session); `27` comes from a third session,
+  on 2026-11-03, and runs from `0050`: it is unique within a directory only.
 - JSON bodies are kept as received (re-indented); any other body (HTML page,
   form) is a JSON string.
 - The choice form posts the flow id: `0` oidc, `1` sql, `2` sql-2fa (sql, then

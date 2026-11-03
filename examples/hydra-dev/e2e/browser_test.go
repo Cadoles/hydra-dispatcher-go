@@ -135,16 +135,18 @@ func TestFind(t *testing.T) {
 }
 
 func TestIdentityCheck(t *testing.T) {
-	want := identity{Sub: "test2@test.com", Email: "test2@test.com", AMR: []string{"pwd", "otp"}}
+	want := identity{Sub: "test2@test.com", Email: "test2@test.com", ACR: "2", AMR: []string{"pwd", "otp"}}
 	for _, tc := range []struct {
 		name    string
 		claims  map[string]any
 		wantErr string
 	}{
-		{"all there", map[string]any{"sub": "test2@test.com", "email": "test2@test.com", "amr": []any{"pwd", "otp"}}, ""},
-		{"email lost", map[string]any{"sub": "test2@test.com", "email": nil, "amr": []any{"pwd", "otp"}}, "email <nil>"},
-		{"amr in another order", map[string]any{"sub": "test2@test.com", "email": "test2@test.com", "amr": []any{"otp", "pwd"}}, "amr"},
-		{"other subject", map[string]any{"sub": "test3@test.com", "email": "test2@test.com", "amr": []any{"pwd", "otp"}}, "sub test3@test.com"},
+		{"all there", map[string]any{"sub": "test2@test.com", "email": "test2@test.com", "acr": "2", "amr": []any{"pwd", "otp"}}, ""},
+		{"email lost", map[string]any{"sub": "test2@test.com", "email": nil, "acr": "2", "amr": []any{"pwd", "otp"}}, "email <nil>"},
+		{"amr in another order", map[string]any{"sub": "test2@test.com", "email": "test2@test.com", "acr": "2", "amr": []any{"otp", "pwd"}}, "amr"},
+		{"other subject", map[string]any{"sub": "test3@test.com", "email": "test2@test.com", "acr": "2", "amr": []any{"pwd", "otp"}}, "sub test3@test.com"},
+		{"acr of one step", map[string]any{"sub": "test2@test.com", "email": "test2@test.com", "acr": "1", "amr": []any{"pwd", "otp"}}, "acr 1, want 2"},
+		{"acr missing", map[string]any{"sub": "test2@test.com", "email": "test2@test.com", "amr": []any{"pwd", "otp"}}, "acr <nil>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := want.check(tc.claims)
