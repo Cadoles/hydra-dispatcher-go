@@ -100,15 +100,33 @@ The golden files are rewritten with `-update`; review the diff:
   (`internal/front/testdata/pages`): `go test ./internal/front -args -update`.
 
 The full stack (Hydra, login apps, Postgres, Redis) runs from the sibling
-`hydra-dev` repository.
+`hydra-dev` repository: `make up-go` there serves this dispatcher, built from
+this checkout, on Hydra 2.1 (`make up-go-hydra22` on 2.2).
+
+## End-to-end run
+
+`examples/hydra-dev/e2e` is the browser and the OAuth2 client on hydra-dev's
+three flows, through the real login apps, and checks the claims of the final
+`id_token`: first login on each flow, second login (Hydra's skip ignored, then
+another account refused), `prompt=consent` accepted and refused, back to the
+choice. Start `make up-go` in `hydra-dev`, whose README sets the
+`*.hydra.test` names up, then:
+
+```sh
+go run ./examples/hydra-dev/e2e            # every default scenario
+go run ./examples/hydra-dev/e2e -h         # flags and scenarios
+go run ./examples/hydra-dev/e2e -v second-login
+```
 
 ## Fixture tools
 
 - `tools/recorder`: recording reverse proxy. `make capture` in `hydra-dev`
   builds it from `tools/recorder/Dockerfile` and puts it in front of the
-  dispatcher and between the dispatcher and Hydra; captured exchanges land in
-  `testdata/capture/` (gitignored) and are sorted per scenario under
-  `testdata/protocol/`.
+  Symfony dispatcher and between the dispatcher and Hydra, `make capture-go`
+  in front of this one; captured exchanges land in `testdata/capture/`
+  (gitignored) and are sorted per scenario under `testdata/protocol/`, by
+  `tools/scenarios` or by the e2e's `-into` (its `-symfony` drives the
+  Symfony pages).
 - `tools/flowfixtures`: records Hydra 2.2 login and consent challenges with the
   matching admin API responses, for `internal/hydra/flowcodec`. Run it against
   `make up-hydra22`:

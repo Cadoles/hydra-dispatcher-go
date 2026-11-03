@@ -1,0 +1,99 @@
+{
+  "seq": 45,
+  "leg": "front",
+  "time": "2026-11-03T10:18:13.406882159Z",
+  "duration_ms": 0,
+  "request": {
+    "method": "PUT",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth/requests/consent/accept?consent_challenge=4d47dc69ec7a96ecefe591e4890aaf6c",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "212"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.6.23"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": {
+      "grant_scope": [
+        "email",
+        "openid",
+        "profile",
+        "email"
+      ],
+      "grant_access_token_audience": [],
+      "remember": false,
+      "remember_for": 0,
+      "session": {
+        "access_token": null,
+        "id_token": {
+          "email": "test2@test.com",
+          "email_verified": true
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "83"
+      ],
+      "Content-Security-Policy": [
+        "base-uri 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:13 GMT"
+      ],
+      "Deprecation": [
+        "@1793577600"
+      ],
+      "Link": [
+        "</admin/oauth2/auth/requests/consent/accept>; rel=\"successor-version\""
+      ],
+      "Permissions-Policy": [
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Trace-Id": [
+        "b2f43a60e7db0c3eb3c5626d1aa21b84"
+      ]
+    },
+    "body": {
+      "redirect_to": "http://dispatcher.hydra.test/oauth2/auth?ref=4d47dc69ec7a96ecefe5"
+    }
+  }
+}

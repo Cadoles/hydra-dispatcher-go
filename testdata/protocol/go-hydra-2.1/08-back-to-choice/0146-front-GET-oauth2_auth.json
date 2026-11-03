@@ -1,0 +1,76 @@
+{
+  "seq": 146,
+  "leg": "front",
+  "time": "2026-11-03T10:18:20.137647173Z",
+  "duration_ms": 0,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/oauth2/auth?ref=26d729efee7449d03c2a",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=a0b59810d32b63560afdb7cf1cb52f482fee55857f140b26d9cc28aa30ff2f38"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/examples/hydra-dev/e2e"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 303,
+    "headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "108"
+      ],
+      "Content-Security-Policy": [
+        "base-uri 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self'"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:20 GMT"
+      ],
+      "Location": [
+        "http://oidc.hydra.test/consent?consent_challenge=26d729efee7449d03c2a1621a89c4246"
+      ],
+      "Permissions-Policy": [
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Trace-Id": [
+        "54b017a0ccfe8a4b39fb2a253440209e"
+      ]
+    },
+    "body": "<a href=\"http://oidc.hydra.test/consent?consent_challenge=26d729efee7449d03c2a1621a89c4246\">See Other</a>.\n\n"
+  }
+}

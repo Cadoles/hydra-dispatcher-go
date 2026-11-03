@@ -1,0 +1,73 @@
+{
+  "seq": 136,
+  "leg": "front",
+  "time": "2026-11-03T10:18:20.092506516Z",
+  "duration_ms": 3,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/?login_challenge=a77fa8e7c3fd447591bb615430f57367",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/examples/hydra-dev/e2e"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "1947"
+      ],
+      "Content-Security-Policy": [
+        "base-uri 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self'"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:20 GMT"
+      ],
+      "Permissions-Policy": [
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "Set-Cookie": [
+        "dispatcher_flow_csrf=a0b59810d32b63560afdb7cf1cb52f482fee55857f140b26d9cc28aa30ff2f38; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Trace-Id": [
+        "27ec9d4ce60e211bd39bc61701cc495a"
+      ]
+    },
+    "body": "<!doctype html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"robots\" content=\"noindex\">\n<title>Choisissez votre mode de connexion</title>\n<link rel=\"stylesheet\" href=\"/static/base.css?v=737a015ac8fc\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?v=2ede3c5a8501\">\n</head>\n<body>\n<header><div class=\"client\"><span>OIDC Test Client</span></div></header>\n<main>\n\n<h1>Choisissez votre mode de connexion</h1>\n<p class=\"lead\">pour vous connecter à OIDC Test Client</p>\n\n\n<form method=\"post\" action=\"/?login_challenge=a77fa8e7c3fd447591bb615430f57367\">\n<input type=\"hidden\" name=\"csrf_token\" value=\"a0b59810d32b63560afdb7cf1cb52f482fee55857f140b26d9cc28aa30ff2f38\">\n<input type=\"hidden\" name=\"login_challenge\" value=\"a77fa8e7c3fd447591bb615430f57367\">\n<fieldset class=\"flows\">\n<legend>Choisissez votre mode de connexion</legend>\n<label class=\"flow\"><input type=\"radio\" name=\"flow\" value=\"hydra-oidc\" required><span class=\"title\">Hydra OIDC</span><span class=\"description\">Authentification via un fournisseur OIDC externe</span></label>\n<label class=\"flow\"><input type=\"radio\" name=\"flow\" value=\"hydra-sql\" required><span class=\"title\">Hydra SQL</span><span class=\"description\">Authentification via SQL</span></label>\n<label class=\"flow\"><input type=\"radio\" name=\"flow\" value=\"hydra-sql-2fa\" required><span class=\"title\">Hydra SQL 2FA</span><span class=\"description\">Authentification via SQL double facteur</span></label>\n\n</fieldset>\n<button type=\"submit\" autofocus>Continuer</button>\n</form>\n\n\n</main>\n<footer><form method=\"post\" class=\"locales\" aria-label=\"Langue\"><input type=\"hidden\" name=\"return\" value=\"/?login_challenge=a77fa8e7c3fd447591bb615430f57367\"><button type=\"submit\" formaction=\"/locale/fr\" lang=\"fr\" aria-current=\"true\" disabled>Français</button><button type=\"submit\" formaction=\"/locale/en\" lang=\"en\">English</button></form></footer>\n</body>\n</html>\n"
+  }
+}

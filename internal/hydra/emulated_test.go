@@ -549,11 +549,10 @@ func TestServedKeepsHydraMembers(t *testing.T) {
 // aggregates so far, which the caller sets: those Symfony served.
 func TestSymfonyParity(t *testing.T) {
 	for _, capture := range []string{
-		"05-sql-2fa-consent-screen-accept-INCOMPLETE-no-2fa-app-calls",
 		"07-oidc-after-sql-retry-consent-skipped",
-		"09-sql-2fa-consent-skipped-INCOMPLETE-no-2fa-app-calls",
 		"12-sql-consent-skipped",
 		"14-sql-2fa-consent-skipped",
+		"27-back-to-sql-2fa",
 	} {
 		t.Run(capture, func(t *testing.T) {
 			files, err := filepath.Glob(filepath.Join(symfony21, capture, "*.json"))

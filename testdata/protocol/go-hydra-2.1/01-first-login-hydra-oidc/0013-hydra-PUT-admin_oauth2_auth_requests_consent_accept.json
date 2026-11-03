@@ -1,0 +1,74 @@
+{
+  "seq": 13,
+  "leg": "hydra",
+  "time": "2026-11-03T10:18:10.890856423Z",
+  "duration_ms": 7,
+  "request": {
+    "method": "PUT",
+    "host": "recorder:8081",
+    "uri": "/admin/oauth2/auth/requests/consent/accept?consent_challenge=89b3a4271231451ca06caf4144156aad",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "348"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go"
+      ],
+      "X-Trace-Id": [
+        "9cac8a288dab2deadcbacd8260aee4d6"
+      ]
+    },
+    "body": {
+      "grant_access_token_audience": [],
+      "grant_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "remember": true,
+      "remember_for": 2629800,
+      "session": {
+        "access_token": {},
+        "id_token": {
+          "client_id": "hydra-oidc",
+          "email": "alice@example.com",
+          "email_verified": true,
+          "family_name": "Anderson",
+          "given_name": "Alice",
+          "locale": "fr",
+          "name": "Alice Anderson",
+          "preferred_username": "alice"
+        }
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "private, no-cache, no-store, must-revalidate"
+      ],
+      "Content-Length": [
+        "367"
+      ],
+      "Content-Type": [
+        "application/json; charset=utf-8"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:10 GMT"
+      ]
+    },
+    "body": {
+      "redirect_to": "http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7\u0026consent_verifier=3f388b9f37fe44b3a0de99448d422a43\u0026nonce=9a6208e002cde8a3e2e66ec24302415a\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=5b297d587e08da23d4c2add63a9cb5a6"
+    }
+  }
+}

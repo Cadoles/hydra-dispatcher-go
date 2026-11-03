@@ -1,0 +1,82 @@
+{
+  "seq": 106,
+  "leg": "front",
+  "time": "2026-11-03T10:18:17.695292993Z",
+  "duration_ms": 0,
+  "request": {
+    "method": "POST",
+    "host": "dispatcher.hydra.test",
+    "uri": "/?login_challenge=8f010b1f7b4344719c4f7f2b720bc97a",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Content-Length": [
+        "139"
+      ],
+      "Content-Type": [
+        "application/x-www-form-urlencoded"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=2bdafd31efc35fb879d388e046c46e9bf7abab7991218564bc4cb0b12487cad1"
+      ],
+      "Origin": [
+        "http://dispatcher.hydra.test"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/examples/hydra-dev/e2e"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    },
+    "body": "csrf_token=2bdafd31efc35fb879d388e046c46e9bf7abab7991218564bc4cb0b12487cad1&flow=hydra-sql&login_challenge=8f010b1f7b4344719c4f7f2b720bc97a"
+  },
+  "response": {
+    "status": 303,
+    "headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "0"
+      ],
+      "Content-Security-Policy": [
+        "base-uri 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self'"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:17 GMT"
+      ],
+      "Location": [
+        "http://sql.hydra.test/login?login_challenge=d359817bd1826fe97d3e55fc757915e2"
+      ],
+      "Permissions-Policy": [
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Trace-Id": [
+        "eb740ffc7df97ba33045ada8537458fd"
+      ]
+    }
+  }
+}

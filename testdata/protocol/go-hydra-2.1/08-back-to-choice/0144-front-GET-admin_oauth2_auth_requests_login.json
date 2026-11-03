@@ -1,0 +1,120 @@
+{
+  "seq": 144,
+  "leg": "front",
+  "time": "2026-11-03T10:18:20.110654021Z",
+  "duration_ms": 0,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/admin/oauth2/auth/requests/login?login_challenge=26d729efee7449d03c2a4bb9e29c24d2",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "User-Agent": [
+        "OpenAPI-Generator/1.0.0/go"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.6.22"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "1372"
+      ],
+      "Content-Security-Policy": [
+        "base-uri 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self'"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:20 GMT"
+      ],
+      "Permissions-Policy": [
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Trace-Id": [
+        "af11d51f688aa1124e14d44880ebbc71"
+      ]
+    },
+    "body": {
+      "challenge": "26d729efee7449d03c2a4bb9e29c24d2",
+      "client": {
+        "allowed_cors_origins": [],
+        "audience": [],
+        "client_id": "0d8c5733-0d4c-472f-98f7-7868de2f2bc7",
+        "client_name": "OIDC Test Client",
+        "client_secret_expires_at": 0,
+        "client_uri": "",
+        "contacts": [],
+        "created_at": "2026-10-29T10:08:03Z",
+        "grant_types": [
+          "authorization_code",
+          "refresh_token"
+        ],
+        "jwks": {},
+        "logo_uri": "",
+        "metadata": {},
+        "owner": "",
+        "policy_uri": "",
+        "post_logout_redirect_uris": [
+          "http://oidc.client.test/"
+        ],
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid email profile offline_access",
+        "skip_consent": false,
+        "subject_type": "public",
+        "token_endpoint_auth_method": "client_secret_basic",
+        "tos_uri": "",
+        "updated_at": "2026-10-29T10:08:02.972139Z",
+        "userinfo_signed_response_alg": "none"
+      },
+      "oidc_context": {},
+      "request_url": "http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7\u0026nonce=8f63a4bf51053de114ec7a39344309db\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=8312d0182bd8bdb10b06a00be4d30396",
+      "requested_access_token_audience": [],
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "session_id": "627224ba-133c-423a-bcfd-2839ce844783",
+      "skip": false,
+      "subject": "",
+      "x_dispatcher_claims": {},
+      "x_dispatcher_restart_url": "http://dispatcher.hydra.test/?ref=26d729efee7449d03c2a"
+    }
+  }
+}

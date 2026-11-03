@@ -1,0 +1,64 @@
+{
+  "seq": 47,
+  "leg": "hydra",
+  "time": "2026-11-03T10:18:13.411483325Z",
+  "duration_ms": 6,
+  "request": {
+    "method": "PUT",
+    "host": "recorder:8081",
+    "uri": "/admin/oauth2/auth/requests/login/accept?login_challenge=425b8d9fb2f64a77a1fa278f1158eb77",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Content-Length": [
+        "150"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go"
+      ],
+      "X-Trace-Id": [
+        "9511fa5da9f06cad3b4bfe51a0065933"
+      ]
+    },
+    "body": {
+      "acr": "2",
+      "amr": [
+        "pwd",
+        "otp"
+      ],
+      "context": {
+        "x_dispatcher_ref": "4d47dc69ec7a96ecefe5"
+      },
+      "remember": true,
+      "remember_for": 86400,
+      "subject": "test2@test.com"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "private, no-cache, no-store, must-revalidate"
+      ],
+      "Content-Length": [
+        "365"
+      ],
+      "Content-Type": [
+        "application/json; charset=utf-8"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:13 GMT"
+      ]
+    },
+    "body": {
+      "redirect_to": "http://public.hydra.test/oauth2/auth?client_id=0d8c5733-0d4c-472f-98f7-7868de2f2bc7\u0026login_verifier=9cb7e2f5485943a5941687970968824d\u0026nonce=bb2f0011228716fcf46932afec28994e\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=2cd49ab5b1f99f68ecc4b5e49ba0e957"
+    }
+  }
+}

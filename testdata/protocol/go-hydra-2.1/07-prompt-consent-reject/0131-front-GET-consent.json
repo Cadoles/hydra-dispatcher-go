@@ -1,0 +1,73 @@
+{
+  "seq": 131,
+  "leg": "front",
+  "time": "2026-11-03T10:18:19.0481436Z",
+  "duration_ms": 5,
+  "request": {
+    "method": "GET",
+    "host": "dispatcher.hydra.test",
+    "uri": "/consent?consent_challenge=6c9a3a7708f34f5b8d90c04196327750",
+    "headers": {
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Accept-Language": [
+        "fr"
+      ],
+      "Cookie": [
+        "dispatcher_flow_csrf=6c88edf856cab69d90a1c111aa5e9c46b9ef21781c9d32baf19da5ff52e281be"
+      ],
+      "User-Agent": [
+        "hydra-dispatcher-go/examples/hydra-dev/e2e"
+      ],
+      "Via": [
+        "1.1 Caddy"
+      ],
+      "X-Forwarded-For": [
+        "10.0.5.1"
+      ],
+      "X-Forwarded-Host": [
+        "dispatcher.hydra.test"
+      ],
+      "X-Forwarded-Proto": [
+        "http"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Cache-Control": [
+        "no-store"
+      ],
+      "Content-Length": [
+        "1775"
+      ],
+      "Content-Security-Policy": [
+        "base-uri 'none'; connect-src 'self'; default-src 'none'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data: https: http:; script-src 'self'; style-src 'self'"
+      ],
+      "Content-Type": [
+        "text/html; charset=utf-8"
+      ],
+      "Date": [
+        "Tue, 03 Nov 2026 10:18:19 GMT"
+      ],
+      "Permissions-Policy": [
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      ],
+      "Referrer-Policy": [
+        "strict-origin-when-cross-origin"
+      ],
+      "X-Content-Type-Options": [
+        "nosniff"
+      ],
+      "X-Frame-Options": [
+        "DENY"
+      ],
+      "X-Trace-Id": [
+        "f7166872e50a41cd55b6cc9c9cf558e1"
+      ]
+    },
+    "body": "<!doctype html>\n<html lang=\"fr\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"robots\" content=\"noindex\">\n<title>Autoriser l&#39;accès à vos données</title>\n<link rel=\"stylesheet\" href=\"/static/base.css?v=737a015ac8fc\">\n<link rel=\"stylesheet\" href=\"/static/theme.css?v=2ede3c5a8501\">\n</head>\n<body>\n<header><div class=\"client\"><span>OIDC Test Client</span></div></header>\n<main>\n\n<h1>Autoriser l&#39;accès à vos données</h1>\n<p class=\"lead\">OIDC Test Client demande l&#39;accès aux données suivantes :</p>\n\n<ul class=\"scopes\">\n<li><span class=\"scope\">Vous identifier</span>\n<ul><li>Identifiant technique</li></ul></li>\n<li><span class=\"scope\">Votre profil</span></li>\n<li><span class=\"scope\">Votre adresse e-mail</span>\n<ul><li>Adresse e-mail</li></ul></li>\n<li><span class=\"scope\">Autres données</span>\n<ul><li>firstname</li><li>lastname</li></ul></li>\n</ul>\n\n\n<form method=\"post\" action=\"/consent?consent_challenge=6c9a3a7708f34f5b8d90c04196327750\">\n<input type=\"hidden\" name=\"csrf_token\" value=\"6c88edf856cab69d90a1c111aa5e9c46b9ef21781c9d32baf19da5ff52e281be\">\n<input type=\"hidden\" name=\"consent_challenge\" value=\"6c9a3a7708f34f5b8d90c04196327750\">\n<button type=\"submit\" name=\"action\" value=\"accept\">Autoriser</button>\n<button type=\"submit\" name=\"action\" value=\"reject\" class=\"secondary\">Refuser</button>\n</form>\n\n</main>\n<footer><form method=\"post\" class=\"locales\" aria-label=\"Langue\"><input type=\"hidden\" name=\"return\" value=\"/consent?consent_challenge=6c9a3a7708f34f5b8d90c04196327750\"><button type=\"submit\" formaction=\"/locale/fr\" lang=\"fr\" aria-current=\"true\" disabled>Français</button><button type=\"submit\" formaction=\"/locale/en\" lang=\"en\">English</button></form></footer>\n</body>\n</html>\n"
+  }
+}

@@ -27,7 +27,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
@@ -39,6 +38,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/tools/capture"
 )
 
 // Positions of the flows on the choice page, sorted by id.
@@ -122,7 +123,7 @@ func run() error {
 	client := flag.String("client", "", "OAuth2 client id registered in Hydra")
 	redirect := flag.String("redirect", "http://oidc.client.test/auth/callback", "redirect_uri registered for the client")
 	prefix := flag.String("prefix", "", `path prefix of the emulated API: "" (Symfony) or "/admin"`)
-	capture := flag.String("capture", "testdata/capture", "directory the recorder writes to")
+	captureDir := flag.String("capture", "testdata/capture", "directory the recorder writes to")
 	into := flag.String("into", "", "directory receiving one <NN>-<scenario> directory per scenario")
 	first := flag.Int("first", 1, "number of the first scenario directory")
 	flag.Parse()
@@ -140,6 +141,7 @@ func run() error {
 		return err
 	}
 	d.app = &http.Client{Timeout: 10 * time.Second, CheckRedirect: noRedirect}
+	inbox := capture.Inbox(*captureDir)
 
 	names := flag.Args()
 	type planned struct {
@@ -153,15 +155,13 @@ func run() error {
 			continue
 		}
 		dir := filepath.Join(*into, fmt.Sprintf("%02d-%s", *first+len(plan), s.name))
-		// The recorder numbers from the files left in -capture, which this
-		// tool empties: a rerun's files would sit beside the earlier ones.
-		if err := ensureEmpty(dir); err != nil {
+		if err := capture.EnsureEmpty(dir); err != nil {
 			return err
 		}
 		plan = append(plan, planned{s.name, s.run, dir})
 	}
 	for _, s := range plan {
-		before, err := captured(*capture)
+		before, err := inbox.Listing()
 		if err != nil {
 			return err
 		}
@@ -173,26 +173,11 @@ func run() error {
 		if err := s.run(d); err != nil {
 			return fmt.Errorf("%s: %w", s.name, err)
 		}
-		moved, err := collect(*capture, before, s.dir)
+		moved, err := inbox.Collect(before, s.dir)
 		if err != nil {
 			return err
 		}
 		slog.Info("captured", "dir", s.dir, "exchanges", moved)
-	}
-	return nil
-}
-
-// ensureEmpty fails when dir already holds files.
-func ensureEmpty(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if len(entries) > 0 {
-		return fmt.Errorf("%s is not empty: remove it to record the scenario again", dir)
 	}
 	return nil
 }
@@ -631,63 +616,4 @@ func (d *driver) appCall(method, kind, action, challenge, body string) (int, []b
 	data, err := io.ReadAll(resp.Body)
 	slog.Info("app", "method", method, "path", u.Path, "status", resp.StatusCode)
 	return resp.StatusCode, data, err
-}
-
-// Captures.
-
-// captured lists the exchanges the recorder has written.
-func captured(dir string) (map[string]bool, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	names := map[string]bool{}
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".json") {
-			names[e.Name()] = true
-		}
-	}
-	return names, nil
-}
-
-// collect moves the exchanges written since before into dir.
-func collect(capture string, before map[string]bool, dir string) (int, error) {
-	time.Sleep(time.Second) // the recorder writes once the exchange is over
-	now, err := captured(capture)
-	if err != nil {
-		return 0, err
-	}
-	var fresh []string
-	for name := range now {
-		if !before[name] {
-			fresh = append(fresh, name)
-		}
-	}
-	if len(fresh) == 0 {
-		return 0, fmt.Errorf("nothing recorded in %s: is make capture running?", capture)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return 0, err
-	}
-	for _, name := range fresh {
-		if err := move(filepath.Join(capture, name), filepath.Join(dir, name)); err != nil {
-			return 0, err
-		}
-	}
-	return len(fresh), nil
-}
-
-// move renames, or copies then removes across file systems.
-func move(from, to string) error {
-	if err := os.Rename(from, to); err == nil {
-		return nil
-	}
-	data, err := os.ReadFile(from)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(to, data, 0o644); err != nil {
-		return err
-	}
-	return os.Remove(from)
 }
