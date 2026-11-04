@@ -120,9 +120,11 @@ this checkout, on Hydra 2.1 (`make up-go-hydra22` on 2.2).
 
 `examples/hydra-dev/e2e` is the browser and the OAuth2 client on hydra-dev's
 three flows, through the real login apps, and checks the claims of the final
-`id_token`: first login on each flow, second login (Hydra's skip ignored, then
-another account refused), `prompt=consent` accepted and refused, back to the
-choice. Start `make up-go` in `hydra-dev`, whose README sets the
+`id_token`: first login on each flow; second login, Hydra's skip honoured from
+the `dispatcher_remember` cookie, then without it (the skip ignored, then
+another account refused), with `prompt=consent` (the screen without a flow,
+refused) and reloaded during the redirection; a logout that clears the
+cookie; `prompt=consent` accepted and refused; back to the choice. Start `make up-go` in `hydra-dev`, whose README sets the
 `*.hydra.test` names up, then:
 
 ```sh

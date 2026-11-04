@@ -274,3 +274,36 @@ func errUnexpected(p page) error {
 var tagless = regexp.MustCompile(`(?s)<script.*?</script>|<style.*?</style>|<[^>]*>`)
 
 var errNoCallback = errors.New("the authorization did not come back to the client")
+
+// hop requests u once, without following: the Location of a redirect, nil
+// for a page.
+func (b *browser) hop(u string) (*url.URL, error) {
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.do(req, nil)
+	if err != nil {
+		return nil, err
+	}
+	loc, err := resp.Location()
+	if err != nil || resp.StatusCode < 300 || resp.StatusCode > 399 {
+		return nil, fmt.Errorf("%s: %d, not a redirect", req.URL.Redacted(), resp.StatusCode)
+	}
+	return loc, nil
+}
+
+// has tells whether the jar holds the cookie name for u.
+func (b *browser) has(u *url.URL, name string) bool {
+	return slices.ContainsFunc(b.c.Jar.Cookies(u), func(c *http.Cookie) bool { return c.Name == name })
+}
+
+// forget drops the cookies names of u's host from the jar, as a browser
+// that lost them.
+func (b *browser) forget(u *url.URL, names ...string) {
+	var gone []*http.Cookie
+	for _, n := range names {
+		gone = append(gone, &http.Cookie{Name: n, Path: "/", MaxAge: -1})
+	}
+	b.c.Jar.SetCookies(u, gone)
+}

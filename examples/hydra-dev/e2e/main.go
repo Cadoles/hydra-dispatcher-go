@@ -10,7 +10,8 @@
 //	go run ./examples/hydra-dev/e2e [flags] [scenario...]
 //
 // The host resolves the *.hydra.test names to Caddy, as hydra-dev's README
-// sets up. Without scenario names, the default ones run in order, each in a
+// sets up. Hydra's skip is honoured from the dispatcher's remember cookie
+// (P8): the second logins keep the browser, or drop that cookie. Without scenario names, the default ones run in order, each in a
 // new browser; each prints PASS or FAIL, and the command exits 1 when one
 // fails. Under make capture-go (or make capture, with -symfony), -into sorts
 // the recorded exchanges per scenario, as tools/scenarios does.
@@ -63,7 +64,11 @@ var scenarios = []scenario{
 	{name: "first-login-hydra-sql", run: firstLogin("hydra-sql")},
 	{name: "first-login-hydra-sql-2fa", run: firstLogin("hydra-sql-2fa")},
 	{name: "second-login", run: (*driver).secondLogin},
+	{name: "second-login-without-memory", run: (*driver).secondLoginWithoutMemory},
 	{name: "second-login-other-subject", run: (*driver).secondLoginOtherSubject},
+	{name: "second-login-prompt-consent-reject", run: (*driver).secondLoginPromptConsentReject},
+	{name: "second-login-reload", run: (*driver).secondLoginReload},
+	{name: "logout", run: (*driver).logout},
 	{name: "prompt-consent-accept", run: promptConsent("accept")},
 	{name: "prompt-consent-reject", run: promptConsent("reject")},
 	{name: "back-to-choice", run: (*driver).backToChoice},
@@ -517,15 +522,86 @@ func firstLogin(flow string) func(*driver) error {
 	}
 }
 
-// secondLogin signs in twice with hydra-sql in the same browser. Hydra asks
-// the second time to skip the login, which the dispatcher ignores (A7): the
-// choice page and the app's form again, then the subject compared at the
-// final accept (FIN-2).
-func (d *driver) secondLogin() error {
-	l := login{flow: "hydra-sql", user: isabelle, consent: "accept"}
-	if err := d.signIn(l); err != nil {
+// rememberCookie is the dispatcher's memory of the skip (P8), in plain
+// HTTP without the __Host- prefix.
+const rememberCookie = "dispatcher_remember"
+
+// remembered signs in with hydra-sql, then checks the dispatcher wrote its
+// memory of the skip at the consent (WRT-1).
+func (d *driver) remembered() error {
+	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept"}); err != nil {
 		return fmt.Errorf("first login: %w", err)
 	}
+	if !d.b.has(d.dispatcher, rememberCookie) {
+		return fmt.Errorf("first login: no %s cookie (WRT-1)", rememberCookie)
+	}
+	return nil
+}
+
+// skipped checks that a walk went through the dispatcher's skip (SKP-1):
+// its answer to Hydra's login request is the login verifier, without a page
+// of its own, then its /consent without a flow.
+func (d *driver) skipped(p page) error {
+	honoured, consent := false, false
+	for i, u := range p.Trail {
+		if u.Host != d.dispatcher.Host {
+			continue
+		}
+		switch {
+		case u.Path == "/" && u.Query().Has("login_challenge") && i+1 < len(p.Trail):
+			honoured = p.Trail[i+1].Query().Has("login_verifier")
+		case u.Path == "/consent":
+			consent = true
+		}
+	}
+	if !honoured || !consent {
+		return fmt.Errorf("skip not honoured (SKP-1, SKC): skip %v, consent %v, trail %s", honoured, consent, trail(p))
+	}
+	return nil
+}
+
+func trail(p page) string {
+	var paths []string
+	for _, u := range p.Trail {
+		paths = append(paths, u.Host+u.Path)
+	}
+	return strings.Join(paths, " > ")
+}
+
+// secondLogin signs in twice with hydra-sql in the same browser. Hydra asks
+// the second time to skip the login, which the dispatcher honours from its
+// cookie (SKP-1): no choice page nor app, the consent accepted from the
+// cookie too (SKC-1).
+func (d *driver) secondLogin() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.start("")
+	if err != nil {
+		return err
+	}
+	if err := d.skipped(p); err != nil {
+		return err
+	}
+	o := outcome{entry: p.Trail[0], seen: []string{d.kind(p)}, end: p}
+	if err := d.granted(o, identities["hydra-sql"]); err != nil {
+		return err
+	}
+	d.note("skip honoured")
+	return nil
+}
+
+// secondLoginWithoutMemory signs in twice with hydra-sql in the same
+// browser, which keeps Hydra's session but loses the dispatcher's cookie:
+// Hydra asks to skip the login, the dispatcher ignores it (ENT-9, SKP-2):
+// the choice page and the app's form again, then the subject compared at the
+// final accept (FIN-2).
+func (d *driver) secondLoginWithoutMemory() error {
+	l := login{flow: "hydra-sql", user: isabelle, consent: "accept"}
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	d.b.forget(d.dispatcher, rememberCookie, rememberCookie+"_2")
 	o, err := d.skippedLogin(l)
 	if err != nil {
 		return err
@@ -536,18 +612,21 @@ func (d *driver) secondLogin() error {
 	return d.granted(o, identities["hydra-sql"])
 }
 
-// secondLoginOtherSubject signs in with hydra-sql, then in the same browser
-// as someone else: the dispatcher refuses at the final accept, page E1003,
-// and finishes the flow, which a reload of the choice page shows: E1002
-// (FIN-3, ENT-7). The reject itself is not read on Hydra's admin: 2.2 no
-// longer tells a handled request from a pending one, and 2.1 answers 410 to
-// a login request once its verifier is followed (login_used of
-// internal/hydra/testdata/errors), which the dispatcher never does after
-// E1003; no fixture reads a rejected one before. go 05:0103 shows the reject.
+// secondLoginOtherSubject signs in with hydra-sql, then in the same browser,
+// without the dispatcher's cookie, as someone else: the dispatcher refuses
+// at the final accept, page E1003, and finishes the flow, which a reload of
+// the choice page shows: E1002 (FIN-3, ENT-7). With prompt=login, Hydra no
+// longer says skip, and FIN-3 is out of reach. The reject itself is not read
+// on Hydra's admin: 2.2 no longer tells a handled request from a pending
+// one, and 2.1 answers 410 to a login request once its verifier is followed
+// (login_used of internal/hydra/testdata/errors), which the dispatcher never
+// does after E1003; no fixture reads a rejected one before. go 05:0103 shows
+// the reject.
 func (d *driver) secondLoginOtherSubject() error {
-	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept"}); err != nil {
-		return fmt.Errorf("first login: %w", err)
+	if err := d.remembered(); err != nil {
+		return err
 	}
+	d.b.forget(d.dispatcher, rememberCookie, rememberCookie+"_2")
 	o, err := d.skippedLogin(login{flow: "hydra-sql", user: henri, consent: "accept"})
 	if err != nil {
 		return err
@@ -593,6 +672,123 @@ func (d *driver) skippedLogin(l login) (outcome, error) {
 		return outcome{}, errors.New("second login: Hydra does not ask to skip, the first login was not remembered")
 	}
 	return d.drive(p, l)
+}
+
+// secondLoginPromptConsentReject is the path of Symfony's capture 15: a
+// second login in skip, honoured (SKP-1), with prompt=consent: the consent
+// screen without a flow, built from the cookie (SKC-2), refused (SKC-4): the
+// client gets access_denied.
+func (d *driver) secondLoginPromptConsentReject() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.start("consent")
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "consent" {
+		return fmt.Errorf("no consent screen: %w", errUnexpected(p))
+	}
+	if f, _ := p.find(d.pages.consent); !f.has("claims_print") {
+		return errors.New("a consent screen without the print of its claims (SKC-2, Q37)")
+	}
+	o, err := d.drive(p, login{consent: "reject"})
+	if err != nil {
+		return err
+	}
+	if err := d.skipped(p); err != nil {
+		return err
+	}
+	if d.kind(o.end) != "callback" {
+		return fmt.Errorf("%w: pages %v, ended on %s %s", errNoCallback, o.seen, o.code, endURL(o))
+	}
+	refused, err := d.client.callbackError(o.end.URL)
+	if err != nil {
+		return err
+	}
+	if refused != "access_denied" {
+		return fmt.Errorf("callback error %q, want access_denied", refused)
+	}
+	return nil
+}
+
+// skipReplay is how long the dispatcher replays the redirect_to of a skip
+// (Q35), plus a margin.
+const skipReplay = 10*time.Second + 500*time.Millisecond
+
+// secondLoginReload reloads the dispatcher's page during the redirection of
+// a skip honoured: it gives the same login verifier again, without a second
+// accept, and the authorization goes on to the client (ENT-21, Q35); 10 s
+// later, the same page gives E1002 (ENT-7).
+func (d *driver) secondLoginReload() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	entry, err := d.b.hop(d.client.authURL(""))
+	if err != nil {
+		return err
+	}
+	if entry.Host != d.dispatcher.Host || !entry.Query().Has("login_challenge") {
+		return fmt.Errorf("the authorization went to %s, not to the dispatcher", entry.Redacted())
+	}
+	first, err := d.b.hop(entry.String())
+	if err != nil {
+		return fmt.Errorf("SKP-1: %w", err)
+	}
+	if !first.Query().Has("login_verifier") {
+		return fmt.Errorf("SKP-1: redirected to %s, not to the login verifier", first.Redacted())
+	}
+	again, err := d.b.hop(entry.String())
+	if err != nil {
+		return fmt.Errorf("ENT-21, the reload: %w", err)
+	}
+	if again.String() != first.String() {
+		return fmt.Errorf("ENT-21, the reload redirected to %s, not to the same verifier", again.Redacted())
+	}
+	p, err := d.b.get(again.String())
+	if err != nil {
+		return err
+	}
+	if err := d.granted(outcome{entry: entry, seen: []string{d.kind(p)}, end: p}, identities["hydra-sql"]); err != nil {
+		return err
+	}
+	d.log.Info("waiting past the replay of the skip", "for", skipReplay)
+	time.Sleep(skipReplay)
+	p, err = d.b.get(entry.String())
+	if err != nil {
+		return err
+	}
+	if code := errorCode.FindString(p.Body); d.kind(p) != "error" || code != "E1002" {
+		return fmt.Errorf("ENT-7, past 10 s: %q, want the page E1002: %w", code, errUnexpected(p))
+	}
+	return nil
+}
+
+// logout signs in, then out on Hydra, which goes through the dispatcher's
+// logout: the memory of the skip is cleared (WRT-4, Q41), and the next
+// authorization, without a session at Hydra, shows the choice page.
+func (d *driver) logout() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.b.get(d.client.public.JoinPath("/oauth2/sessions/logout").String())
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(p.Trail, func(u *url.URL) bool { return u.Host == d.dispatcher.Host && u.Path == "/logout" }) {
+		return fmt.Errorf("the logout went without the dispatcher: %s", trail(p))
+	}
+	if d.b.has(d.dispatcher, rememberCookie) {
+		return fmt.Errorf("WRT-4: %s kept after the logout", rememberCookie)
+	}
+	o, err := d.authorize(login{flow: "hydra-sql", user: isabelle, consent: "accept"})
+	if err != nil {
+		return err
+	}
+	if !o.saw("choice") || !o.saw("hydra-sql") {
+		return fmt.Errorf("after the logout, pages %v: want the choice page and the app", o.seen)
+	}
+	return d.granted(o, identities["hydra-sql"])
 }
 
 // promptConsent signs in with hydra-sql and prompt=consent: the dispatcher's
