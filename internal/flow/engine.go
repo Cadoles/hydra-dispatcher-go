@@ -275,12 +275,30 @@ var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", 
 
 func (r Reason) String() string { return reasonNames[r] }
 
+// detail is the reason of a reject as its events give it: the reason, and
+// for a not_ours reject the check of A3 that failed (not_ours:login).
+func (c Call) detail() string {
+	if c.Check == "" {
+		return c.Reason.String()
+	}
+	return c.Reason.String() + ":" + c.Check
+}
+
+// forged is the report of a challenge unknown where it should be known:
+// Hydra's, that the admin API does not know (ENT-12, CST-2, Q32), or a step
+// challenge that matches no signature (EMU-3). The failure limiter counts it
+// (P11).
+func forged() Report { return Report{Event: "challenge.invalid", Detail: "forged"} }
+
 // Call is a call to Hydra or to a webhook.
 type Call struct {
 	Op Op
 	// Challenge is L for the login calls, C for the consent ones.
 	Challenge string
 	Reason    Reason
+	// Check is the check of A3 a not_ours reject failed (checkFlow to
+	// checkLogin), for its audit event.
+	Check string
 	// Gen is the flow's generation when the call was decided.
 	Gen           int64
 	AcceptLogin   ory.AcceptOAuth2LoginRequest

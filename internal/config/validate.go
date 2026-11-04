@@ -11,8 +11,14 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 )
+
+// hydraMargin is the margin internal/flow takes from the end of L at Hydra
+// for a flow's expiry (hydraMargin there): hydra.login_consent_ttl must
+// exceed it.
+const hydraMargin = 60 * time.Second
 
 // validate checks what the dispatcher needs to start. It reports every
 // problem at once, each with the path of its key.
@@ -69,7 +75,12 @@ func (c *Config) validate() (warnings []string, err error) {
 		fail("hydra.admin_url", "%v", err)
 	}
 	positive("hydra.timeout", int64(c.Hydra.Timeout))
-	positive("hydra.login_consent_ttl", int64(c.Hydra.LoginConsentTTL))
+	// The flow's exp is taken 60 s before the end of L at Hydra (Versions
+	// Hydra): at or under it, every flow would be born expired and each L
+	// rejected at once (ENT-22), in fallback as decrypted.
+	if c.Hydra.LoginConsentTTL <= Duration(hydraMargin) {
+		fail("hydra.login_consent_ttl", "must be above %s, the margin the flows keep before the end of L at Hydra; it is Hydra's ttl.login_consent_request (30m by default)", hydraMargin)
+	}
 	positive("hydra.max_in_flight", int64(c.Hydra.MaxInFlight))
 	// 2.2 and 2.3 are the formats internal/hydra/flowcodec reads.
 	oneOf("hydra.version", c.Hydra.Version, "2.1", "2.2", "2.3")

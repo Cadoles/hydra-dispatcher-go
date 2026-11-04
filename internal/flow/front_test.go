@@ -233,6 +233,15 @@ func rejectedAgo(t *testing.T, ago time.Duration) *Flow {
 	return f
 }
 
+// reportedForged wants the page E1001 of a Hydra challenge the admin API does
+// not know reported forged, for the failure limiter (Q32, P11).
+func reportedForged(t *testing.T, p played) {
+	t.Helper()
+	if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "challenge.invalid" && r.Detail == "forged" }) {
+		t.Errorf("Q32, not reported forged: %+v", p.Reports)
+	}
+}
+
 // withLoginID sets Hydra's id of L in f's snapshot (Q34).
 func withLoginID(f *Flow, id string) *Flow {
 	f.Hydra.LoginID = id
@@ -458,8 +467,8 @@ func TestEntry(t *testing.T) {
 			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
 		{name: "ENT-11, Hydra 2.2 401", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err401}},
 			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
-		{name: "ENT-12, Hydra 404", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err404}},
-			kind: ErrorPage, code: E1001, calls: []Op{GetLogin}},
+		{name: "ENT-12 Q32, Hydra 404: forged, in every mode", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err404}},
+			kind: ErrorPage, code: E1001, calls: []Op{GetLogin}, check: reportedForged},
 		{name: "ENT-12, Hydra refuses the read", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err400}},
 			kind: ErrorPage, code: E1007, calls: []Op{GetLogin}},
 		{name: "ENT-13, nothing", ev: Entry{}, kind: ErrorPage, code: E1001},
@@ -889,11 +898,17 @@ func TestConsent(t *testing.T) {
 		return Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: accept, Token: cookie, SameOrigin: true}
 	}
 	read := func(mod func(r *ory.OAuth2ConsentRequest)) said { return said{consent: consentRequest(lref, mod)} }
-	notOurs := func(t *testing.T, p played) {
-		t.Helper()
-		rejected(RejectConsent, "access_denied")(t, p)
-		if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Audit }) {
-			t.Errorf("A3, no audit event: %+v", p.Reports)
+	// notOurs wants the reject of A3, its audit event naming the check that
+	// failed (CST-8 flow, CST-9 session, CST-10 subject, CST-23 login).
+	notOurs := func(check string) func(t *testing.T, p played) {
+		return func(t *testing.T, p played) {
+			t.Helper()
+			rejected(RejectConsent, "access_denied")(t, p)
+			if !slices.ContainsFunc(p.Reports, func(r Report) bool {
+				return r.Audit && r.Event == "flow.rejected" && r.Detail == "not_ours:"+check
+			}) {
+				t.Errorf("A3, no audit event not_ours:%s: %+v", check, p.Reports)
+			}
 		}
 	}
 	reducedNoCR := func(t *testing.T, f *Flow) {
@@ -906,7 +921,8 @@ func TestConsent(t *testing.T) {
 	for _, tc := range []pageCase{
 		{name: "CST-1", ev: Consent{}, kind: ErrorPage, code: E1001},
 		{name: "CST-1, illegible", ev: Consent{Challenge: "a/b"}, kind: ErrorPage, code: E1001},
-		{name: "CST-2", ev: get, says: hydraSays{GetConsent: {err: err404}}, kind: ErrorPage, code: E1001, calls: []Op{GetConsent}},
+		{name: "CST-2 Q32, forged", ev: get, says: hydraSays{GetConsent: {err: err404}}, kind: ErrorPage, code: E1001, calls: []Op{GetConsent},
+			check: reportedForged},
 		{name: "CST-3", ev: get, says: hydraSays{GetConsent: {err: err410}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
 		{name: "CST-4", ev: get, says: hydraSays{GetConsent: {err: err401}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
 		{name: "CST-5 A6", ev: get,
@@ -931,9 +947,9 @@ func TestConsent(t *testing.T) {
 		{name: "CST-7, another cookie within 10 s", ev: Consent{Challenge: hydraC, Cookie: otherCSRF}, stored: finishedFlow(t, hydraDone, time.Second),
 			says: hydraSays{GetConsent: read(nil)}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}},
 		{name: "CST-8 I8", ev: get, stored: lastDone(t), says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("flow")},
 		{name: "CST-8, in choice, no cookie", ev: Consent{Challenge: hydraC}, stored: choiceFlow(t), says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("flow")},
 		{name: "CST-8 Q20, generic description", ev: get, stored: atStep(t, 1, false, false), says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
 			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR,
 			check: func(t *testing.T, p played) {
@@ -943,10 +959,10 @@ func TestConsent(t *testing.T) {
 			}},
 		{name: "CST-9", ev: get, stored: acceptedFlow(t),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.LoginSessionId = ory.PtrString("other") }), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("session")},
 		{name: "CST-10", ev: get, stored: acceptedFlow(t),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Subject = ory.PtrString("bob") }), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("subject")},
 		{name: "CST-10 Q30, before the cookie", ev: Consent{Challenge: hydraC}, stored: acceptedFlow(t),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Subject = ory.PtrString("bob") }), RejectConsent: {redirectTo: hydraDone}},
 			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR},
@@ -960,10 +976,10 @@ func TestConsent(t *testing.T) {
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) {
 				r.LoginChallenge = ory.PtrString("0123456789abcdef0123456789abcdef")
 			}), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("login")},
 		{name: "CST-23, before CST-22 and the cookie", ev: Consent{Challenge: hydraC}, stored: withLoginID(expired(acceptedFlow(t)), hydraL),
 			says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("login")},
 		{name: "CST-23, the login of the flow: the screen", ev: get, stored: withLoginID(acceptedFlow(t), hydraL),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.LoginChallenge = ory.PtrString(hydraL) })},
 			kind: ConsentPage, calls: []Op{GetConsent}, write: func(t *testing.T, f *Flow) {}},
@@ -1112,7 +1128,7 @@ func TestConsent(t *testing.T) {
 			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent, RejectConsent}, write: finished},
 		{name: "CST-22 after A3", ev: get, stored: expired(acceptedFlow(t)),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Subject = ory.PtrString("bob") }), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("subject")},
 		{name: "CST-22 before the cookie, gone with exp", ev: Consent{Challenge: hydraC, Post: true, Accept: true, SameOrigin: true}, stored: expired(acceptedFlow(t)),
 			says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rejected(RejectConsent, "login_required")},
@@ -1120,7 +1136,7 @@ func TestConsent(t *testing.T) {
 			kind: ErrorPage, code: E1008},
 		{name: "CST-8 Q31, expired before the final accept", ev: get, stored: expired(lastDone(t)),
 			says: hydraSays{GetConsent: read(nil), RejectConsent: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs},
+			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR, check: notOurs("flow")},
 	} {
 		tc.run(t)
 	}

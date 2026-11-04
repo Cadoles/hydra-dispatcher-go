@@ -120,7 +120,7 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	switch classify(read.Err) {
 	case none:
 	case unknown:
-		return s.fail(E1001) // ENT-12
+		return s.fail(E1001).report(forged()) // ENT-12 (Q32)
 	case gone:
 		return s.absent() // ENT-10, ENT-11: the 410 of 2.1 is not followed
 	case unavailable:
@@ -156,7 +156,9 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	if f.ExpiresAt <= r.now() && r.now() < f.HydraExpiresAt {
 		// ENT-22 (Q33): read in the last minute of L at Hydra, with Hydra's
 		// requested_at (P7), the flow would be born expired; past hx, the
-		// write is refused instead (ECR-8).
+		// write is refused instead (ECR-8). In fallback, the first read
+		// stands for requested_at: never, hydra.login_consent_ttl being
+		// above the margin (internal/config).
 		return r.expire(f)
 	}
 	out := r.choice(ref, f)
@@ -318,7 +320,7 @@ func (r *run) consent(ev Consent) Outcome {
 	switch classify(read.Err) {
 	case none:
 	case unknown:
-		return s.fail(E1001) // CST-2
+		return s.fail(E1001).report(forged()) // CST-2 (Q32)
 	case gone:
 		return s.absent() // CST-3, CST-4
 	case unavailable:
@@ -357,11 +359,15 @@ func (r *run) consent(ev Consent) Outcome {
 	default:
 		// CST-8: not accepted by the dispatcher, expired or not; L is
 		// accepted at Hydra all the same, by someone else.
-		return r.notOurs(f, ev.Challenge)
+		return r.notOurs(f, ev.Challenge, checkFlow)
 	}
-	if f.HydraSessionID != req.GetLoginSessionId() || f.Sent == nil || f.Sent.Subject != req.GetSubject() ||
-		f.Hydra.LoginID != "" && f.Hydra.LoginID != req.GetLoginChallenge() {
-		return r.notOurs(f, ev.Challenge) // CST-9, CST-10, CST-23 (Q34)
+	switch {
+	case f.HydraSessionID != req.GetLoginSessionId():
+		return r.notOurs(f, ev.Challenge, checkSession) // CST-9
+	case f.Sent == nil || f.Sent.Subject != req.GetSubject():
+		return r.notOurs(f, ev.Challenge, checkSubject) // CST-10
+	case f.Hydra.LoginID != "" && f.Hydra.LoginID != req.GetLoginChallenge():
+		return r.notOurs(f, ev.Challenge, checkLogin) // CST-23 (Q34)
 	}
 	if r.now() > f.ExpiresAt {
 		// CST-22 (Q31): L is accepted, its reject would be refused by
@@ -448,12 +454,28 @@ func (r *run) endedPage(f *Flow) Outcome {
 	return r.page().ended(f)
 }
 
+// The checks of A3 a consent request fails, named in the audit event of its
+// reject (not_ours:<check>): CST-23 is the sign of an app that accepted a
+// login itself with the flow's ref (Q34), CST-9 also comes from a Hydra
+// session that changed.
+const (
+	checkFlow    = "flow"    // CST-8: the flow is not accepted by the dispatcher
+	checkSession = "session" // CST-9
+	checkSubject = "subject" // CST-10
+	checkLogin   = "login"   // CST-23
+)
+
 // notOurs rejects the consent of a flow the dispatcher did not accept, or
-// of another session or subject (A3, Q20): access_denied, page E1007 without
-// following the reject's redirect_to, an audit event, the flow finished.
-func (r *run) notOurs(f *Flow, c string) Outcome {
-	return r.rejectConsent(f, c, ReasonNotOurs, rejection(ReasonNotOurs, "The consent request does not match the authentication."),
+// of another session, subject or login (A3, Q20): access_denied, page E1007
+// without following the reject's redirect_to, an audit event naming the
+// check failed, the flow finished.
+func (r *run) notOurs(f *Flow, c, check string) Outcome {
+	out := r.rejectConsent(f, c, ReasonNotOurs, rejection(ReasonNotOurs, "The consent request does not match the authentication."),
 		func(string) Outcome { return r.page().fail(E1007) })
+	if out.Call != nil {
+		out.Call.Check = check
+	}
+	return out
 }
 
 // dispatcherRef returns the x_dispatcher_ref of a consent request's
@@ -474,5 +496,6 @@ func dispatcherRef(context any) (string, bool) {
 
 // hydraMargin is taken from the end of L at Hydra for the flow's expiry:
 // beyond it, Hydra 2.1 would accept a login whose verifier the client then
-// refuses (Versions Hydra).
+// refuses (Versions Hydra). internal/config requires hydra.login_consent_ttl
+// above it, or every flow would be born expired (ENT-22).
 const hydraMargin = 60 * time.Second

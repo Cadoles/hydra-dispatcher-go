@@ -79,8 +79,9 @@ type Codec interface {
 // (DEC-3), and gives a request past its lifetime as ErrChallengeExpired
 // (DEC-4). A challenge it does not read goes to Fallback: Hydra 2.1's (DEC-2),
 // one no secret opens (DEC-5), a flow of another format (DEC-6). The reports
-// of a fallback follow Q32: a challenge unknown to the admin API too is
-// forged, one Hydra knows means the dispatcher lacks its secret.
+// of a fallback follow Q32: one Hydra knows means the dispatcher lacks its
+// secret; one unknown to the admin API too is forged, which the page that
+// answers E1001 reports (ENT-12, CST-2), in every mode.
 type Decrypt struct {
 	Codec    Codec
 	Fallback Fallback
@@ -98,11 +99,11 @@ func (s Decrypt) LoginRequest(ctx context.Context, challenge string) LoginRead {
 	f, err := s.Codec.LoginChallenge(challenge)
 	if err == nil {
 		if s.expired(f) {
-			return LoginRead{Err: ErrChallengeExpired, Decrypted: true, Reports: expiredReports()}
+			return LoginRead{Err: ErrChallengeExpired, Decrypted: true, Reports: s.reports(f, expiredChallenge())}
 		}
 		r, buildErr := hydra.LoginRequestOf(challenge, f)
 		if buildErr == nil {
-			return LoginRead{Request: r, RequestedAt: f.RequestedAt, LoginID: f.ID, Decrypted: true}
+			return LoginRead{Request: r, RequestedAt: f.RequestedAt, LoginID: f.ID, Decrypted: true, Reports: s.reports(f)}
 		}
 		err = errUnbuilt
 	}
@@ -115,11 +116,11 @@ func (s Decrypt) ConsentRequest(ctx context.Context, challenge string) ConsentRe
 	f, err := s.Codec.ConsentChallenge(challenge)
 	if err == nil {
 		if s.expired(f) {
-			return ConsentRead{Err: ErrChallengeExpired, Decrypted: true, Reports: expiredReports()}
+			return ConsentRead{Err: ErrChallengeExpired, Decrypted: true, Reports: s.reports(f, expiredChallenge())}
 		}
 		r, buildErr := hydra.ConsentRequestOf(challenge, f)
 		if buildErr == nil {
-			return ConsentRead{Request: r, Decrypted: true}
+			return ConsentRead{Request: r, Decrypted: true, Reports: s.reports(f)}
 		}
 		err = errUnbuilt
 	}
@@ -134,7 +135,29 @@ func (s Decrypt) expired(f *flowcodec.Flow) bool {
 	return !clock(s.Now).Before(f.RequestedAt.Add(s.TTL))
 }
 
-func expiredReports() []Report { return []Report{{Event: "challenge.invalid", Detail: "expired"}} }
+// expiredChallenge is the report of a challenge past its lifetime: Hydra's
+// (DEC-4), or a step challenge past exp (EMU-6).
+func expiredChallenge() Report { return Report{Event: "challenge.invalid", Detail: "expired"} }
+
+// clockSkewTolerance is how far in the future Hydra's requested_at may be
+// before the read reports the clocks apart: Hydra sets it before redirecting
+// the browser, so it is always past for a clock in step.
+const clockSkewTolerance = 5 * time.Second
+
+// reports are those of a flow opened, then: hydra.clock_skew when Hydra's
+// requested_at is ahead of the dispatcher's clock, the one sign of clocks
+// apart (Versions Hydra): the age of DEC-4 and the last minute of ENT-22 are
+// judged on the dispatcher's clock against Hydra's requested_at. A
+// dispatcher ahead of Hydra shows nothing, and ends the flows early.
+func (s Decrypt) reports(f *flowcodec.Flow, then ...Report) []Report {
+	if ahead := f.RequestedAt.Sub(clock(s.Now)); ahead > clockSkewTolerance {
+		then = append(then, Report{Event: "hydra.clock_skew", Detail: "Hydra's requested_at " + ahead.Round(time.Second).String() + " ahead"})
+	}
+	if len(then) == 0 {
+		return nil
+	}
+	return then
+}
 
 // fellBack is what a fallback after the decryption error decryptErr reports,
 // once the admin API answered adminErr (DEC-2, DEC-5, DEC-6, Q32). The detail
@@ -146,9 +169,10 @@ func fellBack(decryptErr, adminErr error) []Report {
 	case errors.Is(decryptErr, flowcodec.ErrInvalid):
 		switch classify(adminErr) {
 		case unknown:
-			// Unknown to Hydra too: forged or tampered, for the failure
-			// limiter (P11), never the decryption alert.
-			return []Report{{Event: "challenge.invalid", Detail: "forged"}}
+			// Unknown to Hydra too: forged or tampered, never the decryption
+			// alert. The page that answers E1001 reports it (ENT-12, CST-2),
+			// as for a 32-hexadecimal challenge or in fallback mode.
+			return nil
 		case unavailable:
 			return nil // Hydra could not tell; its E1004 says so
 		}

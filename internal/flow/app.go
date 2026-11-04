@@ -99,13 +99,13 @@ func (r *run) appCall(ev AppCall) Outcome {
 	switch check.Verdict {
 	case ChallengeForged:
 		// EMU-3 (Q17): an unknown challenge, for the failure limiter (P11).
-		return s.absent().report(Report{Event: "challenge.invalid", Detail: "forged"})
+		return s.absent().report(forged())
 	case ChallengeOtherApp:
 		return appError(http.StatusForbidden, forbidden, forbiddenText).report(Report{Event: "security.ip_rejected", Detail: "emulated: app outside its sources"}) // EMU-4
 	case ChallengeFinished:
 		return s.ended(f) // EMU-5
 	case ChallengeExpired:
-		return r.expire(f).report(Report{Event: "challenge.invalid", Detail: "expired"}) // EMU-6
+		return r.expire(f).report(expiredChallenge()) // EMU-6
 	case ChallengeStale:
 		return s.redirect(s.loop).report(Report{Event: "challenge.invalid", Detail: "stale_generation"}) // EMU-7
 	}

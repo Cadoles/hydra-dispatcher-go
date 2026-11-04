@@ -219,7 +219,7 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			switch {
 			case r.Sentry:
 				level = slog.LevelError
-			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Audit:
+			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
 				level = slog.LevelWarn
 			}
 			o.Log.Log(ctx, level, r.Event, "surface", surface, "detail", r.Detail, "audit", r.Audit)

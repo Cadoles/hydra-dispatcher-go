@@ -33,8 +33,11 @@ type fakeHydra struct {
 	mu          sync.Mutex
 	login       *ory.OAuth2LoginRequest
 	consentSkip bool
-	calls       []string
-	errs        map[string]error
+	// loginChallenge is the consent request's login_challenge: L itself,
+	// as Hydra 2.1, when "".
+	loginChallenge string
+	calls          []string
+	errs           map[string]error
 	// before runs before answering a call, to change the store meanwhile.
 	before   map[string]func()
 	accepted *ory.AcceptOAuth2LoginRequest
@@ -78,10 +81,13 @@ func (h *fakeHydra) ConsentRequest(_ context.Context, challenge string) (*ory.OA
 		return nil, err
 	}
 	ctx, _ := json.Marshal(h.accepted.Context)
+	login := hydraL // Hydra 2.1 names L itself (Q34)
+	if h.loginChallenge != "" {
+		login = h.loginChallenge
+	}
 	return &ory.OAuth2ConsentRequest{
-		Challenge: challenge,
-		// Hydra 2.1 names L itself (Q34).
-		LoginChallenge: ory.PtrString(hydraL),
+		Challenge:      challenge,
+		LoginChallenge: ory.PtrString(login),
 		Subject:        ory.PtrString(h.accepted.Subject),
 		LoginSessionId: h.login.SessionId,
 		Context:        json.RawMessage(ctx),
@@ -360,22 +366,29 @@ func (c failingCodec) LoginChallenge(string) (*flowcodec.Flow, error)   { return
 func (c failingCodec) ConsentChallenge(string) (*flowcodec.Flow, error) { return nil, c.err }
 
 // A fallback the decryption could not avoid is logged as a warning, which
-// names the step that failed (DEC-6); a forged challenge is not (DEC-5, Q32).
+// names the step that failed (DEC-6); a forged challenge is not (DEC-5, Q32),
+// but is reported forged, once, by ENT-12, whatever the mode and the shape of
+// the challenge.
 func TestDecryptFallbackLogged(t *testing.T) {
+	forged := `"msg":"challenge.invalid","surface":"front","detail":"forged"`
 	for _, tc := range []struct {
 		name    string
-		err     error
+		err     error // of the codec; nil: no codec (DEC-1)
 		hydra   error
 		warning string
 	}{
 		{"DEC-6, another format", fmt.Errorf("%w: no client", flowcodec.ErrFormat), nil, `"msg":"hydra.decrypt_fallback"`},
 		{"DEC-5, a secret missing", flowcodec.ErrInvalid, nil, `"msg":"hydra.decrypt_fallback"`},
-		{"DEC-5, forged", flowcodec.ErrInvalid, err404, `"msg":"challenge.invalid","surface":"front","detail":"forged"`},
+		{"DEC-5, forged", flowcodec.ErrInvalid, err404, forged},
 		{"DEC-2, Hydra 2.1", flowcodec.ErrNotEncrypted, nil, ""},
+		{"DEC-2, 32 hexadecimals unknown to Hydra: forged (Q32)", flowcodec.ErrNotEncrypted, err404, forged},
+		{"DEC-1, unknown to Hydra: forged (Q32)", nil, err404, forged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newWorld(t)
-			w.o.Source = Decrypt{Codec: failingCodec{tc.err}, Fallback: Fallback{Hydra: w.hydra}, TTL: w.o.LoginConsentTTL}
+			if tc.err != nil {
+				w.o.Source = Decrypt{Codec: failingCodec{tc.err}, Fallback: Fallback{Hydra: w.hydra}, TTL: w.o.LoginConsentTTL}
+			}
 			if tc.hydra != nil {
 				w.hydra.errs["get_login"] = tc.hydra
 			}
@@ -388,6 +401,91 @@ func TestDecryptFallbackLogged(t *testing.T) {
 			case tc.warning == "" && (strings.Contains(logs, "decrypt_fallback") || strings.Contains(logs, "challenge.invalid")),
 				tc.warning != "" && !strings.Contains(logs, `"level":"WARN","msg"`+strings.TrimPrefix(tc.warning, `"msg"`)):
 				t.Errorf("logs %s; want %s", logs, tc.warning)
+			}
+			if n := strings.Count(logs, `"msg":"challenge.invalid"`); tc.warning == forged && n != 1 {
+				t.Errorf("forged logged %d times: %s", n, logs)
+			}
+		})
+	}
+
+	// ECR-1: the transition replayed on the flow read again keeps the read,
+	// which is logged once.
+	t.Run("ECR-1, a read's report logged once when replayed", func(t *testing.T) {
+		w := running(t, atStep(t, 1, true, true))
+		w.o.Source = Decrypt{Codec: failingCodec{fmt.Errorf("%w: no client", flowcodec.ErrFormat)}, Fallback: Fallback{Hydra: w.hydra},
+			TTL: w.o.LoginConsentTTL, Now: func() time.Time { return w.now }}
+		w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+			if n == 1 {
+				return state.ErrConflict, true
+			}
+			return nil, false
+		}
+		r := w.handle(Loop{Ref: lref, Cookie: cookie})
+		if r.Response.URL != loginURL("2fa", 1000) || w.store.puts != 2 || !slices.Equal(w.hydra.calls, []string{"get_login"}) {
+			t.Fatalf("answer %+v, puts %d, calls %v", r.Response, w.store.puts, w.hydra.calls)
+		}
+		if n := strings.Count(w.logs.String(), `"msg":"hydra.decrypt_fallback"`); n != 1 {
+			t.Errorf("logged %d times: %s", n, w.logs.String())
+		}
+	})
+}
+
+// otherLoginCodec opens the consent challenges as those of another login of
+// Hydra: their flow's id is not the one of L.
+type otherLoginCodec struct{ fakeCodec }
+
+func (c otherLoginCodec) ConsentChallenge(string) (*flowcodec.Flow, error) {
+	f, err := c.flow(true)
+	if err == nil {
+		f.ID = "0123456789abcdef0123456789abcdef"
+	}
+	return f, err
+}
+
+// loginOnlyCodec opens the login challenges only: the consent ones fall back
+// on the admin API, as under a secret Hydra rotated meanwhile.
+type loginOnlyCodec struct{ fakeCodec }
+
+func (c loginOnlyCodec) ConsentChallenge(string) (*flowcodec.Flow, error) {
+	return nil, flowcodec.ErrInvalid
+}
+
+// CST-23 (Q34) through the orchestrator: L decrypted keeps the flow's id,
+// which the consent request must name, read locally or on the admin API.
+func TestConsentOfTheLogin(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		codec func(*fakeHydra) Codec
+		// admin is the login_challenge of the admin API's consent request.
+		admin string
+		ok    bool
+	}{
+		{"decrypted, the consent of the login", func(h *fakeHydra) Codec { return fakeCodec{h} }, "", true},
+		{"decrypted, the consent of another login", func(h *fakeHydra) Codec { return otherLoginCodec{fakeCodec{h}} }, "", false},
+		{"L decrypted, the consent on the admin API of 2.2: the flow's id", func(h *fakeHydra) Codec { return loginOnlyCodec{fakeCodec{h}} }, hydraFlowID, true},
+		{"L decrypted, the consent on the admin API naming another login", func(h *fakeHydra) Codec { return loginOnlyCodec{fakeCodec{h}} }, hydraL, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.o.Source = Decrypt{Codec: tc.codec(w.hydra), Fallback: Fallback{Hydra: w.hydra}, TTL: w.o.LoginConsentTTL, Now: func() time.Time { return w.now }}
+			w.hydra.consentSkip, w.hydra.loginChallenge = true, tc.admin
+			w.handle(Entry{LoginChallenge: hydraL})
+			step := w.handle(Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+			w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+			if final := w.handle(Loop{Ref: lref, Cookie: w.cookie}); final.Response.URL != verifierURL {
+				t.Fatalf("final accept: %+v", final.Response)
+			}
+			if f := w.stored(); f.Hydra.LoginID != hydraFlowID {
+				t.Fatalf("hid %q", f.Hydra.LoginID)
+			}
+			c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie})
+			switch {
+			case tc.ok && c.Response.URL != callbackURL:
+				t.Errorf("consent %+v", c.Response)
+			case !tc.ok && (c.Response.Code != E1007 || !slices.ContainsFunc(c.Reports, func(r Report) bool {
+				return r.Audit && r.Detail == "not_ours:login"
+			})):
+				t.Errorf("CST-23: %+v, reports %+v", c.Response, c.Reports)
 			}
 		})
 	}

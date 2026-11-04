@@ -40,7 +40,9 @@ func LoginRequestOf(challenge string, f *flowcodec.Flow) (*ory.OAuth2LoginReques
 // ConsentRequestOf is the consent request Hydra's admin API serves for the
 // consent challenge whose decrypted flow is f, as LoginRequestOf: its
 // login_challenge is the flow's id, not the encrypted login challenge, and
-// acr, amr and context are those of the login accept.
+// acr, amr and context are those of the login accept. An acr the accept did
+// not give is served "", as the admin API does (consent_accepted of
+// testdata/errors).
 func ConsentRequestOf(challenge string, f *flowcodec.Flow) (*ory.OAuth2ConsentRequest, error) {
 	return decodedAs(decodeConsentRequest, struct {
 		Challenge         string          `json:"challenge"`
@@ -53,7 +55,7 @@ func ConsentRequestOf(challenge string, f *flowcodec.Flow) (*ory.OAuth2ConsentRe
 		Subject           string          `json:"subject"`
 		LoginChallenge    string          `json:"login_challenge"`
 		LoginSessionID    string          `json:"login_session_id,omitempty"`
-		ACR               string          `json:"acr,omitempty"`
+		ACR               string          `json:"acr"`
 		AMR               []string        `json:"amr"`
 		Context           json.RawMessage `json:"context,omitempty"`
 	}{

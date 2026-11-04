@@ -938,6 +938,9 @@ func TestValidation(t *testing.T) {
 		{"Redis DSN scheme", map[string]string{"DISPATCHER_STATE_REDIS_DSN": "http://redis:6379"}, "state.redis_dsn"},
 		{"short Hydra secret", map[string]string{"DISPATCHER_HYDRA_SYSTEM_SECRETS": "short"}, "hydra.system_secrets"},
 		{"Hydra version", map[string]string{"DISPATCHER_HYDRA_VERSION": "2.4"}, "hydra.version"},
+		// ENT-22: at or under the 60 s the flows keep before the end of L at
+		// Hydra, every flow would be born expired.
+		{"login consent TTL within the margin", map[string]string{"DISPATCHER_HYDRA_LOGIN_CONSENT_TTL": "60s"}, "hydra.login_consent_ttl: must be above 1m0s"},
 		{"serve bootstrap", map[string]string{"DISPATCHER_SERVE_BOOTSTRAP": "true"}, `serve.bootstrap: "true" is not one of off, missing, force`},
 		{"log level", map[string]string{"DISPATCHER_OBSERVABILITY_LOG_LEVEL": "verbose"}, "observability.log_level"},
 		{"sample rate", map[string]string{"DISPATCHER_OBSERVABILITY_SENTRY_SAMPLE_RATE": "1.5"}, "observability.sentry.sample_rate"},

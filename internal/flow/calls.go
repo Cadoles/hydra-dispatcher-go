@@ -261,7 +261,7 @@ func (r *run) rejectConsent(f *Flow, c string, reason Reason, body ory.RejectOAu
 		answer = s.fail(E1007)
 	}
 	out.Response, out.Reports = answer.Response, append(out.Reports, answer.Reports...)
-	return out.report(Report{Event: "flow.rejected", Detail: d.Call.Reason.String(), Audit: d.Call.Reason == ReasonNotOurs})
+	return out.report(Report{Event: "flow.rejected", Detail: d.Call.detail(), Audit: d.Call.Reason == ReasonNotOurs})
 }
 
 // consentDone finishes f after the accept or the reject of its consent,
@@ -339,7 +339,7 @@ func (o Outcome) audited(d *Done) Outcome {
 	case ReasonSubject:
 		return o.report(Report{Event: "step.subject_mismatch", Audit: true})
 	case ReasonNotOurs:
-		return o.report(Report{Event: "flow.rejected", Detail: ReasonNotOurs.String(), Audit: true})
+		return o.report(Report{Event: "flow.rejected", Detail: d.Call.detail(), Audit: true})
 	}
 	return o
 }
