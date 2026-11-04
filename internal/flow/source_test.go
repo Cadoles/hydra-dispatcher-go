@@ -133,7 +133,9 @@ func newCodec(t *testing.T, v flowcodec.Version, secrets ...string) *flowcodec.C
 // reports of Q32: each read either decrypted without calling Hydra, or on
 // the admin API, which then counts one read. A challenge the admin API does
 // not know either is reported forged by the page that answers E1001 (ENT-12,
-// CST-2), not by the read: the source says nothing of it.
+// CST-2), not by the read: the source says nothing of it, nor of a challenge
+// past its lifetime (ENT-11, CST-4) or of Hydra's clock ahead, which the
+// flow's creation reports (revue R18).
 func TestDecrypt(t *testing.T) {
 	l, c := challengeFixture(t, fixtures22+"login_challenge.txt"), challengeFixture(t, fixtures22+"consent_challenge.txt")
 	codec := newCodec(t, flowcodec.Hydra22, devSecret)
@@ -164,11 +166,9 @@ func TestDecrypt(t *testing.T) {
 	}{
 		{name: "DEC-3, read locally", codec: codec, challenge: l, at: time.Minute, decrypted: true},
 		{name: "DEC-3, the last instant of its lifetime", codec: codec, challenge: l, at: 30*time.Minute - time.Millisecond, decrypted: true},
-		{name: "DEC-4, at its lifetime: gone, without a call", codec: codec, challenge: l, at: 30 * time.Minute,
-			decrypted: true, err: ErrChallengeExpired, report: "challenge.invalid expired"},
-		{name: "DEC-3, Hydra's clock 5 s ahead: within the tolerance", codec: codec, challenge: l, at: -5 * time.Second, decrypted: true},
-		{name: "DEC-3, Hydra's clock 10 s ahead: reported", codec: codec, challenge: l, at: -10 * time.Second, decrypted: true,
-			report: "hydra.clock_skew Hydra's requested_at 10s ahead"},
+		{name: "DEC-4, at its lifetime: gone, without a call, the page reports it", codec: codec, challenge: l, at: 30 * time.Minute,
+			decrypted: true, err: ErrChallengeExpired},
+		{name: "DEC-3, Hydra's clock 10 s ahead: read, the creation reports it", codec: codec, challenge: l, at: -10 * time.Second, decrypted: true},
 		{name: "DEC-2, a Hydra 2.1 challenge: fallback, silent", codec: codec, challenge: hydraL, reads: 1},
 		{name: "DEC-2, 32 hexadecimals unknown to Hydra: no decryption alert", codec: codec, challenge: "00000000000000000000000000000000",
 			adminErr: err404, err: err404, reads: 1},
@@ -188,11 +188,10 @@ func TestDecrypt(t *testing.T) {
 		{name: "DEC-6, read as Hydra 2.3", codec: v23, challenge: l, reads: 1, report: "hydra.decrypt_fallback flowcodec: unexpected flow format"},
 		{name: "DEC-3, a consent read locally", codec: codec, consent: true, challenge: c, at: time.Minute, decrypted: true},
 		{name: "DEC-4, a consent at its lifetime", codec: codec, consent: true, challenge: c, at: 30 * time.Minute,
-			decrypted: true, err: ErrChallengeExpired, report: "challenge.invalid expired"},
+			decrypted: true, err: ErrChallengeExpired},
 		{name: "DEC-5, a login challenge as a consent one", codec: codec, consent: true, challenge: l, adminErr: err404,
 			err: err404, reads: 1},
-		{name: "DEC-3, a consent, Hydra's clock ahead", codec: codec, consent: true, challenge: c, at: -time.Minute, decrypted: true,
-			report: "hydra.clock_skew Hydra's requested_at 1m0s ahead"},
+		{name: "DEC-3, a consent, Hydra's clock ahead: nothing reported", codec: codec, consent: true, challenge: c, at: -time.Minute, decrypted: true},
 		{name: "DEC-6, a consent read as Hydra 2.3", codec: v23, consent: true, challenge: c, reads: 1,
 			report: "hydra.decrypt_fallback flowcodec: unexpected flow format"},
 	} {

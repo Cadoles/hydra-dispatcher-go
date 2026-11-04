@@ -290,6 +290,24 @@ func (c Call) detail() string {
 // (P11).
 func forged() Report { return Report{Event: "challenge.invalid", Detail: "forged"} }
 
+// expiredChallenge is the report of a challenge past its lifetime: Hydra's,
+// that the admin API answers 401 or Decrypt reads past it (ENT-11, CST-4,
+// DEC-4), or a step challenge past exp (EMU-6). The failure limiter counts it
+// (P11).
+func expiredChallenge() Report { return Report{Event: "challenge.invalid", Detail: "expired"} }
+
+// expiredIf adds to out the report of Hydra's challenge past its lifetime,
+// when err says so: the 401 request_unauthorized of Hydra 2.2 and 2.3, or
+// DEC-4, never the 410 of 2.1, a request handled. The page that answers it
+// reports it, in every mode, as forged (ENT-11, CST-4; revue R18).
+func expiredIf(out Outcome, err error) Outcome {
+	var re *hydra.RequestError
+	if errors.Is(err, ErrChallengeExpired) || errors.As(err, &re) && re.Status == http.StatusUnauthorized {
+		return out.report(expiredChallenge())
+	}
+	return out
+}
+
 // Call is a call to Hydra or to a webhook.
 type Call struct {
 	Op Op
@@ -332,7 +350,8 @@ type LoginRead struct {
 	// Decrypted tells that the request was read from the challenge, without
 	// calling Hydra.
 	Decrypted bool
-	// Reports are what the read logs (DEC-4 to DEC-6, Q32).
+	// Reports are what the read logs (DEC-5, DEC-6, Q32): the pages report
+	// a challenge forged or past its lifetime themselves.
 	Reports []Report
 }
 

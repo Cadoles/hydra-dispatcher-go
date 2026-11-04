@@ -77,11 +77,12 @@ type Codec interface {
 
 // Decrypt reads the requests from the challenges, without calling Hydra
 // (DEC-3), and gives a request past its lifetime as ErrChallengeExpired
-// (DEC-4). A challenge it does not read goes to Fallback: Hydra 2.1's (DEC-2),
-// one no secret opens (DEC-5), a flow of another format (DEC-6). The reports
-// of a fallback follow Q32: one Hydra knows means the dispatcher lacks its
-// secret; one unknown to the admin API too is forged, which the page that
-// answers E1001 reports (ENT-12, CST-2), in every mode.
+// (DEC-4), which the page that answers E1002 reports (ENT-11, CST-4). A
+// challenge it does not read goes to Fallback: Hydra 2.1's (DEC-2), one no
+// secret opens (DEC-5), a flow of another format (DEC-6). The reports of a
+// fallback follow Q32: one Hydra knows means the dispatcher lacks its secret;
+// one unknown to the admin API too is forged, which the page that answers
+// E1001 reports (ENT-12, CST-2), in every mode.
 type Decrypt struct {
 	Codec    Codec
 	Fallback Fallback
@@ -99,11 +100,11 @@ func (s Decrypt) LoginRequest(ctx context.Context, challenge string) LoginRead {
 	f, err := s.Codec.LoginChallenge(challenge)
 	if err == nil {
 		if s.expired(f) {
-			return LoginRead{Err: ErrChallengeExpired, Decrypted: true, Reports: s.reports(f, expiredChallenge())}
+			return LoginRead{Err: ErrChallengeExpired, Decrypted: true}
 		}
 		r, buildErr := hydra.LoginRequestOf(challenge, f)
 		if buildErr == nil {
-			return LoginRead{Request: r, RequestedAt: f.RequestedAt, LoginID: f.ID, Decrypted: true, Reports: s.reports(f)}
+			return LoginRead{Request: r, RequestedAt: f.RequestedAt, LoginID: f.ID, Decrypted: true}
 		}
 		err = errUnbuilt
 	}
@@ -116,11 +117,11 @@ func (s Decrypt) ConsentRequest(ctx context.Context, challenge string) ConsentRe
 	f, err := s.Codec.ConsentChallenge(challenge)
 	if err == nil {
 		if s.expired(f) {
-			return ConsentRead{Err: ErrChallengeExpired, Decrypted: true, Reports: s.reports(f, expiredChallenge())}
+			return ConsentRead{Err: ErrChallengeExpired, Decrypted: true}
 		}
 		r, buildErr := hydra.ConsentRequestOf(challenge, f)
 		if buildErr == nil {
-			return ConsentRead{Request: r, Decrypted: true, Reports: s.reports(f)}
+			return ConsentRead{Request: r, Decrypted: true}
 		}
 		err = errUnbuilt
 	}
@@ -133,30 +134,6 @@ func (s Decrypt) ConsentRequest(ctx context.Context, challenge string) ConsentRe
 // hx: Hydra 2.2's admin API would answer 401.
 func (s Decrypt) expired(f *flowcodec.Flow) bool {
 	return !clock(s.Now).Before(f.RequestedAt.Add(s.TTL))
-}
-
-// expiredChallenge is the report of a challenge past its lifetime: Hydra's
-// (DEC-4), or a step challenge past exp (EMU-6).
-func expiredChallenge() Report { return Report{Event: "challenge.invalid", Detail: "expired"} }
-
-// clockSkewTolerance is how far in the future Hydra's requested_at may be
-// before the read reports the clocks apart: Hydra sets it before redirecting
-// the browser, so it is always past for a clock in step.
-const clockSkewTolerance = 5 * time.Second
-
-// reports are those of a flow opened, then: hydra.clock_skew when Hydra's
-// requested_at is ahead of the dispatcher's clock, the one sign of clocks
-// apart (Versions Hydra): the age of DEC-4 and the last minute of ENT-22 are
-// judged on the dispatcher's clock against Hydra's requested_at. A
-// dispatcher ahead of Hydra shows nothing, and ends the flows early.
-func (s Decrypt) reports(f *flowcodec.Flow, then ...Report) []Report {
-	if ahead := f.RequestedAt.Sub(clock(s.Now)); ahead > clockSkewTolerance {
-		then = append(then, Report{Event: "hydra.clock_skew", Detail: "Hydra's requested_at " + ahead.Round(time.Second).String() + " ahead"})
-	}
-	if len(then) == 0 {
-		return nil
-	}
-	return then
 }
 
 // fellBack is what a fallback after the decryption error decryptErr reports,

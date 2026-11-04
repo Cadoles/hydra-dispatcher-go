@@ -229,7 +229,7 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 }
 
 // call makes a call a transition asked for, its answer kept for the request,
-// and returns what a read reports (DEC-4 to DEC-6).
+// and returns what a read reports (DEC-5, DEC-6).
 func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 	done := func(to string, err error) *Done { return &Done{Call: c, RedirectTo: to, Err: err} }
 	switch c.Op {

@@ -24,6 +24,8 @@ type said struct {
 	err         error
 	loginHook   *LoginHookAnswer
 	hookErr     error
+	// decrypted is a login request read from L itself (DEC-3).
+	decrypted bool
 }
 
 var (
@@ -98,7 +100,7 @@ func play(t *testing.T, env Env, ev Event, stored, reread *Flow, says hydraSays)
 func answer(a *Answers, c Call, s said) {
 	switch c.Op {
 	case GetLogin:
-		a.Login = &LoginRead{Request: s.login, RequestedAt: s.requestedAt, LoginID: s.loginID, Err: s.err}
+		a.Login = &LoginRead{Request: s.login, RequestedAt: s.requestedAt, LoginID: s.loginID, Err: s.err, Decrypted: s.decrypted}
 	case GetConsent:
 		a.Consent = &ConsentRead{Request: s.consent, Err: s.err}
 	case AcceptLogin:

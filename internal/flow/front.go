@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 )
 
 // Entry is GET / (ENT): Hydra's login challenge, or the ref of
@@ -122,7 +124,7 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	case unknown:
 		return s.fail(E1001).report(forged()) // ENT-12 (Q32)
 	case gone:
-		return s.absent() // ENT-10, ENT-11: the 410 of 2.1 is not followed
+		return expiredIf(s.absent(), read.Err) // ENT-10, ENT-11: the 410 of 2.1 is not followed
 	case unavailable:
 		return s.unavailable(read.Err) // ENT-14
 	default:
@@ -159,10 +161,29 @@ func (r *run) create(ref string, ev Entry) Outcome {
 		// write is refused instead (ECR-8). In fallback, the first read
 		// stands for requested_at: never, hydra.login_consent_ttl being
 		// above the margin (internal/config).
-		return r.expire(f)
+		return r.skewed(read, r.expire(f))
 	}
 	out := r.choice(ref, f)
 	out.Response.SetCSRF = f.CSRF
+	return r.skewed(read, out)
+}
+
+// clockSkewTolerance is how far in the future Hydra's requested_at may be
+// before the creation reports the clocks apart: Hydra sets it before
+// redirecting the browser, so it is always past for a clock in step.
+const clockSkewTolerance = 5 * time.Second
+
+// skewed adds hydra.clock_skew to out when the L decrypted at the flow's
+// creation carries a requested_at ahead of the dispatcher's clock, the one
+// sign of clocks apart (DEC-3, Versions Hydra): exp, hx, the last minute of
+// ENT-22 and the age of DEC-4 are judged on the dispatcher's clock against
+// it. Once per authentication, at the creation, where exp and hx are drawn
+// from it (revue R18); a consent request carries the requested_at of its
+// login. A dispatcher ahead of Hydra shows nothing, and ends the flows early.
+func (r *run) skewed(read *LoginRead, out Outcome) Outcome {
+	if ahead := read.RequestedAt.Sub(r.Env.Now); read.Decrypted && ahead > clockSkewTolerance {
+		return out.report(Report{Event: "hydra.clock_skew", Detail: "Hydra's requested_at " + ahead.Round(time.Second).String() + " ahead"})
+	}
 	return out
 }
 
@@ -322,7 +343,7 @@ func (r *run) consent(ev Consent) Outcome {
 	case unknown:
 		return s.fail(E1001).report(forged()) // CST-2 (Q32)
 	case gone:
-		return s.absent() // CST-3, CST-4
+		return expiredIf(s.absent(), read.Err) // CST-3, CST-4
 	case unavailable:
 		return s.unavailable(read.Err) // CST-19
 	default:
@@ -496,6 +517,7 @@ func dispatcherRef(context any) (string, bool) {
 
 // hydraMargin is taken from the end of L at Hydra for the flow's expiry:
 // beyond it, Hydra 2.1 would accept a login whose verifier the client then
-// refuses (Versions Hydra). internal/config requires hydra.login_consent_ttl
-// above it, or every flow would be born expired (ENT-22).
-const hydraMargin = 60 * time.Second
+// refuses (Versions Hydra). It is internal/config's, which requires
+// hydra.login_consent_ttl above it, or every flow would be born expired
+// (ENT-22): one constant, which the two cannot drift from (revue R18).
+const hydraMargin = config.HydraMargin

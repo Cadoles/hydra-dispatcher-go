@@ -71,69 +71,75 @@ func TestRequestsOfDecryptedFlows(t *testing.T) {
 	}
 }
 
-// Beyond the flowcodec fixtures, a first login with an acr: the requests
-// built from the flows Hydra keeps for the admin API's recorded answers equal
-// those answers: a login skipped (skip true, the subject of the session), a
-// consent whose login accept gave no acr ("" served) and a null context. The
-// flow keeps a null audience, which the admin API serves [] (fixtures of
-// flowcodec, decrypted: RequestedAudience null).
+// Beyond the flowcodec fixtures, a first login with an acr: the admin API's
+// recorded answers carry their challenge, the flow Hydra sealed, which the
+// dev secret opens. The requests built from those flows equal the answers: a
+// login skipped (skip true, the subject of the session), a login and a
+// consent read again once used, a consent whose login accept gave no acr (""
+// served) and a null context. The flows keep a null audience, which the
+// admin API serves [] (revue R18: decrypted, not rebuilt from the answer).
 func TestRequestsOfRecordedAnswers(t *testing.T) {
-	for _, dir := range []string{"testdata/errors/hydra-v2.2.0/", "testdata/errors/hydra-v2.3.0/"} {
-		t.Run(dir, func(t *testing.T) {
-			kept := func(name string) (*flowcodec.Flow, string, json.RawMessage) {
-				served := body(t, dir+name)
+	for _, tc := range []struct {
+		dir     string
+		version flowcodec.Version
+	}{{"testdata/errors/hydra-v2.2.0/", flowcodec.Hydra22}, {"testdata/errors/hydra-v2.3.0/", flowcodec.Hydra23}} {
+		t.Run(tc.dir, func(t *testing.T) {
+			codec, err := flowcodec.New(tc.version, []string{devSecret})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opened := func(name string, consent bool) (*flowcodec.Flow, string, json.RawMessage) {
+				t.Helper()
+				served := body(t, tc.dir+name)
 				var m struct {
-					Challenge      string          `json:"challenge"`
-					Client         json.RawMessage `json:"client"`
-					OIDCContext    json.RawMessage `json:"oidc_context"`
-					RequestURL     string          `json:"request_url"`
-					Scope          []string        `json:"requested_scope"`
-					SessionID      string          `json:"session_id"`
-					Skip           bool            `json:"skip"`
-					Subject        string          `json:"subject"`
-					LoginChallenge string          `json:"login_challenge"`
-					LoginSessionID string          `json:"login_session_id"`
-					ACR            string          `json:"acr"`
-					AMR            []string        `json:"amr"`
-					Context        json.RawMessage `json:"context"`
+					Challenge string `json:"challenge"`
 				}
 				decode(t, served, &m)
-				f := &flowcodec.Flow{ID: m.LoginChallenge, Client: m.Client, OpenIDConnectContext: m.OIDCContext, RequestURL: m.RequestURL,
-					RequestedScope: m.Scope, SessionID: m.SessionID + m.LoginSessionID, Subject: m.Subject, LoginSkip: m.Skip, ConsentSkip: m.Skip,
-					ACR: m.ACR, AMR: m.AMR}
-				if string(m.Context) != "null" {
-					f.Context = m.Context
+				open := codec.LoginChallenge
+				if consent {
+					open = codec.ConsentChallenge
+				}
+				f, err := open(m.Challenge)
+				if err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				if f.RequestedAudience != nil {
+					t.Errorf("%s: audience %q, want the null Hydra keeps", name, f.RequestedAudience)
 				}
 				return f, m.Challenge, served
 			}
 
-			f, l, served := kept("login_skip.json")
-			if !f.LoginSkip || f.Subject == "" {
-				t.Fatalf("not a skip: %+v", f)
+			for _, name := range []string{"login_skip.json", "login_used.json"} {
+				f, l, served := opened(name, false)
+				if name == "login_skip.json" && (!f.LoginSkip || f.Subject == "") {
+					t.Fatalf("not a skip: %+v", f)
+				}
+				login, err := LoginRequestOf(l, f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, err := decodeLoginRequest(served)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sameRequest(t, name, login, want)
 			}
-			login, err := LoginRequestOf(l, f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want, err := decodeLoginRequest(served)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sameRequest(t, "login request skipped", login, want)
 
-			f, c, served := kept("consent_accepted.json")
-			if f.ACR != "" || f.Context != nil {
-				t.Fatalf("acr %q, context %s: want none", f.ACR, f.Context)
+			for _, name := range []string{"consent_accepted.json", "consent_used.json"} {
+				f, c, served := opened(name, true)
+				if f.ACR != "" || f.Context != nil {
+					t.Fatalf("%s: acr %q, context %s: want none", name, f.ACR, f.Context)
+				}
+				consent, err := ConsentRequestOf(c, f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, err := decodeConsentRequest(served)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sameRequest(t, name, consent, want)
 			}
-			consent, err := ConsentRequestOf(c, f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantConsent, err := decodeConsentRequest(served)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sameRequest(t, "consent request without acr", consent, wantConsent)
 		})
 	}
 }

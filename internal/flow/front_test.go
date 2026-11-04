@@ -242,6 +242,42 @@ func reportedForged(t *testing.T, p played) {
 	}
 }
 
+// reportedExpired wants the page E1002 of a Hydra challenge past its
+// lifetime reported expired, in every mode: Hydra 2.2's 401 as DEC-4
+// (ENT-11, CST-4; revue R18).
+func reportedExpired(t *testing.T, p played) {
+	t.Helper()
+	if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "challenge.invalid" && r.Detail == "expired" }) {
+		t.Errorf("not reported expired: %+v", p.Reports)
+	}
+}
+
+// unreported wants no challenge.invalid: Hydra 2.1's 410, a request handled
+// (ENT-10, CST-3), or a challenge the flow holds, read again (BCL-9, ENT-20,
+// BCL-16), which is never counted.
+func unreported(t *testing.T, p played) {
+	t.Helper()
+	if slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "challenge.invalid" }) {
+		t.Errorf("reported: %+v", p.Reports)
+	}
+}
+
+// skewReported wants hydra.clock_skew of detail, "" for none (DEC-3).
+func skewReported(detail string) func(t *testing.T, p played) {
+	return func(t *testing.T, p played) {
+		t.Helper()
+		var got []string
+		for _, r := range p.Reports {
+			if r.Event == "hydra.clock_skew" {
+				got = append(got, r.Detail)
+			}
+		}
+		if detail == "" && got != nil || detail != "" && !slices.Equal(got, []string{detail}) {
+			t.Errorf("hydra.clock_skew %q; want %q", got, detail)
+		}
+	}
+}
+
 // withLoginID sets Hydra's id of L in f's snapshot (Q34).
 func withLoginID(f *Flow, id string) *Flow {
 	f.Hydra.LoginID = id
@@ -368,7 +404,17 @@ func TestEntry(t *testing.T) {
 				}
 			}},
 		{name: "ENT-11 DEC-4, a challenge read past its lifetime", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
-			says: hydraSays{GetLogin: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
+			says: hydraSays{GetLogin: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, calls: []Op{GetLogin}, check: reportedExpired},
+		{name: "DEC-3, Hydra's clock 10 s ahead: reported at the creation", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(10 * time.Second), decrypted: true}},
+			kind: ChoicePage, calls: []Op{GetLogin}, write: func(t *testing.T, f *Flow) {},
+			check: skewReported("Hydra's requested_at 10s ahead")},
+		{name: "DEC-3, Hydra's clock 5 s ahead: within the tolerance", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(5 * time.Second), decrypted: true}},
+			kind: ChoicePage, calls: []Op{GetLogin}, write: func(t *testing.T, f *Flow) {}, check: skewReported("")},
+		{name: "DEC-1, the first read ahead in fallback: not Hydra's clock", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(10 * time.Second)}},
+			kind: ChoicePage, calls: []Op{GetLogin}, write: func(t *testing.T, f *Flow) {}, check: skewReported("")},
 		{name: "ECR-8, L already past its end at Hydra: no write", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
 			says: hydraSays{GetLogin: {login: loginRequest(t), requestedAt: testNow.Add(-31 * time.Minute)}},
 			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
@@ -430,7 +476,7 @@ func TestEntry(t *testing.T) {
 			says: hydraSays{GetConsent: {consent: consentRequest(lref, nil)}, RejectConsent: {err: err401}},
 			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent, RejectConsent}, write: finished},
 		{name: "ENT-20 R16, Hydra 404 on the read: finished without a reject", ev: Entry{LoginChallenge: hydraL}, stored: shownConsent(t),
-			says: hydraSays{GetConsent: {err: err404}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}, write: finished},
+			says: hydraSays{GetConsent: {err: err404}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}, write: finished, check: unreported},
 		{name: "ENT-20 R16, Hydra 2.1 410 on the read", ev: Entry{Ref: lref}, stored: shownConsent(t),
 			says: hydraSays{GetConsent: {err: err410}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}, write: finished},
 		{name: "ENT-20, Hydra unavailable on the read: flow intact", ev: Entry{Ref: lref}, stored: shownConsent(t),
@@ -464,9 +510,9 @@ func TestEntry(t *testing.T) {
 			says: hydraSays{RejectLogin: {err: err404}},
 			kind: ErrorPage, code: E1002, link: true, calls: []Op{RejectLogin}, write: finished},
 		{name: "ENT-10, Hydra 2.1 410", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err410}},
-			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
-		{name: "ENT-11, Hydra 2.2 401", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err401}},
-			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}},
+			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}, check: unreported},
+		{name: "ENT-11, Hydra 2.2 401: expired, in every mode", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err401}},
+			kind: ErrorPage, code: E1002, calls: []Op{GetLogin}, check: reportedExpired},
 		{name: "ENT-12 Q32, Hydra 404: forged, in every mode", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err404}},
 			kind: ErrorPage, code: E1001, calls: []Op{GetLogin}, check: reportedForged},
 		{name: "ENT-12, Hydra refuses the read", ev: Entry{LoginChallenge: hydraL}, says: hydraSays{GetLogin: {err: err400}},
@@ -701,7 +747,9 @@ func TestLoop(t *testing.T) {
 			kind: ErrorPage, code: E1008},
 		{name: "BCL-3 I1, at exp: not yet BCL-16", ev: Loop{Ref: lref}, stored: atExp(shownConsent(t)), kind: ErrorPage, code: E1008},
 		{name: "BCL-16 R16, Hydra 2.2 401 on the read: finished without a reject", ev: Loop{Ref: lref}, stored: shownConsent(t),
-			says: hydraSays{GetConsent: {err: err401}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}, write: finished},
+			says: hydraSays{GetConsent: {err: err401}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}, write: finished, check: unreported},
+		{name: "BCL-16, the consent shown read past its lifetime (DEC-4): not counted", ev: Loop{Ref: lref}, stored: shownConsent(t),
+			says: hydraSays{GetConsent: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent}, write: finished, check: unreported},
 		{name: "BCL-17 R16, reloaded within 10 s: the reject's cr", ev: Loop{Ref: lref}, stored: rejectedAgo(t, 2*time.Second),
 			kind: Redirect, url: "http://hydra/cr"},
 		{name: "BCL-17, after a concurrent reject (Hydra 2.1 409)", ev: Loop{Ref: lref}, stored: shownConsent(t), reread: rejectedAgo(t, 0),
@@ -735,12 +783,14 @@ func TestLoop(t *testing.T) {
 					t.Errorf("url %q", p.Response.URL)
 				}
 			}},
-		{name: "BCL-9, 404", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: err404}},
-			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished},
+		{name: "BCL-9, 404: L comes from the flow, never counted", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: err404}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished, check: unreported},
 		{name: "BCL-9, 401", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: err401}},
-			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished, check: unreported},
+		{name: "BCL-9, DEC-4", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: ErrChallengeExpired}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished, check: unreported},
 		{name: "BCL-9, 410", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: err410}},
-			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin}, write: finished, check: unreported},
 		{name: "BCL-10", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: errDown}},
 			kind: ErrorPage, code: E1004, calls: []Op{GetLogin}},
 		{name: "BCL-10, Hydra refuses the read", ev: loop, stored: atStep(t, 1, true, true), says: hydraSays{GetLogin: {err: err403}},
@@ -923,8 +973,11 @@ func TestConsent(t *testing.T) {
 		{name: "CST-1, illegible", ev: Consent{Challenge: "a/b"}, kind: ErrorPage, code: E1001},
 		{name: "CST-2 Q32, forged", ev: get, says: hydraSays{GetConsent: {err: err404}}, kind: ErrorPage, code: E1001, calls: []Op{GetConsent},
 			check: reportedForged},
-		{name: "CST-3", ev: get, says: hydraSays{GetConsent: {err: err410}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
-		{name: "CST-4", ev: get, says: hydraSays{GetConsent: {err: err401}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+		{name: "CST-2 Q32, the consent shown, posted: forged all the same", ev: post(true), stored: func() *Flow { f := acceptedFlow(t); f.ConsentChallenge = hydraC; return f }(),
+			says: hydraSays{GetConsent: {err: err404}}, kind: ErrorPage, code: E1001, calls: []Op{GetConsent}, check: reportedForged},
+		{name: "CST-3", ev: get, says: hydraSays{GetConsent: {err: err410}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}, check: unreported},
+		{name: "CST-4: expired, in every mode", ev: get, says: hydraSays{GetConsent: {err: err401}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent},
+			check: reportedExpired},
 		{name: "CST-5 A6", ev: get,
 			says: hydraSays{GetConsent: {consent: consentRequest(lref, func(r *ory.OAuth2ConsentRequest) { r.Context = nil })}, RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: rejected(RejectConsent, "login_required")},
@@ -984,7 +1037,7 @@ func TestConsent(t *testing.T) {
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.LoginChallenge = ory.PtrString(hydraL) })},
 			kind: ConsentPage, calls: []Op{GetConsent}, write: func(t *testing.T, f *Flow) {}},
 		{name: "CST-4 DEC-4, a consent challenge read past its lifetime", ev: get, stored: acceptedFlow(t),
-			says: hydraSays{GetConsent: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+			says: hydraSays{GetConsent: {err: ErrChallengeExpired}}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}, check: reportedExpired},
 		{name: "CST-14 I1, accepted at exp", ev: post(true), stored: atExp(acceptedFlow(t)), says: hydraSays{GetConsent: read(nil), AcceptConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, AcceptConsent}, write: finishedWithCR},
 		{name: "CST-12, Hydra's skip", ev: get, stored: acceptedFlow(t),

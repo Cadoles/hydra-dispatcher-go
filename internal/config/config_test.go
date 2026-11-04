@@ -981,6 +981,14 @@ func TestValidation(t *testing.T) {
 			t.Errorf("%v: %v", env, err)
 		}
 	}
+	// ENT-22: the TTL just above the margin is accepted; at it, the file's key
+	// is refused as the variable is.
+	if c, _, err := Load("", envOf(required(map[string]string{"DISPATCHER_HYDRA_LOGIN_CONSENT_TTL": "61s"}))); err != nil || c.Hydra.LoginConsentTTL != Duration(HydraMargin+time.Second) {
+		t.Errorf("login consent TTL above the margin: %v", err)
+	}
+	if _, _, err := load(t, "hydra: { login_consent_ttl: 1m }\n", nil); err == nil || !strings.Contains(err.Error(), "hydra.login_consent_ttl: must be above 1m0s") {
+		t.Errorf("login consent TTL of the file at the margin: err = %v", err)
+	}
 	// A key may stay in its own keyring, as during a rotation.
 	if _, _, err := Load("", envOf(required(map[string]string{"DISPATCHER_SECRETS_COOKIE_KEYS_PREVIOUS": hexKey}))); err != nil {
 		t.Errorf("active key also previous: %v", err)
