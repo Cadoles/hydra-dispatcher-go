@@ -172,11 +172,12 @@ const (
 	handlersGrace = time.Second
 )
 
-// newStateStore opens the store of the flows in progress: in memory while
-// state.redis_dsn is empty. The tests wrap it, to see it closed.
+// newStateStore opens the store of the flows in progress: Redis (or
+// Dragonfly) when state.redis_dsn is set, connected at the first call, in
+// memory otherwise. The tests wrap it, to see it closed.
 var newStateStore = func(c config.State) (state.StateStore, error) {
 	if c.RedisDSN != "" {
-		return nil, errors.New("state.redis_dsn: the Redis store is not available yet; leave it empty for the in-memory store")
+		return state.NewRedis(c.RedisDSN, c.KeyPrefix, c.RedisPoolSize)
 	}
 	return state.NewMemory(), nil
 }
@@ -266,6 +267,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	mux.Handle("GET /ready", httpx.Ready(map[string]httpx.Check{
 		"hydra":    hydraClient.Ready,
 		"database": s.database,
+		"state":    s.states.Ping, // a PING to Redis
 	}, 2*time.Second, logger))
 	emulated.Register(mux, emulated.Options{
 		Engine:          engine,

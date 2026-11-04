@@ -10,7 +10,7 @@ and journal in `hydra-dev/conception`): the binary serves the pages (choice of
 the flow, consent, errors, logout accepted at once until the confirmation of
 P9), the emulated admin API the login apps call (v2 paths and v1 aliases),
 `/health` and `/ready`; it keeps its configuration in Postgres and the flows in
-progress in memory.
+progress in memory, or in Redis (or Dragonfly) when `state.redis_dsn` is set.
 
 ## Commands
 
@@ -34,8 +34,9 @@ and writes nothing; in a terminal, `-force` prints them and asks, unless
 migrates at startup with `serve.migrate: true`, and
 bootstraps with `serve.bootstrap: missing` or `force`, logging the changes.
 
-`serve` exposes `/health` (liveness) and `/ready` (Hydra and the database
-reachable, within 2 s; 503 otherwise, details in the log). It reads the
+`serve` exposes `/health` (liveness) and `/ready` (Hydra, the database and
+the state store reachable, within 2 s, Redis by a `PING`; 503 otherwise,
+details in the log). It reads the
 configuration from the database at startup, then every 60 s. Logs are JSON
 lines on stdout, `log_type` `app` or `access`, with the request's
 `trace_id`; `log_level` applies to the application log only.
@@ -90,6 +91,18 @@ DATABASE_URL='postgres://postgres:dispatcher@127.0.0.1:55432/postgres?sslmode=di
   go test -race -tags integration ./internal/store/...
 go vet -tags integration ./...
 go tool staticcheck -tags integration ./...
+```
+
+The state store's integration tests (same tag) run the store's contract
+against each server of `REDIS_URLS`, comma-separated: a Redis 7 and a
+Dragonfly of hydra-dev's version, each in a throwaway container on a port of
+its own, never the stack's; the tag without `REDIS_URLS` fails:
+
+```sh
+docker run -d --rm --name dispatcher-redis -p 127.0.0.1:56379:6379 redis:7-alpine
+docker run -d --rm --name dispatcher-dragonfly -p 127.0.0.1:56380:6379 ghcr.io/dragonflydb/dragonfly:v1.34.1 --proactor_threads=2
+REDIS_URLS='redis://127.0.0.1:56379/0,redis://127.0.0.1:56380/0' \
+  go test -race -tags integration ./internal/state/...
 ```
 
 The golden files are rewritten with `-update`; review the diff:

@@ -78,13 +78,15 @@ func TestHandler(t *testing.T) {
 	}))
 	defer hydra.Close()
 
-	var dbErr error
+	var dbErr, stateErr error
 	database := func(context.Context) error { return dbErr }
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	newServer := func() *httptest.Server {
-		h, err := newHandler(testConfig(t, hydra.URL), logger, logger, testServices(t, database))
+		services := testServices(t, database)
+		services.states = pinged{services.states, &stateErr}
+		h, err := newHandler(testConfig(t, hydra.URL), logger, logger, services)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,15 +99,17 @@ func TestHandler(t *testing.T) {
 	}
 
 	for _, tt := range []struct {
-		hydraStatus, want   int
-		dbErr               error
-		hydraState, dbState string
+		hydraStatus, want               int
+		dbErr, stateErr                 error
+		hydraState, dbState, redisState string
 	}{
-		{http.StatusOK, http.StatusOK, nil, "ok", "ok"},
-		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, nil, "unavailable", "ok"},
-		{http.StatusOK, http.StatusServiceUnavailable, errors.New("database: connection refused"), "ok", "unavailable"},
+		{http.StatusOK, http.StatusOK, nil, nil, "ok", "ok", "ok"},
+		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, nil, nil, "unavailable", "ok", "ok"},
+		{http.StatusOK, http.StatusServiceUnavailable, errors.New("database: connection refused"), nil, "ok", "unavailable", "ok"},
+		// The state store's PING (P8).
+		{http.StatusOK, http.StatusServiceUnavailable, nil, errors.New("dial tcp redis:6379: connection refused"), "ok", "ok", "unavailable"},
 	} {
-		hydraStatus, dbErr = tt.hydraStatus, tt.dbErr
+		hydraStatus, dbErr, stateErr = tt.hydraStatus, tt.dbErr, tt.stateErr
 		// One instance per case: the Hydra client reuses its readiness for a second.
 		probed := newServer()
 		resp, err := http.Get(probed.URL + "/ready")
@@ -118,9 +122,9 @@ func TestHandler(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		_ = resp.Body.Close()
 		probed.Close()
-		if resp.StatusCode != tt.want || body.Checks["hydra"] != tt.hydraState || body.Checks["database"] != tt.dbState {
-			t.Errorf("Hydra %d, database %v: /ready = %d %v, want %d with hydra %s, database %s",
-				tt.hydraStatus, tt.dbErr, resp.StatusCode, body.Checks, tt.want, tt.hydraState, tt.dbState)
+		if resp.StatusCode != tt.want || body.Checks["hydra"] != tt.hydraState || body.Checks["database"] != tt.dbState || body.Checks["state"] != tt.redisState {
+			t.Errorf("Hydra %d, database %v, state %v: /ready = %d %v, want %d with hydra %s, database %s, state %s",
+				tt.hydraStatus, tt.dbErr, tt.stateErr, resp.StatusCode, body.Checks, tt.want, tt.hydraState, tt.dbState, tt.redisState)
 		}
 		if resp.Header.Get("X-Trace-ID") == "" {
 			t.Error("no X-Trace-ID on /ready")
@@ -330,21 +334,27 @@ func TestServeHealthcheckWarning(t *testing.T) {
 	}
 }
 
-// Until the Redis store exists, serve refuses a configuration that asks for
-// it rather than keep the flows in memory unseen.
-func TestServeRedisNotAvailable(t *testing.T) {
-	keepLoggers(t)
-	for _, kv := range append(requiredEnv("http://127.0.0.1:1"),
-		"DISPATCHER_STATE_REDIS_DSN=redis://redis:6379", "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", configEnv+"=") {
-		k, v, _ := strings.Cut(kv, "=")
-		t.Setenv(k, v)
+// state.redis_dsn selects the Redis store (P8), its keys under
+// state.key_prefix; empty, the memory store.
+func TestNewStateStore(t *testing.T) {
+	for _, tt := range []struct {
+		c     config.State
+		redis bool
+	}{
+		{config.State{}, false},
+		{config.State{RedisDSN: "redis://redis:6379/0", KeyPrefix: "go:", RedisPoolSize: 4}, true},
+	} {
+		s, err := newStateStore(tt.c)
+		if err != nil {
+			t.Fatalf("%+v: %v", tt.c, err)
+		}
+		if _, ok := s.(*state.Redis); ok != tt.redis {
+			t.Errorf("%+v: %T", tt.c, s)
+		}
+		_ = s.Close()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var err error
-	stdoutOf(t, func() { err = serve(ctx, nil) })
-	if err == nil || !strings.Contains(err.Error(), "state.redis_dsn") {
-		t.Errorf("serve = %v, want the Redis store refused", err)
+	if _, err := newStateStore(config.State{RedisDSN: "http://redis:6379"}); err == nil {
+		t.Error("an http:// DSN accepted")
 	}
 }
 
@@ -404,6 +414,19 @@ func TestServeClosesStores(t *testing.T) {
 			}
 		})
 	}
+}
+
+// pinged is a state store whose Ping fails with *err, when set.
+type pinged struct {
+	state.StateStore
+	err *error
+}
+
+func (s pinged) Ping(ctx context.Context) error {
+	if *s.err != nil {
+		return *s.err
+	}
+	return s.StateStore.Ping(ctx)
 }
 
 // closedState tells whether serve closed its state store.

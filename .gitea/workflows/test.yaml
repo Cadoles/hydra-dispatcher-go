@@ -17,6 +17,13 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      # The state store's (P8); Dragonfly, hydra-dev's server, runs locally
+      # (README).
+      redis:
+        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -63,12 +70,14 @@ jobs:
       - name: Test
         run: go test -race ./...
 
-      # The job runs in a container, beside the service: its name is its
-      # host. Without DATABASE_URL, the tests fail rather than skip.
+      # The job runs in a container, beside the services: their names are
+      # their hosts. Without DATABASE_URL or REDIS_URLS, the tests fail
+      # rather than skip.
       - name: Integration tests
         env:
           DATABASE_URL: postgres://postgres:dispatcher@postgres:5432/postgres?sslmode=disable
-        run: go test -race -tags integration ./internal/store/...
+          REDIS_URLS: redis://redis:6379/0
+        run: go test -race -tags integration ./internal/store/... ./internal/state/...
 
       # Built, never pushed: a Dockerfile or .dockerignore error shows here,
       # not at release. Same BuildKit pin as hydra-sql-go: the runner's

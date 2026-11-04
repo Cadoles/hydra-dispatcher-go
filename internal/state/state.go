@@ -1,7 +1,7 @@
 // Package state keeps the flows in progress: one value per key, each with a
 // TTL, written only when the caller still holds the current version. Two
-// backends share the interface: memory for a single instance, Redis for
-// several replicas (state.redis_dsn).
+// backends share the interface: memory for a single instance, Redis (or
+// Dragonfly) for several replicas (state.redis_dsn).
 package state
 
 import (
@@ -43,8 +43,11 @@ type StateStore interface {
 	Put(ctx context.Context, key string, val []byte, ttl time.Duration, ifVersion uint64) error
 	// Delete removes key; an absent key is not an error.
 	Delete(ctx context.Context, key string) error
-	// Close releases the store: after it, Get, Put and Delete fail with
-	// ErrClosed, unless their own arguments fail first (a context ended, no
+	// Ping tells whether the store answers, for /ready: Redis's PING; the
+	// memory store answers unless closed.
+	Ping(ctx context.Context) error
+	// Close releases the store: after it, Get, Put, Delete and Ping fail
+	// with ErrClosed, unless their own arguments fail first (a context ended, no
 	// TTL). Closing again returns nil.
 	Close() error
 }

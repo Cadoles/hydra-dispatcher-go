@@ -107,6 +107,9 @@ type State struct {
 }
 
 type Remember struct {
+	// Backend is cookie, the dispatcher_remember cookie; postgres, the
+	// server variant of the design document, is refused until a lot does it
+	// (Q40).
 	Backend string `yaml:"backend"`
 }
 

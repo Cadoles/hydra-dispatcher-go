@@ -103,6 +103,18 @@ func (m *Memory) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (m *Memory) Ping(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrClosed
+	}
+	return nil
+}
+
 // Close stops the sweeps and drops every value.
 func (m *Memory) Close() error {
 	m.mu.Lock()

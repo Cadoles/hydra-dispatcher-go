@@ -36,7 +36,7 @@ state:
   key_prefix: ""                # préfixe des clés, distinct pendant une cohabitation sur le même Redis
   redis_pool_size: 0            # 0 = 10 connexions par cœur
 remember:
-  backend: cookie               # cookie | postgres
+  backend: cookie               # cookie ; postgres refusé tant qu'aucun lot ne le fait
 store:
   backend: postgres             # postgres, seul backend supporté
   dsn: "${DATABASE_URL}"

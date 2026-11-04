@@ -36,7 +36,7 @@ state:
   key_prefix: "go:"
   redis_pool_size: 20
 remember:
-  backend: postgres
+  backend: cookie # the only one until a lot brings postgres (Q40)
 store:
   backend: postgres   # the only backend: the one key equal to its default
   dsn: "postgres://dispatcher@postgres/dispatcher"

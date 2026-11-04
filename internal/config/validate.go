@@ -178,7 +178,12 @@ func (c *Config) validate() (warnings []string, err error) {
 		}
 	}
 	nonNegative("state.redis_pool_size", c.State.RedisPoolSize)
-	oneOf("remember.backend", c.Remember.Backend, "cookie", "postgres")
+	if c.Remember.Backend == "postgres" {
+		// Q40: the server variant of the skip memory has no lot yet.
+		fail("remember.backend", "postgres is not available yet: the skip memory is the dispatcher_remember cookie; use cookie")
+	} else {
+		oneOf("remember.backend", c.Remember.Backend, "cookie")
+	}
 	oneOf("store.backend", c.Store.Backend, "postgres")
 	if c.Store.DSN == "" {
 		fail("store.dsn", "is required")

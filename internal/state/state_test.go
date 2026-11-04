@@ -60,6 +60,9 @@ func testStore(t *testing.T, open func(t *testing.T) (s StateStore, ttl time.Dur
 		if err := s.Delete(ctx, "flow:a"); err != nil {
 			t.Errorf("Delete = %v, want nil", err)
 		}
+		if err := s.Ping(ctx); err != nil {
+			t.Errorf("Ping = %v, want nil", err)
+		}
 	})
 
 	t.Run("versions", func(t *testing.T) {
@@ -277,6 +280,9 @@ func testStore(t *testing.T, open func(t *testing.T) (s StateStore, ttl time.Dur
 		if err := s.Delete(canceled, "flow:a"); !errors.Is(err, context.Canceled) {
 			t.Errorf("Delete = %v, want context.Canceled", err)
 		}
+		if err := s.Ping(canceled); !errors.Is(err, context.Canceled) {
+			t.Errorf("Ping = %v, want context.Canceled", err)
+		}
 		mustGet(t, s, "flow:a", "one")
 		if _, _, err := s.Get(ctx, "flow:b"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Get after the canceled Put = %v, want ErrNotFound", err)
@@ -300,6 +306,9 @@ func testStore(t *testing.T, open func(t *testing.T) (s StateStore, ttl time.Dur
 		}
 		if err := s.Delete(ctx, "flow:a"); !errors.Is(err, ErrClosed) {
 			t.Errorf("Delete = %v, want ErrClosed", err)
+		}
+		if err := s.Ping(ctx); !errors.Is(err, ErrClosed) {
+			t.Errorf("Ping = %v, want ErrClosed", err)
 		}
 	})
 

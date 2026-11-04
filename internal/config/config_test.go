@@ -133,9 +133,9 @@ func TestEveryKeyIsRead(t *testing.T) {
 		t.Fatalf("%d keys, want %d", len(got), len(defaultKeys))
 	}
 	for i, k := range got {
-		// postgres is the only store; pinning and strict claims are refused
-		// until implemented.
-		if k.path == "store.backend" || k.path == "tls.pinned_spki_sha256" || k.path == "consent.claims_filter" {
+		// postgres is the only store, cookie the only skip memory; pinning,
+		// strict claims and the server memory are refused until implemented.
+		if k.path == "store.backend" || k.path == "remember.backend" || k.path == "tls.pinned_spki_sha256" || k.path == "consent.claims_filter" {
 			continue
 		}
 		if reflect.DeepEqual(k.field.Interface(), defaultKeys[i].field.Interface()) {
@@ -946,6 +946,8 @@ func TestValidation(t *testing.T) {
 		{"sample rate", map[string]string{"DISPATCHER_OBSERVABILITY_SENTRY_SAMPLE_RATE": "1.5"}, "observability.sentry.sample_rate"},
 		{"audit output", map[string]string{"DISPATCHER_OBSERVABILITY_AUDIT_OUTPUT": "stderr"}, "observability.audit.output"},
 		{"remember backend", map[string]string{"DISPATCHER_REMEMBER_BACKEND": "redis"}, "remember.backend"},
+		// Q40: the server memory has no lot yet.
+		{"remember backend postgres", map[string]string{"DISPATCHER_REMEMBER_BACKEND": "postgres"}, "remember.backend: postgres is not available yet"},
 		{"logout propagation", map[string]string{"DISPATCHER_LOGOUT_PROPAGATE_WITHOUT_RECORD": "some"}, "logout.propagate_without_record"},
 		{"missing CA file", map[string]string{"DISPATCHER_TLS_CA_FILE": "/nonexistent/ca.pem"}, "tls.ca_file"},
 		{"overflowing duration", map[string]string{"DISPATCHER_ADMIN_CLIENT_SECRET_MAX_AGE": "10000000000"}, "too long"},
