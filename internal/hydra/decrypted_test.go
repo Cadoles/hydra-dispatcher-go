@@ -140,6 +140,25 @@ func TestRequestsOfRecordedAnswers(t *testing.T) {
 				}
 				sameRequest(t, name, consent, want)
 			}
+
+			// After a skip (P8): the context, acr and amr of the login accept,
+			// on which the x_dispatcher_skip marker is checked (Q38); an
+			// accept without amr is served [] and acr "".
+			for _, name := range []string{"consent_after_skip.json", "consent_after_skip_no_amr.json"} {
+				f, c, served := opened(name, true)
+				if !f.LoginSkip || f.Context == nil {
+					t.Fatalf("%s: not the consent of a skip with a context: %+v", name, f)
+				}
+				consent, err := ConsentRequestOf(c, f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want, err := decodeConsentRequest(served)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sameRequest(t, name, consent, want)
+			}
 		})
 	}
 }

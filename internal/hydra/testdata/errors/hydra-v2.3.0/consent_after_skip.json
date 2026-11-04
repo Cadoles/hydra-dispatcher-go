@@ -1,0 +1,81 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/consent?consent_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "ykpmeVH_52di3prHGuJGZOEJfSBD48JpO4sydiOA-t-1YG3U9RHV8GqAwtE41AVQtSuRLGVuFqecp0vMYiy3cfbcAk_t-b_LKq2azlwAjR08eUECY7qTGQXzpj1KLo9KbVr20UH0ybbucsIp2qooNQQKPJSokrSxsml5JFWObXmZdZ3esvENugkPhsW6EEkph57GVxZTeYUK9brEWD8NODz1LPZxhW2KCstRJgolHHSlNKjqZJcvEdBv5o91fDjTnZUCD-y3EjMJJsX6wBaWNWJ5v0Ejp_WNmMCC51oEhGf52TWKXdlIJeQWJO75g-MQhCwG7wkFu3Dv7B-RbRfuJ4VdyRywEhEXZYcXmKoYPwcKBiIWWO45VVxZ-Fy8zjk6IGz1kqDacRtrGrVfGU2bMtJS2DZju8UoXC46IPip6EPzgowWhWmKXd4pk76s6EBn5ew2Dbvs6Gscx3aAuxKpQDWxUdL38a1NEMd9_p8JkP-B6MlXsGqNqnaPIG8H7g9trIp4hXYMsX0c3P8_ycvvMRdReO0aPqUkNN61-gIzVDbWd67KVyfiJXqflWdOB1n_vEhoq465UoNcmZX5czSsVJb491DuDok2Dn2aLgpIb8GOUlds2jboQavDFpWK3QQJ7CNgtb0H7dmU1PaLv48eA5beJ8rFufq0alJvwREfTlwzHpuF_1ISFHPAIl_qG9kqnNI0NUWO6B1bAHj-DAe4RS8odOx7pKDZ1wuNhS92oiX4Gs9rf1lwqSCSwCQx1I-elJogHDGghacgxYwsyZZUgzaO-I97FS_cnIJL3tMHC-7vRiKUDT49HTBWxLgP9Nr4QYV6gC_67TtkocKzYI-Zyz9TQcGEI1WVsmEp44f4OokaBbfa45DAraU3EmUU3blybFdKHNItjl1NmCIkGQ3unf9qHTLGi-q5ZhCQHTymCi5pB6ZwcKV0l9hCUAyPtNPLrjX6arBwyJF9ajjSTYcpzLT4Ftgi_gwKoEkXFNl18fR8wXfgM9djU-1Be1XjwIJa3tWv6R7V5Fl2Nx-59WHASJQNx0G4q2ta84DosoC2Nga7G7w0SD9RHwxUxlRSHsHG3CcHKB65oN1gOE8UDESm4_O2rWRZ4TflW2SUUv5GZl2EHPm8dj6_c115zAXn2rsaSxyuUbZFBtcxW88-ja8ustXuUmT95_4GkdZYvI_3xPiAEHhQBBCuryRsXCKrm1SmoNhNAGonCCOTRmWE6BMEGMZ5_HQkOiej4LFCPw382mkrX634LLHQguvYWQjyBbIwzYDz5J_6hZO7neF0KhQmFcG70TNJG4WKbrzHQGNBMr79WEWfnuDEHA6K0BCmXLKwKOOJAkGipJCO6bav7-kyxDqK2aQ3kE_zjIGTBa2DVQ==",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": true,
+      "subject": "alice",
+      "oidc_context": {
+        "ui_locales": [
+          "fr",
+          "en"
+        ]
+      },
+      "client": {
+        "client_id": "e6b09fa1-2230-4b36-bfcd-329b7ac32a92",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-11-04T15:33:57Z",
+        "updated_at": "2026-11-04T15:33:56.685087Z",
+        "metadata": {},
+        "skip_consent": false,
+        "skip_logout_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      },
+      "request_url": "http://127.0.0.1:14444/oauth2/auth?client_id=e6b09fa1-2230-4b36-bfcd-329b7ac32a92\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "login_challenge": "ee2966ceb9924e04a2a1c8c081b64e9e",
+      "login_session_id": "f01a9c26-d192-4c46-aa34-4edb31cfa87d",
+      "acr": "fixture-acr",
+      "amr": [
+        "pwd"
+      ],
+      "context": {
+        "fixture": "flowfixtures",
+        "x_dispatcher_skip": "flowfixtures-marker"
+      }
+    }
+  }
+}

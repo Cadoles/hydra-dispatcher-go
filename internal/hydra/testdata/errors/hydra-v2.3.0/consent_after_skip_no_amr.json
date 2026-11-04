@@ -1,0 +1,79 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/consent?consent_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "FUhGvzwB-MZWoS0j0duwVxTnnxOFHZiwE4YfrKPdymQ6zAR4aJhOilOOKtp0YybZCc30Qb_991DTHrwZ986kcemMnPin79ZA7WcxreWyTjUvrzFGufTUZzMV1iVDejz2SLQfeKVS4MaDG2gvgfBWYY7Y0uISUpOfgivcj08-7Drk8G_u5BeHuHsUtWwNANbTmKCL2-WIN-2wZOx8hYnNx-Jar8OLeS7QSFq7xmsw9Qj8fyHm2XqoftJrv6FT8KPvAY9xSV4rufb46Gkxm8Hyw7Wo8rhd4gjXixoLa83iwQ2rskshGlpjiYB8h9zcQDJD58182uhhtbQQ6ucwxfvKThgogaJrynsE4odSRBcb6e5FeJW87E4nsHSeqnl9o7FM4edeXNESfpMZfBsx26_RkfqBRXNewfx2krTzHdrMetmQPih_rj9Fz9Ou01aiwlztgZfgO63GeW3k7oAAhX44rBjp-zHEN-VWqwYdBuoe9Otdk-4LFc792NsEck2e2tZxwIwrD8FLshnUS1zYIwEn4vRIgKJPDI99cQ5f_pC_gnPzFB2xvXYP-CJnKKGyDdwgfBm0bd52ux-6s_4LPAQqy3P1G0-TvI-OWAAZJjTsk50A7GgJJsJ8hRv2JjilPJ6gx_KPzSw42uLcZ6_NYZad55z-Vy-mJ2ZWLDEqq7paBK3OaNCRCSz7Pf3h36S-PcAmoHj4FS2X6-xx1w49VCr973uJgXEaVOmszP_KPMb8R8kh3eM4MpuAhIlc6mX2zAPJnYV6CVnoBCxtBNQmckTb4JJdF81Jx41xtGl8RljfmlNypBWU8tC_0rlRppNDi5hVGtjHzjAPcxTFjU_2B9A7KR4uoEaN2tETO7-cltKVfIs1neDV5E6FS56V9H4uXhdWOM-5YJLqaR-8pX_w6wASrJ8qKiEQ4Bqxf9Ebd7dZc9OAWm0VjOW_qJ_PC7q6dZ_0prv5DAUXqF6XNXTbWNbtydct7QBXerqCTrSo2-lkwCbnhA9VpcBrfh04SbxETGR8LUCUF4sIQnNpYX_0vmeVe-ILudI7IHSEc2KCsx94ibln_YP6pqaAPgngcna4MIJzXuXw56hbhnMV_3yWWd-h4nempBjP0QlIB0bSfU3hSkZI2gM5rAX5wpTskPkMVEbynN-Es5afFc5yRWGyvmz5THtRmKC7siCUwwI3UyZHKlFnAxHbNMFDuEYY2-Sm3zaTE-7_EoRCtamBFHwU-LqjkiJS0XXS1Ejm1P1qOzizzBuUiVgcDVH2OO8pV6iy87eFv0FRgvoEpNtTkpHx9L6t6Ah9X3I_gIhvneWNOixN9f-Qiqo4DRv2_eUdfmF-PdmXNKE_bFnf726Pqj88vkNNdg==",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": true,
+      "subject": "alice",
+      "oidc_context": {
+        "ui_locales": [
+          "fr",
+          "en"
+        ]
+      },
+      "client": {
+        "client_id": "e6b09fa1-2230-4b36-bfcd-329b7ac32a92",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-11-04T15:33:57Z",
+        "updated_at": "2026-11-04T15:33:56.685087Z",
+        "metadata": {},
+        "skip_consent": false,
+        "skip_logout_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      },
+      "request_url": "http://127.0.0.1:14444/oauth2/auth?client_id=e6b09fa1-2230-4b36-bfcd-329b7ac32a92\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "login_challenge": "453db0aacd97481789488ebf50a8f0a5",
+      "login_session_id": "f01a9c26-d192-4c46-aa34-4edb31cfa87d",
+      "acr": "",
+      "amr": [],
+      "context": {
+        "fixture": "flowfixtures",
+        "x_dispatcher_skip": "flowfixtures-marker"
+      }
+    }
+  }
+}

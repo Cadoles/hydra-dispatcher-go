@@ -280,6 +280,9 @@ func (f *fixtures) recordErrors(auth string, ttl time.Duration) error {
 	if err := f.recordReplay("login_other_subject_verifier", otherSubject); err != nil {
 		return err
 	}
+	if err := f.recordSkips(auth); err != nil {
+		return err
+	}
 
 	logout, err := f.challengeFrom(f.public.JoinPath("/oauth2/sessions/logout").String(), "logout_challenge")
 	if err != nil {
@@ -342,6 +345,49 @@ func (f *fixtures) recordErrors(auth string, ttl time.Duration) error {
 	}
 	f.http.Jar = consentBrowser
 	return f.recordReplay("consent_expired_verifier", consentLate)
+}
+
+// recordSkips records what P8's skip memory relies on, with the session the
+// jar still holds (each login is a skip): an accept of a skip with remember
+// false, which Hydra turns to true itself, and its verifier, which then
+// passes (Q43 withdrawn); the consent requests that follow a skip accepted
+// with a context, an acr and an amr, and without amr, whose shapes the
+// x_dispatcher_skip marker is computed on (Q38).
+func (f *fixtures) recordSkips(auth string) error {
+	get, put := http.MethodGet, http.MethodPut
+	forget, err := f.challengeFrom(auth, "login_challenge")
+	if err != nil {
+		return err
+	}
+	forgotten, err := f.record(call{"login_skip_forget", put, loginPath + "/accept", "login_challenge", forget,
+		jsonBody(map[string]any{"subject": subject, "remember": false, "amr": []string{"pwd"}})})
+	if err != nil {
+		return err
+	}
+	if err := f.recordReplay("login_skip_forget_verifier", forgotten); err != nil {
+		return err
+	}
+	marker := map[string]any{"x_dispatcher_skip": "flowfixtures-marker", "fixture": "flowfixtures"}
+	for _, c := range []struct {
+		name string
+		body map[string]any
+	}{
+		{"consent_after_skip", map[string]any{"subject": subject, "remember": true, "acr": "fixture-acr", "amr": []string{"pwd"}, "context": marker}},
+		{"consent_after_skip_no_amr", map[string]any{"subject": subject, "remember": true, "context": marker}},
+	} {
+		login, err := f.challengeFrom(auth, "login_challenge")
+		if err != nil {
+			return err
+		}
+		consent, err := f.acceptLogin(login, jsonBody(c.body))
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.name, err)
+		}
+		if _, err := f.record(call{c.name, get, consentPath, "consent_challenge", consent, nil}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // call is one admin API exchange to record under name.

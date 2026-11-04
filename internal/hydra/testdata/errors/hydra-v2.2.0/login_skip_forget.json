@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/login/accept?login_challenge=\u003cchallenge\u003e",
+    "body": {
+      "amr": [
+        "pwd"
+      ],
+      "remember": false,
+      "subject": "alice"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "redirect_to": "http://127.0.0.1:14444/oauth2/auth?client_id=f8f62394-2b3d-493d-b417-439b2d1da50e\u0026login_verifier=o4z8gtSNwkeXvMJunvHgcfNz4eUWKEuZZ875jzTn9rD8m_yffKk80FNj_Kg3MDFjWvSO2QBJdFavRTMy06tzz2NdAuzVpflmw43dgd_1EL8yT_WL-IcO9awig9S-1QIKiR2F_b3980rSQVsXgoX6U8w7DGKBrFiijNiY5twCPw4d4PXMkg7NqDThS06DFstArAkgf2rRL3fzUkwuZf5u4yx_xBV1Od2OqExdzvQPxQMW8sUgV1X7vEkbCWgMMcL9qdGGjRpKOixJCGfhORmcb5fQml5rCh6tuXP4sm4vM9g8sFVBkYmE6-s7QkBn9c8rNO5UZ7qijI7u2UWupr0P2AuOb1evJ3i9Y4ac6uXzWV2w74tuDTjfySGs0Vth-3xZTblBKA_AWup5NSYLQf9iNHrJc148hHIudkTVdx4W0QehNR3spgzoO8tXFYvqO8SzCO5Wbn33lLYok4LTjHKZPiW3Cq7zkbaZY2xnPB1Je4ItyUIPu4H9Kb38OziPCzC8WMUOq4FCB29cERtik8ySj9cV2q2xBa2JN-Zo1jBN90vOtghZGOaqxcQ17yce8iH1fnTHNLfr_zkx2miFAW4QMrlvjyotp0tP0S0u7LSxruYLVHgEI--7OVdi2boIYUer-LoJ3dgffbBeU_pmccbY8dskP21avHhnSWHV0ExkLIHRZLS0NO8HezgHx33IRwUFce-v09YeGVOtAf4TfUUs9C3MlOLsjmkdycPjSM-QlxZiKFUKQxSTlMaBLCWhPgKwFuqilRMX4LSfvqoj5Q_ZsUUcGwia09FP8ljnJnKONfIoYOSac1IWKhynd5MWGahzEkefQrjBDXiHNnKBP54KsP_jQZ4eqoWvEg7Kkjm9mEpLkQHiynuSsXqJsY9xWQXPKC3A5LRIbiLPVxG1-bTmM2xmZnCbKBQZbrd68tUaQI7YmoM30WhAMHAjH4o4j_jNdidk7e6IsBmd_G1a1IrqEqJkHEz6T1_9QtHs6ZakTJOiYRYvIIptXtcppIOvzEbZIuhaMIivx-wKBp3Rk_TTiGOtphyJpI4ypu-BRigz4ITXPuhTkOqL8kYe5RqRxQNd0FAyg3Mp2-ISYjGaHAV5U9QmZ-k00XkDSz3S0Vo5CMJa_x8Z4WYZopxCaiPGNON1cP-UqjLDIxyZL8IKrVldJ_aqD-tOdcBcQFmho94e21lRbDAdpexpv_ffULYcJ-trRH_5dDdk1m3-JOUHwZaPYv0YdBs0xGMaTqj9fihf0wyUcwqv_MGV9OTxO-STbZ4RKMjqNtKRm4wZgvPw18Kk72rQCXKcJFlzur5dTS2-QuFMMHUHcyyiTkkCMxiHQ-nBZtVKlZbedZv9d9C_gFy9wsiozugta6VmYK1HCTIT6iPxAsNIvXO3oZdJxT2xe_sVmDyton5-RJxbwcTFpMqpM7r2gs6Uj-vDr5VmZr2wygOvGrqfXo-ObTqZbH_9xFOW4D2kfpUPBTKvmqF3FWbPJHL-EcT4icNlzsyRw4jcni6lxcjorg%3D%3D\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en"
+    }
+  }
+}

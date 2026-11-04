@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/login/accept?login_challenge=\u003cchallenge\u003e",
+    "body": {
+      "amr": [
+        "pwd"
+      ],
+      "remember": false,
+      "subject": "alice"
+    }
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "redirect_to": "http://127.0.0.1:14444/oauth2/auth?client_id=e6b09fa1-2230-4b36-bfcd-329b7ac32a92\u0026login_verifier=3hcP2NLJEEdO_zs1GTAws_CUsAD9GjTbKGKPiS7BCkFGq1mlfWbsux4LLhjLdC3ZxfaSa8OnvDIXvpewCO_67rzMDOKfbChxn2eKjVkGVywjdRrlrPHSG5V_6ClsPfBfgbtW21kUYe5bB96Q9mW-B5V-ueCnHSLMgGymZ0On48mk1SkPXXdjkZOqzdkE7LzDgxiAz7NtS2s3adCMM916xIY9F89Fs9YMIVFKYoucO3UceNq7_JeNhJtAKarmRgxmV4dEaF_hx0y7o14Z0TPpJ_KsYK1To06lSi6JXMGjbvd_gQyQ3a1hZsX8BObMo61FlY4ENFfnHUH-1u5Gz1hvRE8S9C8CxxlSj7SCmfcN5bhaaKGbFRAsuNmeyzhgtmf-G2TVmjCDaLuGfL4yT35Yia5ikS1P1gfRAvMTj_XHCpwD4zW4WpoLrVlg8U8PJF4Y31lvPdB4MB8eBgTdkkTvnexhxKKdKDbQ-4ekVXyu-2L15YlG-sDv92n6iLMd9GxjB2TPUrkuOkn8HJUZcmye8qpGnmtWwVEb6G7ecHhVsaDkEtIUbapuwCVzXXDUu65hvWYk58fM7ksaaK5_LgWEY2OvMJsRq9ABd_bOmAIRqC8fzoDexWqu6ypZEipyhUQ1Dqjiz-Q5olFWvYCUAhIFqa_0E5wlAImBXIsuuTxAAorN_MXzITONNK14zyCFgBMb0WX7LVwe6Fv0PwALCxEQHyktwXvvn2dPB7Bn-TuvdDmIqZ0vndrBokda4H8ea1WoezgCBQQuV9krh5Wx35BEtW4vnxgiVZDXX3DYiqA3DafYZSVNO-TDgSvuQ5c-DQ9wgcEc_520RVkgbjsj8mK1e2jIE3OWQyrFwGQoMG0diOsmHKxR4ICYv2CoVxl2_5hqEc_NE8fAEq8CUBgyXDG95ddqJuzKWn5KR7iB7LIcRXb-DGJBK8F6CZIWRYnfE-UY91cGkRsFKbmJwsVTf6lNvFYkzhNhW_FkRacroyHTlpS8MalCOS9SbkhJxFaDEPIcPa_2ewqTdL3Br_JUZYFmiymMNE7wDcMvbJ6mWwaMVXPbrTssUzEUhBY3lTbOkw7v5boVEorfNdzJzkBv5P7AZtLq-EEEGuPZK123-LMldtHJ4gbyaPfKmF-DQ2ndrrZwJfMFB69cTmzYtz72BGrmubp9FzljkXyal4l18_J24zdbnCNrYandbcNjL4KBDal9vbDdEhYIumSMbEIdlxs%3D\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en"
+    }
+  }
+}
