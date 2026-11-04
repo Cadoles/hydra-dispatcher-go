@@ -112,7 +112,9 @@ type claimLine struct{ Label, Value string }
 
 type pageError struct{ Code, MessageKey, TraceID, Link string }
 
-type form struct{ Action, LoginChallenge, ConsentChallenge, CSRF string }
+// form is what a page's form posts back. Print is the print of the claims a
+// consent screen without a flow shows (SKC-2, Q37), "" on a flow's.
+type form struct{ Action, LoginChallenge, ConsentChallenge, CSRF, Print string }
 
 // T translates key in the page's locale.
 func (p page) T(key string, args ...any) string {
@@ -264,7 +266,7 @@ func (h *Handler) consentPage(r *http.Request, cfg *store.Snapshot, c *flow.Cons
 		data, _ := json.Marshal(c.Client)
 		p.Client = clientOf(data)
 	}
-	p.Form = form{Action: h.path + "/consent?consent_challenge=" + url.QueryEscape(c.Challenge), ConsentChallenge: c.Challenge, CSRF: c.CSRF}
+	p.Form = form{Action: h.path + "/consent?consent_challenge=" + url.QueryEscape(c.Challenge), ConsentChallenge: c.Challenge, CSRF: c.CSRF, Print: c.Print}
 	p.Audience = c.Audience
 	sent := sentClaims(c)
 	covered := map[string]bool{}
@@ -358,10 +360,11 @@ func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, nam
 // catalog lacks.
 type checking struct{}
 
-// The sample challenge and token of check's forms.
+// The sample challenge, token and print of the claims of check's forms.
 const (
 	sampleChallenge = "c2FtcGxlX2NoYWxsZW5nZQ=="
 	sampleCSRF      = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	samplePrint     = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 )
 
 // check renders each page in each locale with sample data, through each
@@ -428,6 +431,8 @@ func (h *Handler) samples(r *http.Request, cfg *store.Snapshot) []sample {
 		{"select", "no flow", h.choicePage(r, cfg, &flow.ChoiceScreen{LoginChallenge: sampleChallenge, CSRF: sampleCSRF}), nil},
 		{"consent", "scopes, claims, audience", h.consentPage(r, cfg, consent), consentFields},
 		{"consent", "nothing asked", h.consentPage(r, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF}), consentFields},
+		{"consent", "without a flow", h.consentPage(r, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint, Subject: "s", Claims: flow.Object{"email": json.RawMessage(`"v"`)}}),
+			map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept", "claims_print": samplePrint}},
 	}
 	for _, code := range slices.Sorted(maps.Keys(statuses)) {
 		for _, link := range []string{"", "https://client.example/"} {

@@ -22,6 +22,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -238,6 +239,14 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		return nil, err
 	}
 	logger.Info("hydra.mode", "mode", hydraMode(source), "hydra_version", cfg.Hydra.Version)
+	previous := make([][]byte, len(cfg.Secrets.CookieKeysPrevious))
+	for i, k := range cfg.Secrets.CookieKeysPrevious {
+		previous[i] = k
+	}
+	memories, err := remember.New(cfg.Secrets.CookieKey, previous...)
+	if err != nil {
+		return nil, err
+	}
 	engine := &flow.Orchestrator{
 		Store:           s.states,
 		Config:          s.config,
@@ -253,6 +262,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Engine:     engine,
 		Hydra:      hydraClient,
 		Config:     s.config,
+		Remember:   memories,
 		BaseURL:    cfg.Server.BaseURL,
 		CookiePath: cfg.Server.CookiePath,
 		ShowValues: cfg.Consent.ShowValues,

@@ -3,6 +3,8 @@ package front
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -28,6 +30,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/web"
@@ -61,6 +64,8 @@ type fakeHydra struct {
 	// login is the last login challenge read, which the consent request
 	// names, as Hydra 2.1 does (Q34).
 	login string
+	// skip is Hydra's skip on the login requests, for alice.
+	skip bool
 }
 
 func (h *fakeHydra) called(op string) error {
@@ -83,6 +88,9 @@ func (h *fakeHydra) LoginRequest(_ context.Context, challenge string) (*ory.OAut
 		RequestUrl:     "http://public.hydra.test/oauth2/auth?client_id=c1",
 		RequestedScope: []string{"openid", "profile", "email", "groups"},
 		SessionId:      ory.PtrString(sessionID),
+	}
+	if h.skip {
+		r.Skip, r.Subject = true, "alice"
 	}
 	if h.client != nil {
 		r.Client = *h.client
@@ -114,11 +122,18 @@ func (h *fakeHydra) ConsentRequest(_ context.Context, challenge string) (*ory.OA
 	h.mu.Lock()
 	login := h.login
 	h.mu.Unlock()
+	amr := h.accepted.Amr
+	if amr == nil {
+		amr = []string{}
+	}
 	return &ory.OAuth2ConsentRequest{
 		Challenge:      challenge,
 		LoginChallenge: ory.PtrString(login),
 		Subject:        ory.PtrString(h.accepted.Subject),
 		LoginSessionId: ory.PtrString(sessionID),
+		Acr:            ory.PtrString(h.accepted.GetAcr()),
+		Amr:            amr,
+		RequestUrl:     ory.PtrString("http://public.hydra.test/oauth2/auth?client_id=c1"),
 		Context:        json.RawMessage(ctx),
 		RequestedScope: []string{"openid", "profile", "email", "groups"},
 		Client:         client,
@@ -188,6 +203,15 @@ type worldOptions struct {
 	showValues bool
 	// snapshot replaces testSnapshot.
 	snapshot *store.Snapshot
+	// path is server.cookie_path, / when "".
+	path string
+}
+
+func (o worldOptions) cookiePath() string {
+	if o.path == "" {
+		return "/"
+	}
+	return o.path
 }
 
 func newWorld(t *testing.T, opts ...worldOptions) *world {
@@ -208,7 +232,11 @@ func newWorld(t *testing.T, opts ...worldOptions) *world {
 		BaseURL: opt.base, LoginConsentTTL: 30 * time.Minute, Keys: flow.Keys{[]byte("0123456789abcdef0123456789abcdef")},
 	}
 	logger := slog.New(httpx.LogHandler(slog.NewJSONHandler(&w.logs, nil)))
-	h, err := New(Options{Engine: w.o, Hydra: w.hydra, Config: cfg, BaseURL: opt.base, CookiePath: "/", ShowValues: opt.showValues, Logger: logger})
+	memories, err := remember.New([]byte("fedcba9876543210fedcba9876543210"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(Options{Engine: w.o, Hydra: w.hydra, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +270,10 @@ func (w *world) do(method, target string, form url.Values, header ...string) *ht
 	w.h.ServeHTTP(rec, r)
 	resp := rec.Result()
 	for _, c := range resp.Cookies() {
+		if c.MaxAge < 0 {
+			delete(w.cookies, c.Name)
+			continue
+		}
 		w.cookies[c.Name] = c.Value
 	}
 	return resp
@@ -571,11 +603,19 @@ func TestLogout(t *testing.T) {
 	} {
 		w := newWorld(t)
 		w.hydra.errs["get_logout"] = tc.err
+		w.cookies["dispatcher_remember"], w.cookies["dispatcher_remember_2"] = "2.memory", "of another session"
 		resp := w.do(http.MethodGet, tc.target, nil)
 		body := text(t, resp)
 		if resp.StatusCode != tc.status || tc.code != "" && !strings.Contains(body, tc.code) ||
 			tc.code == "" && resp.Header.Get("Location") != loggedOut {
 			t.Errorf("%s: %d %s\n%s", tc.name, resp.StatusCode, resp.Header.Get("Location"), body)
+		}
+		// WRT-4 (Q41): a logout accepted clears the memory of the skip, both
+		// parts, whatever its sid; a logout that fails, nothing.
+		for _, name := range []string{"dispatcher_remember", "dispatcher_remember_2"} {
+			if c := setCookie(resp, name); (c != nil && c.MaxAge < 0) != (tc.code == "") {
+				t.Errorf("%s: WRT-4, %s: %+v", tc.name, name, c)
+			}
 		}
 	}
 	w := newWorld(t)
@@ -1005,8 +1045,8 @@ func TestGoldenPages(t *testing.T) {
 			n++
 		}
 	}
-	if n != 12 {
-		t.Errorf("%d golden pages, want 12", n)
+	if n != 14 {
+		t.Errorf("%d golden pages, want 14", n)
 	}
 }
 
@@ -1015,4 +1055,180 @@ func line(lines []string, i int) string {
 		return lines[i]
 	}
 	return "(end)"
+}
+
+// hydraL2 is a second login challenge of the same Hydra session.
+const hydraL2 = "1d45bbff177259bed0362135f0aa0cc5"
+
+// remembered plays a first authentication on hydra-sql through the pages,
+// claims in its id_token, Hydra skipping the consent, and returns the
+// response of the consent, which writes the remember cookie (WRT-1).
+func (w *world) remembered(claims string) *http.Response {
+	w.t.Helper()
+	w.hydra.consentSkip = true
+	w.app(w.choose("hydra-sql"), "alice", claims)
+	location(w.t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
+	resp := w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil)
+	location(w.t, resp, http.StatusSeeOther)
+	return resp
+}
+
+// setCookie returns the Set-Cookie of name in resp.
+func setCookie(resp *http.Response, name string) *http.Cookie {
+	for _, c := range resp.Cookies() {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+// WRT-1, MEM-1, MEM-2, SKP-1, SKC-1 to SKC-3 through the pages: the cookie
+// written at the consent, read at the next login, which Hydra skips. B3: 4
+// calls, 5 with the consent screen.
+func TestRememberCookie(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		screen bool
+		calls  []string
+	}{
+		{"SKP-1 SKC-1, consent skipped", false, []string{"get_login", "accept_login", "get_consent", "accept_consent"}},
+		{"SKP-1 SKC-2 SKC-3, the screen built from the cookie", true, []string{"get_login", "accept_login", "get_consent", "get_consent", "accept_consent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			resp := w.remembered(`{"email":"alice@example.org"}`)
+			c := setCookie(resp, "dispatcher_remember")
+			if c == nil || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.MaxAge != 86400 || c.Secure {
+				t.Fatalf("WRT-1, Set-Cookie %+v", c)
+			}
+			if setCookie(resp, "dispatcher_remember_2") != nil {
+				t.Error("a second part for a small memory")
+			}
+
+			w.hydra.skip, w.hydra.consentSkip, w.hydra.calls = true, !tc.screen, nil
+			if u := location(t, w.do(http.MethodGet, "/?login_challenge="+hydraL2, nil), http.StatusSeeOther); u.String() != verifierURL {
+				t.Fatalf("SKP-1: %s", u)
+			}
+			resp = w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil)
+			if tc.screen {
+				page := text(t, resp)
+				m := regexp.MustCompile(`name="claims_print" value="([0-9a-f]{64})"`).FindStringSubmatch(page)
+				if resp.StatusCode != http.StatusOK || m == nil || !strings.Contains(page, "Email address") {
+					t.Fatalf("SKC-2: %d %s", resp.StatusCode, page)
+				}
+				resp = w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {w.csrf()}, "claims_print": {m[1]}, "action": {"accept"}}, sameOrigin...)
+			}
+			if u := location(t, resp, http.StatusSeeOther); u.String() != callbackURL {
+				t.Fatalf("SKC-1: %s", u)
+			}
+			// WRT-5: a skip honoured writes no cookie.
+			if setCookie(resp, "dispatcher_remember") != nil {
+				t.Error("WRT-5, the cookie written again")
+			}
+			if !slices.Equal(w.hydra.calls, tc.calls) {
+				t.Errorf("calls %v; want %v", w.hydra.calls, tc.calls)
+			}
+			if got, _ := json.Marshal(w.hydra.consent.Session.IdToken); string(got) != `{"email":"alice@example.org"}` {
+				t.Errorf("id_token %s", got)
+			}
+		})
+	}
+}
+
+// WRT-1, WRT-2, MEM-1: deflated, then in two cookies beyond 3.8 KB, both
+// read back; a former second part cleared; beyond 7.5 KB, none, and the
+// former one cleared.
+func TestRememberSizes(t *testing.T) {
+	random := func(n int) string { // which deflate barely shrinks
+		b := make([]byte, n*3/4)
+		_, _ = rand.Read(b)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	w := newWorld(t)
+	resp := w.remembered(`{"email":"alice@example.org","blob":"` + random(5000) + `"}`)
+	first, second := setCookie(resp, "dispatcher_remember"), setCookie(resp, "dispatcher_remember_2")
+	if first == nil || second == nil || second.MaxAge != 86400 || !second.HttpOnly {
+		t.Fatalf("WRT-1, two cookies: %+v %+v", first, second)
+	}
+	// Both parts read back: the next login is skipped.
+	w.hydra.skip = true
+	if u := location(t, w.do(http.MethodGet, "/?login_challenge="+hydraL2, nil), http.StatusSeeOther); u.String() != verifierURL {
+		t.Fatalf("SKP-1 from two cookies: %s", u)
+	}
+	// MEM-1: without its second part, the skip is ignored.
+	delete(w.cookies, "dispatcher_remember_2")
+	if resp := w.do(http.MethodGet, "/?login_challenge=2e56ccaa288360cfe1473246a1bb1dd6", nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("MEM-1, the second part missing: %d, not the choice page", resp.StatusCode)
+	}
+
+	// A small memory written over two cookies clears the second.
+	w = newWorld(t)
+	w.cookies["dispatcher_remember_2"] = "former"
+	resp = w.remembered(`{"email":"alice@example.org"}`)
+	if c := setCookie(resp, "dispatcher_remember_2"); c == nil || c.MaxAge >= 0 {
+		t.Errorf("the former second part kept: %+v", c)
+	}
+
+	// WRT-2: beyond 7.5 KB, the cookie and its second part cleared.
+	w = newWorld(t)
+	w.cookies["dispatcher_remember"] = "former"
+	resp = w.remembered(`{"blob":"` + random(9000) + `"}`)
+	for _, name := range []string{"dispatcher_remember", "dispatcher_remember_2"} {
+		if c := setCookie(resp, name); c == nil || c.MaxAge >= 0 {
+			t.Errorf("WRT-2, %s: %+v", name, c)
+		}
+	}
+	if !strings.Contains(w.logs.String(), `"msg":"skip.unavailable"`) {
+		t.Errorf("WRT-2 not logged: %s", w.logs.String())
+	}
+}
+
+// WRT-1: Max-Age is the remember_for sent; 0, a cookie of the browser's
+// session, as Hydra's is then. WRT-3: remember false, none.
+func TestRememberLife(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings func(s *store.Settings)
+		maxAge   int
+		written  bool
+	}{
+		{"WRT-1, remember_for", func(s *store.Settings) { s.LoginRememberFor = time.Hour }, 3600, true},
+		{"WRT-1, remember_for 0: a cookie of the browser's session", func(s *store.Settings) { s.LoginRememberFor = 0 }, 0, true},
+		{"WRT-3, remember false", func(s *store.Settings) { s.Remember = false }, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := testSnapshot()
+			tc.settings(&snap.Settings)
+			w := newWorld(t, worldOptions{base: base, snapshot: snap})
+			c := setCookie(w.remembered(`{"email":"alice@example.org"}`), "dispatcher_remember")
+			if (c != nil) != tc.written || c != nil && c.MaxAge != tc.maxAge {
+				t.Errorf("Set-Cookie %+v; want written %v, Max-Age %d", c, tc.written, tc.maxAge)
+			}
+		})
+	}
+}
+
+// In HTTPS with cookie_path /, the cookies are __Host- and Secure; under
+// another path, they keep their names and take it.
+func TestRememberHTTPS(t *testing.T) {
+	for _, tc := range []struct {
+		base, path, prefix string
+	}{{"https://dispatcher.example", "/", "__Host-"}, {"https://dispatcher.example/auth", "/auth/", ""}} {
+		w := newWorld(t, worldOptions{base: tc.base, path: tc.path})
+		w.hydra.consentSkip = true
+		w.cookies[tc.prefix+"dispatcher_flow_csrf"] = strings.Repeat("ab", 32)
+		page := w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+		if page.StatusCode != http.StatusOK {
+			t.Fatalf("GET /: %d", page.StatusCode)
+		}
+		step := location(t, w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.cookies[tc.prefix+"dispatcher_flow_csrf"]}},
+			"Origin", "https://dispatcher.example"), http.StatusSeeOther)
+		w.app(step, "alice", `{"email":"alice@example.org"}`)
+		location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
+		c := setCookie(w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil), tc.prefix+"dispatcher_remember")
+		if c == nil || !c.Secure || c.Path != tc.path {
+			t.Errorf("cookie_path %s: Set-Cookie %+v", tc.path, c)
+		}
+	}
 }

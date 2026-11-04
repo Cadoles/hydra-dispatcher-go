@@ -2,7 +2,8 @@
 // POST /), the return of the login apps (/oauth2/auth), Hydra's consent
 // (/consent) and logout (/logout), and the pages' static files. The flow
 // engine decides; the handlers read the request, render its answer, and set
-// the dispatcher_flow_csrf cookie.
+// the dispatcher_flow_csrf cookie and the dispatcher_remember one, the
+// memory of the skip (P8), which they open and seal.
 package front
 
 import (
@@ -36,6 +37,12 @@ type Logout interface {
 	AcceptLogout(ctx context.Context, challenge string) (string, error)
 }
 
+// Memories seals and opens the dispatcher_remember cookie: remember.Codec.
+type Memories interface {
+	Seal(r *flow.Remembered) ([]string, error)
+	Open(first, second string) flow.Memory
+}
+
 // Snapshots gives the configuration of the moment, as store.Live does, for
 // the pages the engine does not answer.
 type Snapshots interface {
@@ -47,6 +54,8 @@ type Options struct {
 	Engine Engine
 	Hydra  Logout
 	Config Snapshots
+	// Remember seals the memory of the skip, by secrets.cookie_key.
+	Remember Memories
 	// BaseURL and CookiePath are server.base_url and server.cookie_path.
 	BaseURL    string
 	CookiePath string
@@ -74,15 +83,21 @@ type Handler struct {
 // maxForm bounds the body of a form: a Hydra 2.2 challenge is about 1.5 KiB.
 const maxForm = 64 << 10
 
-// Cookie names, without the __Host- prefix of HTTPS.
+// Cookie names, without the __Host- prefix of HTTPS. The memory of the skip
+// takes two cookies beyond 3.8 KB, the second named rememberPart.
 const (
-	csrfCookie   = "dispatcher_flow_csrf"
-	localeCookie = "dispatcher_locale"
+	csrfCookie     = "dispatcher_flow_csrf"
+	localeCookie   = "dispatcher_locale"
+	rememberCookie = "dispatcher_remember"
+	rememberPart   = "dispatcher_remember_2"
 )
 
 // New parses the templates and the catalogs, and renders each page in each
 // locale: a template that fails stops the start, not a login.
 func New(o Options) (*Handler, error) {
+	if o.Remember == nil {
+		return nil, errors.New("front: no codec for the remember cookie")
+	}
 	catalogs, err := i18n.Embedded()
 	if err != nil {
 		return nil, err
@@ -124,6 +139,7 @@ func (h *Handler) entry(w http.ResponseWriter, r *http.Request) {
 		LoginChallenge: q.Get("login_challenge"),
 		Ref:            q.Get("ref"),
 		Cookie:         h.cookie(r, csrfCookie),
+		Memory:         h.memory(r),
 	}))
 }
 
@@ -157,11 +173,13 @@ func (h *Handler) consentGet(w http.ResponseWriter, r *http.Request) {
 	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Consent{
 		Challenge: r.URL.Query().Get("consent_challenge"),
 		Cookie:    h.cookie(r, csrfCookie),
+		Memory:    h.memory(r),
 	}))
 }
 
 // consentPost is POST /consent, the consent screen's answer: accept, or any
-// other button refuses.
+// other button refuses. Without a flow, its form carries the print of the
+// claims shown (SKC-3, Q37).
 func (h *Handler) consentPost(w http.ResponseWriter, r *http.Request) {
 	if !h.form(w, r) {
 		return
@@ -172,6 +190,8 @@ func (h *Handler) consentPost(w http.ResponseWriter, r *http.Request) {
 		Post:       true,
 		Accept:     r.PostForm.Get("action") == "accept",
 		Token:      r.PostForm.Get("csrf_token"),
+		Print:      r.PostForm.Get("claims_print"),
+		Memory:     h.memory(r),
 		SameOrigin: h.sameOrigin(r),
 	}))
 }
@@ -206,12 +226,56 @@ func (h *Handler) cookie(r *http.Request, name string) string {
 	return c.Value
 }
 
+// memory opens the dispatcher_remember cookie of r, and its second part
+// (MEM-1, MEM-2).
+func (h *Handler) memory(r *http.Request) flow.Memory {
+	return h.o.Remember.Open(h.cookie(r, rememberCookie), h.cookie(r, rememberPart))
+}
+
+// remember writes the memory of the skip the engine gives (WRT-1): one
+// cookie, or two beyond 3.8 KB, living until its exp, of the browser's
+// session for exp 0; a former second part is cleared. Beyond 7.5 KB, none
+// is written and the former one is cleared, which would serve the next skip
+// with former claims (WRT-2).
+func (h *Handler) remember(w http.ResponseWriter, r *http.Request, m *flow.Remembered) {
+	values, err := h.o.Remember.Seal(m)
+	if err != nil {
+		h.forget(w)
+		h.o.Logger.InfoContext(r.Context(), "skip.unavailable", "detail", err.Error())
+		return
+	}
+	var maxAge time.Duration // 0: a cookie of the browser's session
+	if m.Exp > 0 {
+		maxAge = time.Duration(m.Exp-m.IAT) * time.Second
+	}
+	h.setCookie(w, rememberCookie, values[0], maxAge, true)
+	switch {
+	case len(values) > 1:
+		h.setCookie(w, rememberPart, values[1], maxAge, true)
+	case h.cookie(r, rememberPart) != "":
+		h.setCookie(w, rememberPart, "", -1, true)
+	}
+}
+
+// forget clears the dispatcher_remember cookie, both its parts (WRT-2,
+// WRT-4).
+func (h *Handler) forget(w http.ResponseWriter) {
+	h.setCookie(w, rememberCookie, "", -1, true)
+	h.setCookie(w, rememberPart, "", -1, true)
+}
+
+// setCookie sets the dispatcher's cookie name for maxAge, rounded down to the
+// second: 0 is a cookie of the browser's session, a negative one clears it.
 func (h *Handler) setCookie(w http.ResponseWriter, name, value string, maxAge time.Duration, httpOnly bool) {
+	seconds := int(maxAge / time.Second)
+	if maxAge < 0 {
+		seconds = -1 // Max-Age=0
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     h.prefix + name,
 		Value:    value,
 		Path:     h.o.CookiePath,
-		MaxAge:   int(maxAge / time.Second),
+		MaxAge:   seconds,
 		HttpOnly: httpOnly,
 		Secure:   h.secure,
 		SameSite: http.SameSiteLaxMode,
@@ -229,6 +293,9 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, res flow.Resul
 	w.Header().Set("Cache-Control", "no-store")
 	if resp.SetCSRF != "" {
 		h.setCookie(w, csrfCookie, resp.SetCSRF, cfg.Settings.ChallengeTTL, true)
+	}
+	if resp.Remember != nil {
+		h.remember(w, r, resp.Remember)
 	}
 	switch resp.Kind {
 	case flow.Redirect:
@@ -276,7 +343,8 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Respons
 }
 
 // logout accepts Hydra's logout request at once (P5; the confirmation and
-// the propagation to the apps come with P9), then follows Hydra.
+// the propagation to the apps come with P9), clears the memory of the skip,
+// whatever its sid (WRT-4, Q41), then follows Hydra.
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	cfg := h.o.Config.Snapshot()
 	challenge := r.URL.Query().Get("logout_challenge")
@@ -297,6 +365,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, h.hydraError(r, "accept_logout", err), cfg)
 		return
 	}
+	h.forget(w)
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, to, http.StatusSeeOther)
 }

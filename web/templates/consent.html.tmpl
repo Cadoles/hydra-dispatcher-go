@@ -14,6 +14,9 @@
 <form method="post" action="{{.Form.Action}}">
 {{template "csrf" .}}
 <input type="hidden" name="consent_challenge" value="{{.Form.ConsentChallenge}}">
+{{- if .Form.Print}}
+<input type="hidden" name="claims_print" value="{{.Form.Print}}">
+{{- end}}
 <button type="submit" name="action" value="accept">{{.T "consent.accept"}}</button>
 <button type="submit" name="action" value="reject" class="secondary">{{.T "consent.reject"}}</button>
 </form>
