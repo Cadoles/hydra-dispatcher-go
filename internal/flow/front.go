@@ -11,11 +11,13 @@ import (
 )
 
 // Entry is GET / (ENT): Hydra's login challenge, or the ref of
-// x_dispatcher_restart_url, with the browser's dispatcher_flow_csrf cookie.
+// x_dispatcher_restart_url, with the browser's dispatcher_flow_csrf cookie
+// and its dispatcher_remember cookie, opened.
 type Entry struct {
 	LoginChallenge string
 	Ref            string
 	Cookie         string
+	Memory         Memory
 }
 
 // Choose is POST / (POS): the form of the choice page, the browser's cookie,
@@ -38,13 +40,16 @@ type Loop struct {
 }
 
 // Consent is GET or POST /consent (CST): Hydra's consent challenge, the
-// browser's cookie and, on a POST, the user's answer and the form's token.
+// browser's cookies and, on a POST, the user's answer, the form's token and
+// the print of the claims a screen without a flow showed (SKC-3, Q37).
 type Consent struct {
 	Challenge  string
 	Cookie     string
+	Memory     Memory
 	Post       bool
 	Accept     bool
 	Token      string
+	Print      string
 	SameOrigin bool
 	// ref is the flow a page already read, when it rejects the consent of
 	// that flow (pastExp): the consent request must name it.
@@ -112,7 +117,9 @@ func (r *run) entry(ev Entry) Outcome {
 
 // create creates the flow of L, from the login request read (ENT-1, ENT-9):
 // its generation drawn, the browser's cookie or a new one, its expiry and
-// the end of L at Hydra (Q2).
+// the end of L at Hydra (Q2). Hydra's skip is honoured here only (Q44), when
+// the remember cookie passes its checks (SKP-1): the flow is then written
+// finished. Otherwise it is ignored, the flow played again (SKP-2).
 func (r *run) create(ref string, ev Entry) Outcome {
 	s, read := r.page(), r.Answers.Login
 	if read == nil {
@@ -155,16 +162,31 @@ func (r *run) create(ref string, ev Entry) Outcome {
 		ExpiresAt:      exp.UnixMilli(),
 		HydraExpiresAt: end.UnixMilli(),
 	}
+	var skip []Report
+	if snap.Skip {
+		reason, reports := r.memoryFails(ev.Memory, sid, snap.Subject, f, snap.Scope)
+		if reason == "" {
+			// SKP-1: before ENT-22, the accept leaves at once; past hx
+			// meanwhile, SKP-10.
+			out := r.skipLogin(f, ev.Memory.Content)
+			out.Reports = append(reports, out.Reports...)
+			return r.skewed(read, out)
+		}
+		skip = []Report{ignored("login", reason)} // ENT-9, SKP-2
+	}
 	if f.ExpiresAt <= r.now() && r.now() < f.HydraExpiresAt {
 		// ENT-22 (Q33): read in the last minute of L at Hydra, with Hydra's
 		// requested_at (P7), the flow would be born expired; past hx, the
 		// write is refused instead (ECR-8). In fallback, the first read
 		// stands for requested_at: never, hydra.login_consent_ttl being
 		// above the margin (internal/config).
-		return r.skewed(read, r.expire(f))
+		out := r.expire(f)
+		out.Reports = append(skip, out.Reports...)
+		return r.skewed(read, out)
 	}
 	out := r.choice(ref, f)
 	out.Response.SetCSRF = f.CSRF
+	out.Reports = append(skip, out.Reports...)
 	return r.skewed(read, out)
 }
 
@@ -352,8 +374,9 @@ func (r *run) consent(ev Consent) Outcome {
 	req := read.Request
 	ref, ok := dispatcherRef(req.Context)
 	if !ok {
-		// CST-5 (A6, 1a): a login accepted without the dispatcher's flow.
-		return r.rejectConsent(nil, ev.Challenge, ReasonNoRef, rejection(ReasonNoRef, "No authentication of the dispatcher is in progress."), s.redirect)
+		// SKC (A6, P8): a login accepted in skip carries the dispatcher's
+		// marker; without it, rejected as CST-5 (SKC-7).
+		return r.withoutFlow(ev, req)
 	}
 	if !isRef(ref) {
 		return s.absent() // CST-6
@@ -459,15 +482,19 @@ func (r *run) pastExp(ref string, f *Flow) Outcome {
 // Q13): within 10 s of ct, the cookie matching, or without it for a consent
 // rejected past exp (ct > exp, which only CST-22 and the pages of ENT-20,
 // POS-10 and BCL-16 make, Q31): the browser lost the cookie with exp, and
-// the redirect_to of a login_required reject grants nothing.
+// the redirect_to of a login_required reject grants nothing. Or without it
+// for a flow finished by a skip honoured (sk, Q35), which set no cookie: the
+// login_verifier of its cr is only followed with Hydra's CSRF cookie, the
+// browser's.
 func (r *run) replays(f *Flow, csrf bool) bool {
-	return f.ConsentRedirect != "" && (csrf || f.ConsentAt > f.ExpiresAt) && r.now()-f.ConsentAt < consentReplay.Milliseconds()
+	return f.ConsentRedirect != "" && (csrf || f.Skipped || f.ConsentAt > f.ExpiresAt) && r.now()-f.ConsentAt < consentReplay.Milliseconds()
 }
 
 // endedPage answers a page other than /consent on the finished flow f: page
 // E1002 with its link, or, within 10 s of a consent rejected past exp, that
 // reject's cr, as /consent replays it (ENT-21, POS-11, BCL-17; revue R16): a
-// second load, or a concurrent page whose own reject Hydra 2.1 refused (409).
+// second load, or a concurrent page whose own reject Hydra 2.1 refused (409);
+// likewise the cr of a skip honoured, a reload during its redirection (Q35).
 func (r *run) endedPage(f *Flow) Outcome {
 	if r.replays(f, false) {
 		return r.page().redirect(f.ConsentRedirect)
@@ -484,6 +511,7 @@ const (
 	checkSession = "session" // CST-9
 	checkSubject = "subject" // CST-10
 	checkLogin   = "login"   // CST-23
+	checkSkip    = "skip"    // SKC-8: the x_dispatcher_skip marker (Q38)
 )
 
 // notOurs rejects the consent of a flow the dispatcher did not accept, or

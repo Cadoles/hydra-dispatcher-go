@@ -2,7 +2,6 @@ package flow
 
 import (
 	"encoding/json"
-	"maps"
 	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
@@ -86,8 +85,9 @@ func (r *run) expire(f *Flow) Outcome {
 
 // finalAccept accepts L once every step is accepted (M6, FIN): the first
 // step's subject, the flow's acr and amr, the consents' context, then the
-// login webhook, Hydra's skip subject checked (A7), x_dispatcher_ref set
-// last, and the accept.
+// login webhook, Hydra's skip subject checked (A7), the x_dispatcher_*
+// members of the steps or the webhook dropped and x_dispatcher_ref set last
+// (Q38), and the accept.
 func (r *run) finalAccept(ref string, f *Flow) Outcome {
 	s := r.page()
 	settings := r.Env.Config.Settings
@@ -98,45 +98,15 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 		Remember:    ory.PtrBool(settings.Remember),
 		RememberFor: ory.PtrInt64(int64(settings.LoginRememberFor / time.Second)),
 	}
-	ctx := f.ContextOf()
-	if settings.LoginAcceptWebhookURL != "" {
-		h := r.Answers.LoginHook
-		if h == nil {
-			body.Context = ctx
-			return Outcome{Call: &Call{Op: LoginHook, Challenge: f.LoginChallenge, Gen: f.Gen, AcceptLogin: body}}
-		}
-		r.use(LoginHook)
-		if h.Err != nil {
-			return s.fail(E1006) // FIN-4: flow unchanged, a reload replays the webhook
-		}
-		if h.Context != nil {
-			o, ok := ObjectOf(h.Context)
-			if !ok {
-				return s.fail(E1006).report(Report{Event: "webhook.failed", Detail: "context is neither an object nor null"})
-			}
-			ctx = o
-		}
-		if h.Subject != nil {
-			body.Subject = *h.Subject
-		}
-		if h.ACR != nil {
-			body.Acr = h.ACR
-		}
-		if h.AMR != nil {
-			body.Amr = h.AMR
-		}
-		if h.Remember != nil {
-			body.Remember = h.Remember
-		}
-		if h.RememberFor != nil {
-			body.RememberFor = h.RememberFor
-		}
+	ctx, stop := r.loginHook(f, &body, f.ContextOf())
+	if stop != nil {
+		return *stop // FIN-4: flow unchanged, a reload replays the webhook
 	}
 	if f.Hydra.Skip && body.Subject != f.Hydra.Subject {
 		return r.rejectLogin(f, ReasonSkipSubject, rejection(ReasonSkipSubject, "The subject authenticated is not the one of the Hydra session."),
 			func(string) Outcome { return s.fail(E1003) })
 	}
-	ctx = maps.Clone(ctx)
+	ctx = withoutDispatcher(ctx)
 	ctx["x_dispatcher_ref"], _ = json.Marshal(ref) // a string always marshals
 	body.Context = ctx
 
@@ -154,11 +124,68 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 	return r.accepted(f, d)
 }
 
-// accepted carries a final accept Hydra made over to f.
+// loginHook calls the login webhook with body and ctx, before the final
+// accept or the accept of a skip (FIN-4, SKP-9): the members it returns
+// replace those sent. A webhook that fails, or a context that is neither an
+// object nor null (A9), stops the authentication: page E1006, nothing
+// written nor rejected. stop is the outcome to return, nil once done.
+func (r *run) loginHook(f *Flow, body *ory.AcceptOAuth2LoginRequest, ctx Object) (_ Object, stop *Outcome) {
+	if r.Env.Config.Settings.LoginAcceptWebhookURL == "" {
+		return ctx, nil
+	}
+	h := r.Answers.LoginHook
+	if h == nil {
+		call := *body
+		call.Context = ctx
+		return nil, &Outcome{Call: &Call{Op: LoginHook, Challenge: f.LoginChallenge, Gen: f.Gen, AcceptLogin: call}}
+	}
+	r.use(LoginHook)
+	if h.Err != nil {
+		out := r.page().fail(E1006)
+		return nil, &out
+	}
+	if h.Context != nil {
+		o, ok := ObjectOf(h.Context)
+		if !ok {
+			out := r.page().fail(E1006).report(Report{Event: "webhook.failed", Detail: "context is neither an object nor null"})
+			return nil, &out
+		}
+		ctx = o
+	}
+	if h.Subject != nil {
+		body.Subject = *h.Subject
+	}
+	if h.ACR != nil {
+		body.Acr = h.ACR
+	}
+	if h.AMR != nil {
+		body.Amr = h.AMR
+	}
+	if h.Remember != nil {
+		body.Remember = h.Remember
+	}
+	if h.RememberFor != nil {
+		body.RememberFor = h.RememberFor
+	}
+	return ctx, nil
+}
+
+// accepted carries a final accept Hydra made over to f: its redirect_to,
+// and what it sent, the context, remember and remember_for included, from
+// which the consent writes the remember cookie (FIN-1, Q39).
 func (r *run) accepted(f *Flow, d *Done) Outcome {
 	g := f.clone()
 	g.HydraRedirect = d.RedirectTo
-	g.Sent = &SentLogin{Subject: d.Call.AcceptLogin.Subject, ACR: d.Call.AcceptLogin.GetAcr(), AMR: nonNil(d.Call.AcceptLogin.Amr)}
+	sent := d.Call.AcceptLogin
+	ctx, _ := sent.Context.(Object)
+	g.Sent = &SentLogin{
+		Subject:     sent.Subject,
+		ACR:         sent.GetAcr(),
+		AMR:         nonNil(sent.Amr),
+		Context:     withoutDispatcher(ctx),
+		Remember:    sent.GetRemember(),
+		RememberFor: sent.GetRememberFor(),
+	}
 	return r.page().redirect(d.RedirectTo).writing(g).report(Report{Event: "hydra.login_accepted", Detail: g.Sent.ACR})
 }
 
@@ -187,26 +214,9 @@ func (r *run) consentBody(f *Flow, req *ory.OAuth2ConsentRequest) ory.AcceptOAut
 // CST-14): the consent webhook, then the accept; f finishes, keeping the
 // redirect_to for a double submission (Q13).
 func (r *run) acceptConsent(f *Flow, c string, req *ory.OAuth2ConsentRequest) Outcome {
-	s := r.page()
 	body := r.consentBody(f, req)
-	if r.Env.Config.Settings.ConsentAcceptWebhookURL != "" {
-		h := r.Answers.ConsentHook
-		if h == nil {
-			return Outcome{Call: &Call{Op: ConsentHook, Challenge: c, Gen: f.Gen, AcceptConsent: body}}
-		}
-		r.use(ConsentHook)
-		if h.Err != nil {
-			return s.fail(E1006)
-		}
-		for raw, member := range map[*json.RawMessage]*any{&h.IDToken: &body.Session.IdToken, &h.AccessToken: &body.Session.AccessToken} {
-			if *raw != nil {
-				o, ok := ObjectOf(*raw)
-				if !ok {
-					return s.fail(E1006).report(Report{Event: "webhook.failed", Detail: "claims are not an object"})
-				}
-				*member = o
-			}
-		}
+	if stop := r.consentHook(c, f.Gen, &body); stop != nil {
+		return *stop
 	}
 	d := r.Answers.ConsentAccept
 	switch {
@@ -222,9 +232,40 @@ func (r *run) acceptConsent(f *Flow, c string, req *ory.OAuth2ConsentRequest) Ou
 	return r.consentDone(f, d).report(Report{Event: "hydra.consent_accepted"})
 }
 
+// consentHook calls the consent webhook with body, before a consent accept
+// with a flow or without (CST-12, CST-14, SKC-1, SKC-3): the claims it
+// returns replace those sent. A webhook that fails, or claims that are not
+// objects, stop the authentication: page E1006, nothing written nor rejected
+// (SKC-13). stop is the outcome to return, nil once done.
+func (r *run) consentHook(c string, gen int64, body *ory.AcceptOAuth2ConsentRequest) (stop *Outcome) {
+	if r.Env.Config.Settings.ConsentAcceptWebhookURL == "" {
+		return nil
+	}
+	h := r.Answers.ConsentHook
+	if h == nil {
+		return &Outcome{Call: &Call{Op: ConsentHook, Challenge: c, Gen: gen, AcceptConsent: *body}}
+	}
+	r.use(ConsentHook)
+	if h.Err != nil {
+		out := r.page().fail(E1006)
+		return &out
+	}
+	for raw, member := range map[*json.RawMessage]*any{&h.IDToken: &body.Session.IdToken, &h.AccessToken: &body.Session.AccessToken} {
+		if *raw != nil {
+			o, ok := ObjectOf(*raw)
+			if !ok {
+				out := r.page().fail(E1006).report(Report{Event: "webhook.failed", Detail: "claims are not an object"})
+				return &out
+			}
+			*member = o
+		}
+	}
+	return nil
+}
+
 // rejectConsent rejects the consent C for reason and finishes f (CST-8 to
 // CST-10, CST-15), answering ok with Hydra's redirect_to; f nil is a consent
-// without a flow (CST-5).
+// without a flow (CST-5, SKC-4, SKC-6 to SKC-8).
 func (r *run) rejectConsent(f *Flow, c string, reason Reason, body ory.RejectOAuth2Request, ok func(redirectTo string) Outcome) Outcome {
 	s := r.page()
 	d := r.Answers.ConsentReject
@@ -252,7 +293,7 @@ func (r *run) rejectConsent(f *Flow, c string, reason Reason, body ory.RejectOAu
 		}
 		return s.fail(E1007)
 	case f == nil:
-		return ok(d.RedirectTo)
+		return ok(d.RedirectTo).report(Report{Event: "flow.rejected", Detail: d.Call.detail(), Audit: d.Call.Reason == ReasonNotOurs})
 	}
 	out, answer := r.consentDone(f, d), ok(d.RedirectTo)
 	if d.Call.Reason == ReasonNotOurs {
@@ -266,27 +307,41 @@ func (r *run) rejectConsent(f *Flow, c string, reason Reason, body ory.RejectOAu
 
 // consentDone finishes f after the accept or the reject of its consent,
 // keeping Hydra's redirect_to and the time for a double submission (Q13);
-// a reject for A3 keeps none, its redirect_to never being followed.
+// a reject for A3 keeps none, its redirect_to never being followed. An
+// accept writes the remember cookie (WRT-1); a reject neither writes nor
+// clears it.
 func (r *run) consentDone(f *Flow, d *Done) Outcome {
 	g := f.Reduce()
 	if d.Call.Reason != ReasonNotOurs {
 		g.ConsentRedirect, g.ConsentAt = d.RedirectTo, r.now()
 	}
-	return r.page().redirect(d.RedirectTo).writing(g)
+	out := r.page().redirect(d.RedirectTo).writing(g)
+	if d.Call.Op == AcceptConsent {
+		out.Response.Remember = r.remembered(f, d.Call.AcceptConsent)
+	}
+	return out
 }
 
 // unusedFact answers an accept or a reject Hydra made that the transition,
 // replayed on a flow read again, did not reach (ECR-3, ECR-4, ECR-9):
 // carried over to the flow unless it is finished, never a second one. The
-// audit event of a reject stands either way: the reject was made.
+// audit event of a reject stands either way: the reject was made. A flow
+// absent is one whose hx passed between the call and its write (ECR-8),
+// the engine deleting none: an expiry (EXP-1), not a conflict, which Sentry
+// does not get (revue R19).
 func (r *run) unusedFact() (Outcome, bool) {
 	a, s, f := r.Answers, r.surface(), r.Flow
 	conflict := Report{Event: "state.conflict", Detail: "finished meanwhile", Sentry: true}
+	absent := f == nil || f.StateAt(r.Env.Now) == Absent
 	switch {
 	case a.Accept.ok() && !r.used[AcceptLogin]:
 		switch {
-		case f == nil || f.StateAt(r.Env.Now) == Absent:
-			return s.absent().report(conflict), true
+		case absent:
+			return s.absent(), true // ECR-8, SKP-10
+		case f.Done && f.Skipped && a.Accept.Call.Skip:
+			// SKP-6, ECR-3: the same skip, written by a concurrent load; Hydra
+			// accepted both, each request answers its own redirect_to.
+			return s.redirect(a.Accept.RedirectTo), true
 		case f.Done:
 			return s.ended(f).report(conflict), true // ECR-9: its redirect_to is never followed
 		case f.HydraRedirect != "":
@@ -295,7 +350,10 @@ func (r *run) unusedFact() (Outcome, bool) {
 		return r.accepted(f, a.Accept), true // ECR-4
 	case a.Reject.ok() && !r.used[RejectLogin]:
 		d := a.Reject
-		if f == nil || f.Done || f.StateAt(r.Env.Now) == Absent {
+		switch {
+		case absent:
+			return s.redirect(d.RedirectTo).audited(d), true // ECR-8: it grants nothing
+		case f.Done:
 			return s.redirect(d.RedirectTo).report(conflict).audited(d), true // ECR-9: it grants nothing
 		}
 		out := s.redirect(d.RedirectTo)
@@ -309,8 +367,8 @@ func (r *run) unusedFact() (Outcome, bool) {
 			d = a.ConsentReject
 		}
 		switch {
-		case f == nil || f.StateAt(r.Env.Now) == Absent:
-			return s.absent().report(conflict).audited(d), true
+		case absent:
+			return s.absent().audited(d), true // ECR-8
 		case f.Done && d.Call.Reason == ReasonNotOurs:
 			// Q20: an A3 reject's redirect_to is never followed, and the cr
 			// of the flow is another consent's.

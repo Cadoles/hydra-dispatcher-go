@@ -1240,6 +1240,14 @@ func TestFactsCarriedOver(t *testing.T) {
 			t.Errorf("no state.conflict: %+v", out.Reports)
 		}
 	}
+	// expiry wants none: a flow gone is one past hx (ECR-8, EXP-1; revue
+	// R19), whose key expired between the call and its write.
+	expiry := func(t *testing.T, out Outcome) {
+		t.Helper()
+		if slices.ContainsFunc(out.Reports, func(r Report) bool { return r.Event == "state.conflict" || r.Sentry }) {
+			t.Errorf("an expiry reported as a conflict: %+v", out.Reports)
+		}
+	}
 	// audit wants the audit event of a reject made, then the checks more.
 	audit := func(event string, more ...func(t *testing.T, out Outcome)) func(t *testing.T, out Outcome) {
 		return func(t *testing.T, out Outcome) {
@@ -1285,13 +1293,17 @@ func TestFactsCarriedOver(t *testing.T) {
 			}},
 		{name: "ECR-9, an accept on a finished flow", ev: loop, flow: finishedFlow(t, "", 0), answers: Answers{Accept: accept},
 			kind: ErrorPage, code: E1002, check: conflict},
-		{name: "ECR-9, an accept, the flow gone", ev: loop, answers: Answers{Accept: accept},
-			kind: ErrorPage, code: E1002, check: conflict},
+		{name: "ECR-8, an accept, the flow gone past hx", ev: loop, answers: Answers{Accept: accept},
+			kind: ErrorPage, code: E1002, check: expiry},
+		{name: "ECR-8, an accept, the flow read past hx", ev: loop, flow: func() *Flow { f := lastDone(t); f.HydraExpiresAt = testNow.UnixMilli(); return f }(),
+			answers: Answers{Accept: accept}, kind: ErrorPage, code: E1002, check: expiry},
 		{name: "ECR-4, a reject carried over", ev: loop, flow: acceptedFlow(t), answers: Answers{Reject: reject},
 			kind: Redirect, url: "http://hydra/rejected", write: finished},
 		{name: "ECR-4, a reject for Hydra's skip", ev: loop, flow: choiceFlow(t),
 			answers: Answers{Reject: &Done{Call: Call{Op: RejectLogin, Reason: ReasonSkipSubject}, RedirectTo: "http://hydra/rejected"}},
 			kind:    ErrorPage, code: E1003, write: finished},
+		{name: "ECR-8, a reject, the flow gone past hx: its redirect_to", ev: loop, answers: Answers{Reject: reject},
+			kind: Redirect, url: "http://hydra/rejected", check: expiry},
 		{name: "ECR-9, a reject on a finished flow: its redirect_to", ev: loop, flow: finishedFlow(t, "", 0), answers: Answers{Reject: reject},
 			kind: Redirect, url: "http://hydra/rejected", check: conflict},
 		{name: "ECR-3 Q30, the consent accepted twice", ev: Consent{Challenge: hydraC, Cookie: cookie}, flow: finishedFlow(t, "http://hydra/theirs", 0),
@@ -1306,9 +1318,9 @@ func TestFactsCarriedOver(t *testing.T) {
 		{name: "ECR-9, the consent rejected on a flow finished otherwise", ev: Consent{Challenge: hydraC, Cookie: cookie}, flow: finishedFlow(t, "", 0),
 			answers: Answers{Consent: &ConsentRead{Request: consentRequest(lref, nil)}, ConsentReject: consentReject},
 			kind:    Redirect, url: "http://hydra/mine", check: conflict},
-		{name: "ECR-9, the consent accepted, the flow gone", ev: Consent{Challenge: hydraC, Cookie: cookie},
+		{name: "ECR-8, the consent accepted, the flow gone past hx", ev: Consent{Challenge: hydraC, Cookie: cookie},
 			answers: Answers{Consent: &ConsentRead{Request: consentRequest(lref, nil)}, ConsentAccept: consentAccept},
-			kind:    ErrorPage, code: E1002, check: conflict},
+			kind:    ErrorPage, code: E1002, check: expiry},
 		{name: "ECR-4, the consent accepted, the flow expired meanwhile", ev: Consent{Challenge: hydraC, Cookie: cookie}, flow: expired(acceptedFlow(t)),
 			answers: Answers{Consent: &ConsentRead{Request: consentRequest(lref, nil)}, ConsentAccept: consentAccept},
 			kind:    Redirect, url: "http://hydra/mine",

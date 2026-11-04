@@ -78,7 +78,10 @@ const maxRounds = 16
 // Handle runs the transition of ev to its end. A write that conflicts is
 // replayed once on the flow read again, with the answers already obtained,
 // then gives E1007 (ECR-1, ECR-2); a write of unknown outcome is read again
-// before deciding (ECR-5); a store that fails gives E1000 (ECR-7).
+// before deciding (ECR-5); a store that fails gives E1000 (ECR-7). A write
+// that only guards against a return, after the accept of a skip, keeps its
+// answer when it stays of unknown outcome or the store fails (SKP-8): E1000
+// would make the browser reload, and Hydra accept L again.
 func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 	in := Input{Event: ev, Env: o.env()}
 	var (
@@ -107,6 +110,14 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 	fail := func(err error) Result {
 		out := (&run{Input: in}).surface().fail(E1000)
 		return o.result(ctx, in, out, append(reports, Report{Event: "state.error", Detail: err.Error(), Sentry: true}))
+	}
+	// failWrite is fail for the write of out: its own answer when the write
+	// only guards (SKP-8).
+	failWrite := func(out Outcome, err error) Result {
+		if out.Guard {
+			return o.result(ctx, in, out, append(reports, Report{Event: "state.error", Detail: err.Error(), Sentry: true}))
+		}
+		return fail(err)
 	}
 	for range maxRounds {
 		out := Decide(in)
@@ -147,12 +158,12 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			return o.result(ctx, in, out, reports)
 		case errors.Is(err, state.ErrConflict):
 		case errors.Is(err, state.ErrClosed), errors.Is(err, state.ErrNoTTL), ctx.Err() != nil:
-			return fail(err)
+			return failWrite(out, err)
 		default:
 			// ECR-5: written or not, read again before deciding.
 			before, at := read, version
 			if err := load(); err != nil {
-				return fail(err)
+				return failWrite(out, err)
 			}
 			switch {
 			case bytes.Equal(read, data):
@@ -170,14 +181,17 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 				case err == nil:
 					return o.result(ctx, in, out, reports)
 				case errors.Is(err, state.ErrClosed), errors.Is(err, state.ErrNoTTL), ctx.Err() != nil:
-					return fail(err) // ECR-7, as on the first write
+					return failWrite(out, err) // ECR-7, as on the first write
 				case !errors.Is(err, state.ErrConflict):
 					// Of unknown outcome again: written if the bytes are.
 					if err := load(); err != nil {
-						return fail(err)
+						return failWrite(out, err)
 					}
 					if bytes.Equal(read, data) {
 						return o.result(ctx, in, out, reports)
+					}
+					if out.Guard {
+						return failWrite(out, errors.New("write of unknown outcome, twice"))
 					}
 				}
 				return o.result(ctx, in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "write failed twice", Sentry: true}))
@@ -192,7 +206,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		reports = append(reports, Report{Event: "state.conflict", Detail: "replay"})
 		if errors.Is(err, state.ErrConflict) {
 			if err := load(); err != nil {
-				return fail(err)
+				return failWrite(out, err)
 			}
 		}
 	}
@@ -222,7 +236,14 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
 				level = slog.LevelWarn
 			}
-			o.Log.Log(ctx, level, r.Event, "surface", surface, "detail", r.Detail, "audit", r.Audit)
+			args := []any{"surface", surface, "detail", r.Detail, "audit", r.Audit}
+			if r.Kind != "" {
+				args = append(args, "kind", r.Kind)
+			}
+			if r.Reason != "" {
+				args = append(args, "reason", r.Reason)
+			}
+			o.Log.Log(ctx, level, r.Event, args...)
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}

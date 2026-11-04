@@ -80,6 +80,10 @@ type Flow struct {
 	// Done flows are finished: kept reduced until HydraExpiresAt, so that
 	// any return on them gets E1002.
 	Done bool `json:"done,omitempty"`
+	// Skipped flows were finished by a skip honoured (SKP-1, Q35):
+	// ConsentRedirect is then the redirect_to of the login accept, replayed
+	// for 10 s with or without the cookie (ENT-21).
+	Skipped bool `json:"sk,omitempty"`
 	// ExpiresAt ends the step challenges (inclusive); HydraExpiresAt is the
 	// end of L at Hydra, and of the key.
 	ExpiresAt      int64 `json:"exp"`
@@ -107,11 +111,18 @@ type LoginSnapshot struct {
 }
 
 // SentLogin is the final login accept sent to Hydra, after the webhook:
-// /consent checks its subject against the consent request's.
+// /consent checks its subject against the consent request's, and writes the
+// remember cookie from it (Q39).
 type SentLogin struct {
 	Subject string   `json:"sub"`
 	ACR     string   `json:"acr"`
 	AMR     []string `json:"amr"`
+	// Context is the context sent, without x_dispatcher_* members; Remember
+	// and RememberFor the remember and remember_for sent: the cookie is
+	// only written when Remember is, for RememberFor seconds (WRT-1, WRT-3).
+	Context     Object `json:"ctx,omitempty"`
+	Remember    bool   `json:"rem,omitempty"`
+	RememberFor int64  `json:"rf,omitempty"`
 }
 
 // Step is the state of one app of the flow.

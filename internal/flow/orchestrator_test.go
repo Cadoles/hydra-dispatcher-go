@@ -85,11 +85,20 @@ func (h *fakeHydra) ConsentRequest(_ context.Context, challenge string) (*ory.OA
 	if h.loginChallenge != "" {
 		login = h.loginChallenge
 	}
+	amr := h.accepted.Amr
+	if amr == nil {
+		amr = []string{} // served [], as Hydra (err:consent_after_skip_no_amr)
+	}
+	// The acr, the amr and the context of the login accept, and the login
+	// request's request_url, as Hydra takes them over (Q38).
 	return &ory.OAuth2ConsentRequest{
 		Challenge:      challenge,
 		LoginChallenge: ory.PtrString(login),
 		Subject:        ory.PtrString(h.accepted.Subject),
 		LoginSessionId: h.login.SessionId,
+		Acr:            ory.PtrString(h.accepted.GetAcr()),
+		Amr:            amr,
+		RequestUrl:     ory.PtrString(h.login.RequestUrl),
 		Context:        json.RawMessage(ctx),
 		RequestedScope: h.login.RequestedScope,
 		Client:         &h.login.Client,
@@ -354,6 +363,183 @@ func TestHydraCalls(t *testing.T) {
 			calls := len(w.hydra.calls)
 			if r := w.handle(Loop{Ref: lref, Cookie: w.cookie}); r.Response.Code != E1002 || len(w.hydra.calls) != calls {
 				t.Errorf("RA6, a return after the end: %+v", r.Response)
+			}
+		})
+	}
+}
+
+// hydraL2 is the login challenge of a second authentication in the same
+// Hydra session.
+const hydraL2 = "1d45bbff177259bed0362135f0aa0cc5"
+
+// remembered plays a first authentication on hydra-sql, Hydra skipping the
+// consent, and returns the remember cookie its consent wrote (WRT-1).
+func (w *world) remembered(t *testing.T) Memory {
+	t.Helper()
+	w.hydra.consentSkip = true
+	if r := w.handle(Entry{LoginChallenge: hydraL}); r.Response.Kind != ChoicePage {
+		t.Fatalf("GET /: %+v", r.Response)
+	}
+	step := w.handle(Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+	w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+	w.handle(Loop{Ref: lref, Cookie: w.cookie})
+	c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie})
+	if c.Response.URL != callbackURL || c.Response.Remember == nil {
+		t.Fatalf("first consent: %+v", c.Response)
+	}
+	return Memory{Content: c.Response.Remember}
+}
+
+// SKP-1, SKC-1 to SKC-3 (Q35): a second login in the same session, Hydra's
+// skip honoured from the cookie of the first. B3: 4 calls in fallback, 2
+// decrypted, one read and one write of the store; 5 and 2 with the consent
+// screen; the consent without a flow neither reads nor writes the store.
+func TestHydraCallsSkip(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		screen  bool
+		decrypt bool
+		calls   []string
+	}{
+		{"B3 SKP-1 SKC-1, a login in skip honoured", false, false, []string{"get_login", "accept_login", "get_consent", "accept_consent"}},
+		{"B3 SKP-1 SKC-2 SKC-3, with the consent screen", true, false, []string{"get_login", "accept_login", "get_consent", "get_consent", "accept_consent"}},
+		{"B3 P7 SKP-1 SKC-1, decrypted", false, true, []string{"accept_login", "accept_consent"}},
+		{"B3 P7 SKP-1 SKC-2 SKC-3, with the consent screen, decrypted", true, true, []string{"accept_login", "accept_consent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			m := w.remembered(t)
+			if tc.decrypt {
+				w.o.Source = Decrypt{Codec: fakeCodec{w.hydra}, Fallback: Fallback{Hydra: w.hydra}, TTL: w.o.LoginConsentTTL, Now: func() time.Time { return w.now }}
+			}
+			w.hydra.login.Skip, w.hydra.login.Subject, w.hydra.consentSkip = true, "alice", !tc.screen
+			w.hydra.calls, w.store.gets, w.store.puts = nil, 0, 0
+			w.logs.Reset()
+
+			r := w.handle(Entry{LoginChallenge: hydraL2, Memory: m})
+			if r.Response.URL != verifierURL {
+				t.Fatalf("SKP-1: %+v", r.Response)
+			}
+			if w.store.gets != 1 || w.store.puts != 1 {
+				t.Errorf("Q35, %d reads and %d writes of the store; want 1 and 1", w.store.gets, w.store.puts)
+			}
+			c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie, Memory: m})
+			if tc.screen {
+				if c.Response.Kind != ConsentPage || c.Response.Consent.Print == "" {
+					t.Fatalf("SKC-2: %+v", c.Response)
+				}
+				c = w.handle(Consent{Challenge: hydraC, Cookie: w.cookie, Memory: m, Post: true, Accept: true, Token: w.cookie,
+					Print: c.Response.Consent.Print, SameOrigin: true})
+			}
+			if c.Response.URL != callbackURL || c.Response.Remember != nil {
+				t.Fatalf("SKC-1: %+v", c.Response)
+			}
+			if !slices.Equal(w.hydra.calls, tc.calls) {
+				t.Errorf("calls %v; want %v", w.hydra.calls, tc.calls)
+			}
+			if w.store.gets != 1 || w.store.puts != 1 {
+				t.Errorf("A6, the consent without a flow used the store: %d reads, %d writes", w.store.gets, w.store.puts)
+			}
+			if got := rawJSON(w.hydra.consent.Session.IdToken); got != `{"email":"alice@example.org"}` {
+				t.Errorf("id_token %s", got)
+			}
+			for _, want := range []string{`"msg":"skip.accepted","surface":"front","detail":"","audit":false,"kind":"login"`, `"kind":"consent"`} {
+				if !strings.Contains(w.logs.String(), want) {
+					t.Errorf("no %s in\n%s", want, w.logs.String())
+				}
+			}
+			if tc.decrypt && strings.Contains(w.logs.String(), "hydra.decrypt_fallback") {
+				t.Errorf("a fallback: %s", w.logs.String())
+			}
+
+			// ENT-21 (Q35): a reload within 10 s replays cr, without a call;
+			// after, E1002, without a call either.
+			calls := len(w.hydra.calls)
+			w.now = w.now.Add(9 * time.Second)
+			if r := w.handle(Entry{LoginChallenge: hydraL2}); r.Response.URL != verifierURL || len(w.hydra.calls) != calls {
+				t.Errorf("ENT-21, a reload: %+v", r.Response)
+			}
+			w.now = w.now.Add(time.Second)
+			if r := w.handle(Entry{LoginChallenge: hydraL2, Memory: m}); r.Response.Code != E1002 || len(w.hydra.calls) != calls {
+				t.Errorf("ENT-7, past 10 s: %+v", r.Response)
+			}
+		})
+	}
+}
+
+// ENT-9, SKP-2: without the cookie, the skip is ignored and logged so.
+func TestSkipIgnoredLogged(t *testing.T) {
+	w := newWorld(t)
+	w.hydra.login.Skip, w.hydra.login.Subject = true, "alice"
+	if r := w.handle(Entry{LoginChallenge: hydraL}); r.Response.Kind != ChoicePage {
+		t.Fatalf("ENT-9: %+v", r.Response)
+	}
+	if want := `"msg":"skip.ignored","surface":"front","detail":"","audit":false,"kind":"login","reason":"absent"`; !strings.Contains(w.logs.String(), want) {
+		t.Errorf("no %s in\n%s", want, w.logs.String())
+	}
+}
+
+// SKP-6, SKP-8, SKP-10: the write that guards a skip honoured.
+func TestSkipGuard(t *testing.T) {
+	ioErr := errors.New("redis: i/o timeout")
+	key := Key(Ref(hydraL2))
+	for _, tc := range []struct {
+		name string
+		// prepare sets the world up, m being the remember cookie.
+		prepare func(w *world)
+		url     string
+		code    Code
+		written bool
+		logged  string
+	}{
+		{"SKP-1, written", func(w *world) {}, verifierURL, "", true, ""},
+		{"SKP-8 ECR-5, of unknown outcome twice: redirected all the same", func(w *world) {
+			w.store.hook = func(int, string, []byte, uint64) (error, bool) { return ioErr, true }
+		}, verifierURL, "", false, `"msg":"state.error"`},
+		{"SKP-8 ECR-7, the store closed: redirected all the same", func(w *world) {
+			w.store.hook = func(int, string, []byte, uint64) (error, bool) { return state.ErrClosed, true }
+		}, verifierURL, "", false, `"msg":"state.error"`},
+		{"SKP-8 ECR-7, the store unreadable after the write", func(w *world) {
+			w.store.hook = func(int, string, []byte, uint64) (error, bool) { w.store.getErr = w.store.gets + 1; return ioErr, true }
+		}, verifierURL, "", false, `"msg":"state.error"`},
+		{"SKP-6 ECR-3, a concurrent load wrote the same skip: its own redirect_to", func(w *world) {
+			w.store.hook = func(n int, k string, _ []byte, _ uint64) (error, bool) {
+				if n == 1 {
+					f := choiceFlow(w.t).Reduce()
+					f.ConsentRedirect, f.ConsentAt, f.Skipped = "http://hydra/other", w.now.UnixMilli(), true
+					data, _ := Encode(f)
+					_ = w.store.StateStore.Put(context.Background(), k, data, time.Hour, 0)
+				}
+				return nil, false
+			}
+		}, verifierURL, "", true, `"msg":"state.conflict"`},
+		{"SKP-6 ECR-2, a second conflict", func(w *world) {
+			w.store.hook = func(int, string, []byte, uint64) (error, bool) { return state.ErrConflict, true }
+		}, "", E1007, false, `"msg":"state.conflict"`},
+		{"SKP-10 ECR-8, hx reached during the accept: the redirect_to not followed", func(w *world) {
+			w.hydra.before["accept_login"] = func() { w.now = w.now.Add(31 * time.Minute) }
+		}, "", E1002, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			m := w.remembered(t)
+			w.hydra.login.Skip, w.hydra.login.Subject = true, "alice"
+			w.logs.Reset()
+			w.store.puts = 0
+			tc.prepare(w)
+			r := w.handle(Entry{LoginChallenge: hydraL2, Memory: m})
+			if r.Response.URL != tc.url || r.Response.Code != tc.code {
+				t.Errorf("answer %+v; want %q %s", r.Response, tc.url, tc.code)
+			}
+			if tc.code == E1002 && r.Response.Link != "" {
+				t.Errorf("SKP-10, a link: %q", r.Response.Link)
+			}
+			_, _, err := w.store.StateStore.Get(context.Background(), key)
+			if written := err == nil; written != tc.written {
+				t.Errorf("flow written %v, want %v", written, tc.written)
+			}
+			if tc.logged != "" && !strings.Contains(w.logs.String(), tc.logged) {
+				t.Errorf("no %s in\n%s", tc.logged, w.logs.String())
 			}
 		})
 	}

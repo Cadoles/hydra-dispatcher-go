@@ -23,6 +23,7 @@ type said struct {
 	redirectTo  string
 	err         error
 	loginHook   *LoginHookAnswer
+	consentHook *ConsentHookAnswer
 	hookErr     error
 	// decrypted is a login request read from L itself (DEC-3).
 	decrypted bool
@@ -118,6 +119,9 @@ func answer(a *Answers, c Call, s said) {
 		}
 	case ConsentHook:
 		a.ConsentHook = &ConsentHookAnswer{Err: s.hookErr}
+		if s.consentHook != nil {
+			a.ConsentHook = s.consentHook
+		}
 	}
 }
 

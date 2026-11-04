@@ -108,7 +108,10 @@ type Outcome struct {
 
 	// Write is the flow to write, conditional on the version read (created
 	// when absent), its TTL running to HydraExpiresAt; nil writes nothing.
-	Write    *Flow
+	Write *Flow
+	// Guard tells that Write only guards against a return, after an accept
+	// Hydra made (SKP-8, Q35): when the store fails, the answer stands.
+	Guard    bool
 	Response Response
 	Reports  []Report
 }
@@ -185,8 +188,11 @@ type Response struct {
 	// Overloaded marks an E1004 of hydra.max_in_flight reached: 503 with
 	// Retry-After, rather than the code's status.
 	Overloaded bool
-	Status     int
-	Body       any
+	// Remember is the dispatcher_remember cookie to write, at the consent
+	// accept that finishes a flow (WRT-1); nil writes nothing.
+	Remember *Remembered
+	Status   int
+	Body     any
 }
 
 // ChoiceScreen is what the choice page shows.
@@ -220,13 +226,20 @@ type ConsentScreen struct {
 	AccessClaims Object
 	// UILocales are the oidc_context's ui_locales, for the page's language.
 	UILocales []string
+	// Print is the print of the claims shown, which the form of a consent
+	// without a flow carries (SKC-2, Q37); "" on a flow's screen.
+	Print string
 }
 
 // Report is something to log: an event of the catalogue, also sent to
 // Sentry or to the audit log when told. Detail never holds personal data.
+// Kind and Reason are those of skip.accepted and skip.ignored (login or
+// consent, and the check of the cookie that failed).
 type Report struct {
 	Event  string
 	Detail string
+	Kind   string
+	Reason string
 	Sentry bool
 	Audit  bool
 }
@@ -269,9 +282,12 @@ const (
 	// ReasonSubject: subject_check failed, or a second accept changed the
 	// subject (EMU-12, EMU-14).
 	ReasonSubject
+	// ReasonMemory: a consent without a flow whose remember cookie fails a
+	// check (SKC-6): nothing can be played again.
+	ReasonMemory
 )
 
-var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", "skip_subject", "no_ref", "not_ours", "user", "app", "subject"}
+var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", "skip_subject", "no_ref", "not_ours", "user", "app", "subject", "memory"}
 
 func (r Reason) String() string { return reasonNames[r] }
 
@@ -318,7 +334,10 @@ type Call struct {
 	// checkLogin), for its audit event.
 	Check string
 	// Gen is the flow's generation when the call was decided.
-	Gen           int64
+	Gen int64
+	// Skip marks the login accept of a skip honoured (SKP-1): never carried
+	// over to a flow as a final accept's.
+	Skip          bool
 	AcceptLogin   ory.AcceptOAuth2LoginRequest
 	AcceptConsent ory.AcceptOAuth2ConsentRequest
 	Reject        ory.RejectOAuth2Request
