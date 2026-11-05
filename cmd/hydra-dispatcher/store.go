@@ -24,6 +24,8 @@ type configStore interface {
 	Ping(ctx context.Context) error
 	Close() error
 	Migrate(ctx context.Context) ([]string, error)
+	MigrateDown(ctx context.Context) (string, error)
+	LastMigration(ctx context.Context) (string, error)
 	Bootstrap(ctx context.Context, seed config.Seed, mode store.Mode, write bool) ([]store.Change, error)
 }
 
@@ -39,8 +41,12 @@ var openStore = func(ctx context.Context, dsn string) (configStore, error) {
 
 const configHelp = "configuration file (default: $" + configEnv + ", else DISPATCHER_* variables only)"
 
-// migrate applies the migrations the database lacks.
+// migrate applies the migrations the database lacks; migrate down rolls back
+// the last one.
 func migrate(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "down" {
+		return migrateDown(ctx, args[1:])
+	}
 	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	configPath := fs.String("config", os.Getenv(configEnv), configHelp)
 	if help, err := parseFlags(fs, args); help || err != nil {
@@ -58,6 +64,46 @@ func migrate(ctx context.Context, args []string) error {
 	return runMigrations(ctx, db, logs.app)
 }
 
+// migrateDown rolls back one migration: what it drops does not come back, so
+// in a terminal it names the migration and asks.
+func migrateDown(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("migrate down", flag.ContinueOnError)
+	configPath := fs.String("config", os.Getenv(configEnv), configHelp)
+	yes := fs.Bool("yes", false, "in a terminal, roll back without asking")
+	if help, err := parseFlags(fs, args); help || err != nil {
+		return err
+	}
+	cfg, logs, err := loadConfig(*configPath, os.Stdout)
+	if err != nil {
+		return err
+	}
+	db, err := openStore(ctx, cfg.Store.DSN)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	if !*yes && stdinIsTerminal() {
+		last, err := db.LastMigration(ctx)
+		if err != nil {
+			return err
+		}
+		if last != "" && !confirm(stdin, os.Stderr, "Roll back "+last+"?") {
+			fmt.Fprintln(os.Stderr, "Nothing rolled back.")
+			return nil
+		}
+	}
+	name, err := db.MigrateDown(ctx)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		logs.app.InfoContext(ctx, "store.nothing_to_roll_back")
+		return nil
+	}
+	logs.app.InfoContext(ctx, "store.rolled_back", "migration", name)
+	return nil
+}
+
 func runMigrations(ctx context.Context, db configStore, logger *slog.Logger) error {
 	applied, err := db.Migrate(ctx)
 	for _, m := range applied {
@@ -73,7 +119,7 @@ func runMigrations(ctx context.Context, db configStore, logger *slog.Logger) err
 func bootstrap(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 	configPath := fs.String("config", os.Getenv(configEnv), configHelp)
-	force := fs.Bool("force", false, "rewrite too what the database holds of the seed, and reset the settings it sets to ~")
+	force := fs.Bool("force", false, "rewrite too what the database holds of the seed, and reset the settings and receive_claims it sets to ~")
 	dryRun := fs.Bool("dry-run", false, "print the changes and write nothing")
 	yes := fs.Bool("yes", false, "with -force in a terminal, write without asking")
 	if help, err := parseFlags(fs, args); help || err != nil {
@@ -82,7 +128,7 @@ func bootstrap(ctx context.Context, args []string) error {
 	// stdout holds the changes alone: the log lines, a fatal error included,
 	// go to stderr.
 	slog.SetDefault(startLogger(os.Stderr))
-	cfg, _, err := loadConfig(*configPath, os.Stderr)
+	cfg, logs, err := loadConfig(*configPath, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -129,6 +175,7 @@ func bootstrap(ctx context.Context, args []string) error {
 		fmt.Fprintln(os.Stderr, "The database changed after the question; written instead:")
 		printChanges(os.Stdout, changes)
 	}
+	warnWidened(ctx, changes, logs.app)
 	return nil
 }
 
@@ -191,8 +238,22 @@ func prepareStore(ctx context.Context, cfg *config.Config, db configStore, logge
 		}
 		logger.InfoContext(ctx, "bootstrap.change", attrs...)
 	}
+	warnWidened(ctx, changes, logger)
 	logger.InfoContext(ctx, "bootstrap.done", "mode", cfg.Serve.Bootstrap, "summary", summary(counts))
 	return nil
+}
+
+// warnWidened warns of each app a bootstrap gave every claim: it may have
+// meant to, as a ~ asks, but personal data goes further than it did. The list
+// it had is logged, the only value: names of claims, gone from the database.
+func warnWidened(ctx context.Context, changes []store.Change, logger *slog.Logger) {
+	for _, c := range changes {
+		for _, f := range c.Fields {
+			if c.Action == store.Update && f.WidensClaims() {
+				logger.WarnContext(ctx, "bootstrap.claims_widened", "id", c.ID, "was", f.Old)
+			}
+		}
+	}
 }
 
 // writes tells whether changes write anything.
@@ -222,9 +283,12 @@ func printChanges(w io.Writer, changes []store.Change) {
 		counts[c.Action]++
 		fmt.Fprintf(w, "%-7s %s %s%s\n", c.Action, c.Kind, c.ID, notes[c.Action])
 		for _, f := range c.Fields {
-			if f.Secret {
+			switch {
+			case f.Secret:
 				fmt.Fprintf(w, "          %s: changed\n", f.Name)
-			} else {
+			case f.WidensClaims():
+				fmt.Fprintf(w, "          %s: %s -> %s (every claim)\n", f.Name, f.Old, f.New)
+			default:
 				fmt.Fprintf(w, "          %s: %s -> %s\n", f.Name, f.Old, f.New)
 			}
 		}

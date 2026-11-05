@@ -83,10 +83,14 @@ type SeedApp struct {
 	Method    string `yaml:"method"`
 	// Options, which Symfony accepts and never reads, are ignored with a
 	// warning, their values unread; the keys of appKeys are refused.
-	Options map[string]ignored `yaml:"options"`
+	Options appOptions `yaml:"options"`
 	// ReceiveClaims names the claims of the previous steps the app receives:
-	// all of them when nil, none when empty. An empty variable gives none.
+	// none when empty, an empty variable included. Without the key, a new app
+	// receives every claim and bootstrap leaves an existing one as it is.
 	ReceiveClaims *List `yaml:"receive_claims"`
+	// NullReceiveClaims records receive_claims: ~, which gives every claim,
+	// to an app that has a list too.
+	NullReceiveClaims bool `yaml:"-"`
 	// AuthMode is how the emulated API identifies the app: network, by
 	// AllowedSources, or mtls, by ClientCertFingerprint. Empty until Load
 	// applies the default, network.
@@ -103,6 +107,27 @@ type SeedApp struct {
 // document once put them, they would pass unread, and an app would receive
 // every claim for want of its receive_claims.
 var appKeys = []string{"auth_mode", "allowed_sources", "client_cert_fingerprint", "receive_claims"}
+
+// appOptions is the options key of an app. Symfony takes any form (its
+// variableNode) and never reads it: nothing here is expanded or checked. Only
+// the keys of a mapping are kept, merged ones included, for appKeys.
+type appOptions struct {
+	keys map[string]ignored
+	set  bool // holds something: not ~, {}, [] or ""
+}
+
+func (o *appOptions) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.MappingNode:
+		o.set = len(n.Content) > 0
+		return n.Decode(&o.keys)
+	case yaml.SequenceNode:
+		o.set = len(n.Content) > 0
+	default:
+		o.set = n.Value != ""
+	}
+	return nil
+}
 
 type SeedFlow struct {
 	ID string `yaml:"id"`
@@ -202,9 +227,9 @@ type SeedClient struct {
 }
 
 // resolve applies the Symfony defaults of the entries: bootstrap writes an
-// app, a flow or a client whole, so they need no pointer semantics. It moves
-// session_ttl to login_remember_for, unless both are set, which validate
-// refuses.
+// app, a flow or a client whole, so they need no pointer semantics, the
+// receive_claims of an app apart. It moves session_ttl to login_remember_for,
+// unless both are set, which validate refuses.
 func (s *Seed) resolve() {
 	if s.SessionTTL != nil && s.LoginRememberFor == nil {
 		s.LoginRememberFor, s.SessionTTL = s.SessionTTL, nil
@@ -251,7 +276,7 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 			fail(path+".method", "is required")
 		}
 		for _, k := range appKeys {
-			if _, ok := a.Options[k]; ok {
+			if _, ok := a.Options.keys[k]; ok {
 				fail(path+".options."+k, "is a key of the app, not an option")
 			}
 		}
@@ -362,7 +387,8 @@ func uniqueID(fail func(path, format string, args ...any), path, id string, seen
 }
 
 // warnings lists the Symfony keys present in the seed, with the reason they
-// are ignored, and the settings set to ~ that Symfony read otherwise.
+// are ignored, the settings set to ~ that Symfony read otherwise, and the
+// apps a ~ gives every claim.
 func (s *Seed) warnings() []string {
 	var warnings []string
 	for _, k := range []struct {
@@ -380,8 +406,11 @@ func (s *Seed) warnings() []string {
 		}
 	}
 	for i, a := range s.Apps {
-		if len(a.Options) > 0 {
+		if a.Options.set {
 			warnings = append(warnings, fmt.Sprintf("dispatcher.apps[%d].options is ignored: never read by the Symfony app either", i))
+		}
+		if a.NullReceiveClaims {
+			warnings = append(warnings, fmt.Sprintf("dispatcher.apps[%d].receive_claims: ~ gives every claim, and bootstrap -force takes back a list: [] gives none, and without the key bootstrap leaves the database as it is", i))
 		}
 	}
 	settings := yamlFields(reflect.TypeFor[SeedSettings]())

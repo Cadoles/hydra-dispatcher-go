@@ -174,6 +174,9 @@ type player struct {
 	claims map[string]any
 	// compared counts the app calls compared.
 	compared int
+	// received are the x_dispatcher_claims each app receives, by its host,
+	// where it differs from the capture, Symfony having no receive_claims.
+	received map[string]any
 	// app is the host of the app the browser was last sent to; addrs the
 	// address each app calls from, and the X-Forwarded-For of the proxy it
 	// calls through, if any: 10.0.1.7 directly for the others.
@@ -403,6 +406,9 @@ func (p *player) normalizeRequest(want, got map[string]any) {
 	if claims, ok := want["x_dispatcher_claims"].([]any); ok && len(claims) == 0 {
 		want["x_dispatcher_claims"] = map[string]any{}
 	}
+	if claims, ok := p.received[p.app]; ok {
+		want["x_dispatcher_claims"] = claims
+	}
 	var hydraLogin map[string]any
 	decodeNumbers(p.t, p.hydra.answers["GET /admin/oauth2/auth/requests/login"].Response.Body, &hydraLogin)
 	relayed, _ := hydraLogin["client"].(map[string]any)
@@ -522,6 +528,42 @@ func TestSymfonyCaptures(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Capture 14 with its second app restricted: over HTTP, on the login and the
+// consent request, the app receives what it names and the rest stays Symfony's.
+func TestReceiveClaimsServed(t *testing.T) {
+	email := map[string]any{"email": "test2@test.com"}
+	for _, tc := range []struct {
+		name   string
+		claims []string
+		want   any
+	}{
+		{"every claim", nil, nil},
+		{"none", []string{}, map[string]any{}},
+		{"those it names", []string{"email", "phone"}, email},
+		{"names twice, in another case", []string{"email", "email", "LASTNAME"}, email},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			xs := readCapture(t, "14-sql-2fa-consent-skipped")
+			p := newPlayer(t, xs, "/admin")
+			snap := hydraDevSnapshot()
+			apps := slices.Clone(snap.Apps)
+			for i := range apps {
+				if apps[i].ID == "hydra-2fa" {
+					apps[i].ReceiveClaims = tc.claims
+				}
+			}
+			p.o.Config = snapshots{store.NewSnapshot(apps, snap.Flows, snap.Settings)}
+			if tc.claims != nil {
+				p.received = map[string]any{"2fa.hydra.test": tc.want}
+			}
+			p.play(xs)
+			if p.compared == 0 {
+				t.Error("no app call compared")
+			}
+		})
 	}
 }
 

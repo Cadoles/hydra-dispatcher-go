@@ -5,8 +5,8 @@ chains several real login apps into a flow (MFA, identity provider choice,
 protocol choice) by replaying Hydra's login/consent protocol towards each of
 them.
 
-Go rewrite of the Symfony `hydra-dispatcher-v2`. Work in progress, phase 1 (plan
-and journal in `hydra-dev/conception`): the binary serves the pages (choice of
+Go rewrite of the Symfony dispatcher (repository `hydra-dispatcher`). Work in
+progress, phase 1 (plan and journal in `hydra-dev/conception`): the binary serves the pages (choice of
 the flow, consent, errors, logout accepted at once until the confirmation of
 P9), the emulated admin API the login apps call (v2 paths and v1 aliases),
 `/health` and `/ready`; it keeps its configuration in Postgres and the flows in
@@ -19,6 +19,7 @@ call bounded to 1 s and two attempts unless its URL says otherwise (`dial_timeou
 ```
 hydra-dispatcher serve [-config dispatcher.yaml]    run the HTTP server
 hydra-dispatcher migrate [-config ...]              apply the database migrations
+hydra-dispatcher migrate down [-config ...] [-yes]  roll back the last migration
 hydra-dispatcher bootstrap [-config ...] [-force] [-dry-run] [-yes]
                                                     write the seed of the configuration file to the database
 hydra-dispatcher healthcheck [-url ...]             probe /health of a local server (container HEALTHCHECK)
@@ -35,6 +36,15 @@ and writes nothing; in a terminal, `-force` prints them and asks, unless
 `-yes`. The changes go to stdout alone, the log lines to stderr. `serve`
 migrates at startup with `serve.migrate: true`, and
 bootstraps with `serve.bootstrap: missing` or `force`, logging the changes.
+
+An app's `receive_claims` names the claims of the previous steps it receives,
+`[]` none. Without the key, a new app receives every claim and `-force` leaves
+an existing one as it is; `~` gives every claim, to an app that has a list
+too, with the warning `bootstrap.claims_widened`.
+
+`migrate down` rolls back one migration, with the version that applied it,
+before going back to the previous image; in a terminal it names the migration
+and asks, unless `-yes`.
 
 `serve` exposes `/health` (liveness) and `/ready` (Hydra, the database and
 the state store reachable, within 2 s, Redis by a `PING`; 503 otherwise,

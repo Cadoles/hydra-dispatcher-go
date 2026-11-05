@@ -647,6 +647,20 @@ dispatcher:
 	}
 }
 
+// An explicit tag survives the expansion: a boolean key refuses a string, even
+// one that reads as a boolean.
+func TestExplicitTag(t *testing.T) {
+	for value, refused := range map[string]bool{"${FLAG}": false, `"${FLAG}"`: false, "!!str ${FLAG}": true, `!!str "${FLAG}"`: true} {
+		c, _, err := load(t, "ui:\n  reload: "+value+"\n", map[string]string{"FLAG": "true"})
+		switch {
+		case refused && (err == nil || !strings.Contains(err.Error(), "cannot unmarshal !!str")):
+			t.Errorf("%s: err = %v, want a type error", value, err)
+		case !refused && (err != nil || !c.UI.Reload):
+			t.Errorf("%s: err = %v", value, err)
+		}
+	}
+}
+
 // An empty variable gives an empty value, never the default of the key: an
 // allowlist without address, as with DISPATCHER_* variables. In a sequence,
 // it gives no item.
@@ -814,7 +828,8 @@ dispatcher:
 	// An anchor that contains itself is an error, not an endless walk.
 	for content, want := range map[string]string{
 		"server:\n  trusted_proxies: &a [*a]\n":             "line 2: server.trusted_proxies[0]: anchor \"a\" contains itself",
-		"dispatcher:\n  flows: &f [{ id: f, steps: *f }]\n": "contains itself",
+		"server:\n  trusted_proxies: [&a [*a]]\n":           "line 2: server.trusted_proxies[0][0]: anchor \"a\" contains itself",
+		"dispatcher:\n  flows: &f [{ id: f, steps: *f }]\n": "line 2: dispatcher.flows[0].steps: anchor \"f\" contains itself",
 	} {
 		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", content, err, want)
@@ -827,8 +842,24 @@ dispatcher:
 	for i := 1; i <= 10; i++ {
 		fmt.Fprintf(&bomb, "        - &l%d [%s]\n", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d, ", i-1), 10), ", "))
 	}
-	if _, _, err := load(t, bomb.String(), nil); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
-		t.Errorf("alias bomb: err = %v", err)
+	refused := make(chan error, 1)
+	go func() {
+		_, _, err := load(t, bomb.String(), nil)
+		refused <- err
+	}()
+	select {
+	case err := <-refused:
+		if err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
+			t.Errorf("alias bomb: err = %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("alias bomb: still walking its aliases")
+	}
+	// An anchor is walked once per type: a quoted number stays a string for
+	// the first alias and is a number for the second.
+	typed, _, err := load(t, "observability:\n  sentry:\n    environment: &n \"512\"\n    release: *n\nhydra:\n  max_in_flight: *n\n", nil)
+	if err != nil || typed.Hydra.MaxInFlight != 512 || typed.Observability.Sentry.Release != "512" {
+		t.Errorf("an anchor of two types: err = %v", err)
 	}
 	// options take any key, an app does not.
 	if _, _, err := load(t, `
@@ -1236,7 +1267,6 @@ dispatcher:
 		"position out of range":    {apps + flow + "        - { id: a, order: 3000000000 }\n", "position 3000000000 is out of range"},
 		"NUL in a title":           {apps + "  flows:\n    - { id: f, title: \"a\\0b\", description: D, steps: [{ id: a, order: 0 }] }\n", "line 7: dispatcher.flows[0].title: contains a NUL character"},
 		"NUL in a locale":          {apps + "  flows:\n    - { id: f, title: { \"fr\\0\": F }, description: D, steps: [{ id: a, order: 0 }] }\n", "line 7: dispatcher.flows[0].title: key \"fr\\x00\" contains a NUL character"},
-		"NUL in an option key":     {app + "      options: { \"k\\0\": 1 }\n", "dispatcher.apps[0].options: key \"k\\x00\" contains a NUL character"},
 		"NUL in a claim":           {app + "      receive_claims: [\"a\\0\"]\n", "dispatcher.apps[0].receive_claims[0]: contains a NUL character"},
 		"NUL in a method":          {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: \"m\\0\" }\n", "dispatcher.apps[0].method: contains a NUL character"},
 		"acr with a space":         {apps + "  flows:\n    - { id: f, title: T, description: D, acr: \"loa 2\", steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].acr: \"loa 2\" contains a space"},
@@ -1247,6 +1277,9 @@ dispatcher:
 		"mtls without fingerprint": {app + "      auth_mode: mtls\n", "dispatcher.apps[0].client_cert_fingerprint: must be the SHA-256"},
 		"short fingerprint":        {app + "      auth_mode: mtls\n      client_cert_fingerprint: abcd\n", "dispatcher.apps[0].client_cert_fingerprint: must be the SHA-256"},
 		"source in options":        {app + "      options: { allowed_sources: [10.1.0.0/16] }\n", "dispatcher.apps[0].options.allowed_sources: is a key of the app"},
+		"mode in options":          {app + "      options: { auth_mode: mtls }\n", "dispatcher.apps[0].options.auth_mode: is a key of the app"},
+		"fingerprint in options":   {app + "      options: { client_cert_fingerprint: abcd }\n", "dispatcher.apps[0].options.client_cert_fingerprint: is a key of the app"},
+		"claims merged in options": {app + "      options: { <<: { receive_claims: [email] } }\n", "dispatcher.apps[0].options.receive_claims: is a key of the app"},
 		"claims in options":        {app + "      options: { receive_claims: [email] }\n", "dispatcher.apps[0].options.receive_claims: is a key of the app"},
 		"claims as a mapping":      {app + "      receive_claims: { a: b }\n", "expected a list"},
 		"no locale":                {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
@@ -1257,39 +1290,93 @@ dispatcher:
 	}
 }
 
-// Absent or null, every claim; a list, those it names; empty, none: an empty
-// variable must not widen what the app sees.
+// A list gives the claims it names, an empty one none: an empty variable must
+// not widen what the app sees. Absent and null both leave no list, which
+// bootstrap tells apart: only null, with a warning, gives every claim back.
 func TestReceiveClaims(t *testing.T) {
 	const app = "dispatcher:\n  apps:\n    - { id: a, login_url: http://a, consent_url: http://a, method: m%s }\n"
-	for extra, want := range map[string]*List{
-		"":                                 nil,
-		", receive_claims: ~":              nil,
-		", receive_claims: []":             {},
-		", receive_claims: [email, name]":  {"email", "name"},
-		`, receive_claims: "email, name"`:  {"email", "name"},
-		`, receive_claims: "${NO_CLAIMS}"`: {},
+	const warning = "dispatcher.apps[0].receive_claims: ~ gives every claim"
+	for extra, want := range map[string]struct {
+		claims *List
+		null   bool
+	}{
+		"":                                 {nil, false},
+		", receive_claims: ~":              {nil, true},
+		", receive_claims: null":           {nil, true},
+		", receive_claims: ":               {nil, true},
+		", receive_claims: []":             {&List{}, false},
+		`, receive_claims: ""`:             {&List{}, false},
+		`, receive_claims: " , "`:          {&List{}, false},
+		`, receive_claims: [""]`:           {&List{}, false},
+		", receive_claims: [~]":            {&List{}, false},
+		", receive_claims: [email, name]":  {&List{"email", "name"}, false},
+		`, receive_claims: "email, name"`:  {&List{"email", "name"}, false},
+		`, receive_claims: "${NO_CLAIMS}"`: {&List{}, false},
+		// A variable is never null.
+		`, receive_claims: "${TILDE}"`: {&List{"~"}, false},
+		// Through an alias and a merge, as the decoder reads them.
+		", logout_url: &none ~, receive_claims: *none":             {nil, true},
+		`, logout_url: &empty "", receive_claims: *empty`:          {&List{}, false},
+		", <<: { receive_claims: ~ }":                              {nil, true},
+		", <<: { receive_claims: [a] }":                            {&List{"a"}, false},
+		", <<: { receive_claims: [] }":                             {&List{}, false},
+		", <<: { receive_claims: [a] }, receive_claims: ~":         {nil, true},
+		", <<: { receive_claims: ~ }, receive_claims: [a]":         {&List{"a"}, false},
+		", <<: [{ receive_claims: ~ }, { receive_claims: [a] }]":   {nil, true},
+		", <<: [{ receive_claims: [a] }, { receive_claims: ~ }]":   {&List{"a"}, false},
+		", <<: [{ logout_url: http://a }, { receive_claims: ~ }]":  {nil, true},
+		", <<: [{ logout_url: http://a }, { receive_claims: [] }]": {&List{}, false},
 	} {
-		c, _, err := load(t, fmt.Sprintf(app, extra), nil)
+		c, warnings, err := load(t, fmt.Sprintf(app, extra), map[string]string{"TILDE": "~"})
 		if err != nil {
 			t.Errorf("%q: %v", extra, err)
 			continue
 		}
-		if got := c.Seed.Apps[0].ReceiveClaims; !reflect.DeepEqual(got, want) {
-			t.Errorf("%q: ReceiveClaims = %v, want %v", extra, got, want)
+		a := c.Seed.Apps[0]
+		if !reflect.DeepEqual(a.ReceiveClaims, want.claims) || a.NullReceiveClaims != want.null {
+			t.Errorf("%q: ReceiveClaims = %v, null %v, want %v, %v", extra, a.ReceiveClaims, a.NullReceiveClaims, want.claims, want.null)
 		}
+		if got := strings.Contains(strings.Join(warnings, "\n"), warning); got != want.null {
+			t.Errorf("%q: warnings = %q, want the warning: %v", extra, warnings, want.null)
+		}
+	}
+	// By the index of the app the decoder keeps, a null entry dropped.
+	c, _, err := load(t, "dispatcher:\n  apps:\n    - ~\n"+
+		"    - { id: a, login_url: http://a, consent_url: http://a, method: m }\n"+
+		"    - { id: b, login_url: http://a, consent_url: http://a, method: m, receive_claims: ~ }\n", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apps := c.Seed.Apps; len(apps) != 2 || apps[0].NullReceiveClaims || !apps[1].NullReceiveClaims {
+		t.Errorf("apps = %+v", apps)
 	}
 }
 
-// The options of an app, which Symfony never read, are dropped unread: their
-// values may hold what the expansion refuses.
+// The options of an app, which Symfony never read, are dropped unread, in every
+// form its variableNode takes: their values may hold what the expansion
+// refuses.
 func TestOptionsIgnored(t *testing.T) {
 	const app = "dispatcher:\n  apps:\n    - { id: a, login_url: http://a, consent_url: http://a, method: m, options: %s }\n"
 	const warning = "dispatcher.apps[0].options is ignored"
 	for options, warned := range map[string]bool{
 		`{ theme: "%env(THEME)%", n: 123456789012345678901 }`: true,
-		`{ x: &o { y: *o } }`: true,
-		`{}`:                  false,
-		`~`:                   false,
+		`{ x: &o { y: *o } }`:    true,
+		`&o { y: *o }`:           true,
+		`&o [*o]`:                true,
+		`{ <<: { x: 1 } }`:       true,
+		`{ "k\0": "\0" }`:        true,
+		`[a, b]`:                 true,
+		`[receive_claims]`:       true,
+		`texte`:                  true,
+		`12`:                     true,
+		`false`:                  true,
+		`"%env(json:OPTIONS)%"`:  true,
+		`"${UNSET_AND_UNREAD?}"`: true,
+		`"\0"`:                   true,
+		`{}`:                     false,
+		`[]`:                     false,
+		`""`:                     false,
+		`~`:                      false,
 	} {
 		_, warnings, err := load(t, fmt.Sprintf(app, options), nil)
 		if err != nil {
@@ -1299,6 +1386,37 @@ func TestOptionsIgnored(t *testing.T) {
 		if got := strings.Contains(strings.Join(warnings, "\n"), warning); got != warned {
 			t.Errorf("%s: warnings = %q, want the warning: %v", options, warnings, warned)
 		}
+	}
+	// One warning per app, at its index, through a merge too.
+	_, warnings, err := load(t, `
+dispatcher:
+  apps:
+    - &a { id: a, login_url: http://a, consent_url: http://a, method: m, options: { x: 1 } }
+    - { id: b, login_url: http://a, consent_url: http://a, method: m }
+    - { <<: *a, id: c }
+    - { <<: *a, id: d, options: {} }
+`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range warnings {
+		if strings.Contains(w, ".options") {
+			got = append(got, w[:strings.Index(w, " is ignored")])
+		}
+	}
+	if want := []string{"dispatcher.apps[0].options", "dispatcher.apps[2].options"}; !slices.Equal(got, want) {
+		t.Errorf("warnings = %q, want %q", got, want)
+	}
+	// A merge is decoded for its keys: yaml.v3 bounds what its aliases unfold.
+	var bomb strings.Builder
+	bomb.WriteString("dispatcher:\n  apps:\n    - id: a\n      login_url: http://a\n      consent_url: http://a\n      method: m\n      options:\n        l0: &l0 { x: 1 }\n")
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(&bomb, "        l%d: &l%d { <<: [%s] }\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d, ", i-1), 10), ", "))
+	}
+	bomb.WriteString("        <<: *l10\n")
+	if _, _, err := load(t, bomb.String(), nil); err == nil || !strings.Contains(err.Error(), "excessive aliasing") {
+		t.Errorf("merge bomb: err = %v", err)
 	}
 }
 

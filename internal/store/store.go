@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -90,6 +91,47 @@ func (p *Postgres) Migrate(ctx context.Context) ([]string, error) {
 		return applied, fmt.Errorf("migrate: %w", err)
 	}
 	return applied, nil
+}
+
+// MigrateDown rolls back the last migration applied and returns its name, ""
+// when none is. Only the version that holds a migration can roll it back.
+func (p *Postgres) MigrateDown(ctx context.Context) (string, error) {
+	provider, err := p.migrator()
+	if err != nil {
+		return "", err
+	}
+	r, err := provider.Down(ctx)
+	switch {
+	case errors.Is(err, goose.ErrNoNextVersion):
+		return "", nil
+	case errors.Is(err, goose.ErrVersionNotFound):
+		return "", fmt.Errorf("migrate down: the last migration of the database is unknown to this version: roll it back with the version that applied it: %w", err)
+	case err != nil:
+		return "", fmt.Errorf("migrate down: %w", err)
+	}
+	return r.Source.Path, nil
+}
+
+// LastMigration names the migration MigrateDown would roll back, "" when none
+// is applied.
+func (p *Postgres) LastMigration(ctx context.Context) (string, error) {
+	provider, err := p.migrator()
+	if err != nil {
+		return "", err
+	}
+	version, err := provider.GetDBVersion(ctx)
+	if err != nil {
+		return "", fmt.Errorf("migrate: %w", err)
+	}
+	if version == 0 {
+		return "", nil
+	}
+	for _, s := range provider.ListSources() {
+		if s.Version == version {
+			return s.Path, nil
+		}
+	}
+	return fmt.Sprintf("migration %d, unknown to this version", version), nil
 }
 
 // migrator gives the embedded migrations, their version table and their

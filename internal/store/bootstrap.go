@@ -27,7 +27,8 @@ const (
 	// Missing creates what the database lacks and leaves the rest alone.
 	Missing Mode = iota
 	// Force also rewrites what the database holds of the seed, and resets
-	// the settings the seed sets to ~. Neither deletes anything.
+	// the settings and the receive_claims the seed sets to ~. Neither deletes
+	// anything.
 	Force
 )
 
@@ -64,6 +65,12 @@ type FieldChange struct {
 	Name     string
 	Old, New string
 	Secret   bool
+}
+
+// WidensClaims tells that the change gives every claim to an app that had a
+// list, an empty one too.
+func (f FieldChange) WidensClaims() bool {
+	return f.Name == "receive_claims" && f.New == "null"
 }
 
 // bootstrapLock is the advisory lock that serializes bootstraps: replicas
@@ -281,6 +288,11 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		var old App
 		if i >= 0 {
 			old = current[i]
+		}
+		// Without the key, what the database holds stays: only ~ takes a list
+		// back, so that a seed reused from Symfony undoes no restriction.
+		if sa.ReceiveClaims == nil && !sa.NullReceiveClaims {
+			a.ReceiveClaims = old.ReceiveClaims
 		}
 		if !b.decide("app", a.ID, i >= 0, []field{
 			{name: "login_url", old: old.LoginURL, new: a.LoginURL},

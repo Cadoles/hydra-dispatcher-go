@@ -39,6 +39,10 @@ type fakeStore struct {
 	deadlines map[string]time.Duration
 	// migrateErr and bootstrapErr fail Migrate and Bootstrap.
 	migrateErr, bootstrapErr error
+	// last is the migration MigrateDown rolls back, "" for none; downErr
+	// fails it.
+	last    string
+	downErr error
 	// written are the changes of a write when they differ from those of a
 	// dry run: the database changed in between.
 	written []store.Change
@@ -90,6 +94,16 @@ func (f *fakeStore) Migrate(ctx context.Context) ([]string, error) {
 	return f.applied, f.migrateErr
 }
 
+func (f *fakeStore) LastMigration(context.Context) (string, error) {
+	f.record("last")
+	return f.last, nil
+}
+
+func (f *fakeStore) MigrateDown(context.Context) (string, error) {
+	f.record("down")
+	return f.last, f.downErr
+}
+
 func (f *fakeStore) Bootstrap(ctx context.Context, _ config.Seed, mode store.Mode, write bool) ([]store.Change, error) {
 	f.deadline(ctx, "bootstrap")
 	name := map[store.Mode]string{store.Missing: "missing", store.Force: "force"}[mode]
@@ -129,6 +143,13 @@ var someChanges = []store.Change{
 	{Kind: "flow", ID: "legacy", Action: store.Absent},
 }
 
+// widened gives every claim to an app that had a list, and would to another
+// without -force.
+var widened = []store.Change{
+	{Kind: "app", ID: "hydra-otp", Action: store.Update, Fields: []store.FieldChange{{Name: "receive_claims", Old: `["email"]`, New: `null`}}},
+	{Kind: "app", ID: "hydra-kept", Action: store.Keep, Fields: []store.FieldChange{{Name: "receive_claims", Old: `[]`, New: `null`}}},
+}
+
 func TestPrintChanges(t *testing.T) {
 	var out bytes.Buffer
 	printChanges(&out, someChanges)
@@ -149,6 +170,19 @@ update 1, reset 1, keep 1, same 1, absent 1
 	if writes(someChanges[2:]) || !writes(someChanges[:1]) {
 		t.Error("writes: wrong")
 	}
+	out.Reset()
+	printChanges(&out, append(widened[:2:2], store.Change{Kind: "flow", ID: "f", Action: store.Update, Fields: []store.FieldChange{{Name: "icon_url", Old: `{"":"http://i"}`, New: "null"}}}))
+	want = `update  app hydra-otp
+          receive_claims: ["email"] -> null (every claim)
+keep    app hydra-kept (left as it is without -force)
+          receive_claims: [] -> null (every claim)
+update  flow f
+          icon_url: {"":"http://i"} -> null
+update 2, keep 1
+`
+	if out.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
+	}
 }
 
 func TestMigrateCommand(t *testing.T) {
@@ -161,6 +195,96 @@ func TestMigrateCommand(t *testing.T) {
 	if err != nil || !slices.Equal(f.Calls(), []string{"migrate", "close"}) || !strings.Contains(logs, `"msg":"store.migrated"`) ||
 		!strings.Contains(logs, `"migration":"00001_schema.sql"`) {
 		t.Errorf("err = %v, calls = %q, logs:\n%s", err, f.Calls(), logs)
+	}
+}
+
+// migrate down rolls back one migration: without a question out of a terminal
+// or with -yes, after naming it in one.
+func TestMigrateDownCommand(t *testing.T) {
+	keepLoggers(t)
+	commandEnv(t)
+	const name = "00003_app_receive_claims.sql"
+	for _, tt := range []struct {
+		name     string
+		args     []string
+		terminal bool
+		answer   string
+		last     string
+		calls    []string
+		log      string
+		stderr   string
+	}{
+		{"out of a terminal", nil, false, "", name, []string{"down", "close"}, `"msg":"store.rolled_back"`, ""},
+		{"-yes", []string{"-yes"}, true, "", name, []string{"down", "close"}, `"migration":"` + name + `"`, ""},
+		{"confirmed", nil, true, "y\n", name, []string{"last", "down", "close"}, `"msg":"store.rolled_back"`, "Roll back " + name + "? [y/N] "},
+		{"declined", nil, true, "n\n", name, []string{"last", "close"}, "", "Roll back " + name + "? [y/N] Nothing rolled back.\n"},
+		{"no answer", nil, true, "", name, []string{"last", "close"}, "", "Nothing rolled back.\n"},
+		{"nothing applied", nil, true, "", "", []string{"last", "down", "close"}, `"msg":"store.nothing_to_roll_back"`, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stdinFrom(t, tt.answer, tt.terminal)
+			f := &fakeStore{last: tt.last}
+			useStore(t, f)
+			var err error
+			var logs string
+			stderr := stderrOf(t, func() {
+				logs = stdoutOf(t, func() { err = run(context.Background(), append([]string{"migrate", "down"}, tt.args...), io.Discard) })
+			})
+			if err != nil || !slices.Equal(f.Calls(), tt.calls) || !strings.Contains(logs, tt.log) || !strings.HasSuffix(stderr, tt.stderr) {
+				t.Errorf("err = %v, calls = %q, logs:\n%s\nstderr:\n%s", err, f.Calls(), logs, stderr)
+			}
+		})
+	}
+	// A failure closes the store and reaches the caller; an argument is refused.
+	stdinFrom(t, "", false)
+	f := &fakeStore{last: name, downErr: errors.New("migrate down: the last migration of the database is unknown to this version")}
+	useStore(t, f)
+	var err error
+	_ = stdoutOf(t, func() { err = run(context.Background(), []string{"migrate", "down"}, io.Discard) })
+	if err == nil || !strings.Contains(err.Error(), "unknown to this version") || !slices.Equal(f.Calls(), []string{"down", "close"}) {
+		t.Errorf("err = %v, calls = %q", err, f.Calls())
+	}
+	_ = stderrOf(t, func() {
+		if err := run(context.Background(), []string{"migrate", "sideways"}, io.Discard); !errors.Is(err, errUsage) {
+			t.Errorf("migrate sideways: err = %v", err)
+		}
+	})
+}
+
+// A list that becomes NULL warns once written, by bootstrap or by serve, and
+// the warning keeps the list: the database no longer does. A change left as it
+// is, or a dry run, writes nothing and does not warn.
+func TestWidenedClaimsWarn(t *testing.T) {
+	keepLoggers(t)
+	const msg, list = `"msg":"bootstrap.claims_widened"`, `"id":"hydra-otp","was":"[\"email\"]"`
+	warned := func(logs string) bool {
+		return strings.Contains(logs, msg) && strings.Contains(logs, list) && strings.Count(logs, msg) == 1
+	}
+	commandEnv(t)
+	for _, tt := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"-force"}, true},
+		{[]string{"-force", "-dry-run"}, false},
+	} {
+		stdinFrom(t, "", false)
+		useStore(t, &fakeStore{changes: widened})
+		var err error
+		stderr := stderrOf(t, func() {
+			_ = stdoutOf(t, func() { err = run(context.Background(), append([]string{"bootstrap"}, tt.args...), io.Discard) })
+		})
+		if err != nil || warned(stderr) != tt.want || strings.Contains(stderr, msg) != tt.want {
+			t.Errorf("bootstrap %q: err = %v, stderr:\n%s", tt.args, err, stderr)
+		}
+	}
+	commandEnv(t, "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", "DISPATCHER_SERVE_BOOTSTRAP=force")
+	useStore(t, &fakeStore{changes: widened})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var err error
+	if logs := stdoutOf(t, func() { err = serve(ctx, nil) }); err != nil || !warned(logs) {
+		t.Errorf("serve: err = %v, logs:\n%s", err, logs)
 	}
 }
 

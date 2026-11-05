@@ -26,6 +26,7 @@ const quotedStyles = yaml.SingleQuotedStyle | yaml.DoubleQuotedStyle | yaml.Lite
 var (
 	unmarshalerType = reflect.TypeFor[yaml.Unmarshaler]()
 	ignoredType     = reflect.TypeFor[ignored]()
+	optionsType     = reflect.TypeFor[appOptions]()
 )
 
 // decodeFile expands ${VAR} in every value, checks every key against the
@@ -72,7 +73,10 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 	c.Seed.NullSettings = nullSettings(&doc)
 	seed := mappingValue(&doc, "dispatcher")
 	c.Seed.bothLoginTTLs = mappingValue(seed, "session_ttl") != nil && mappingValue(seed, "login_remember_for") != nil
-	nullScopes(&doc, c.Seed.OAuth2Clients)
+	// Only absent scopes get the default, admin:flows; null ones are no scope,
+	// as in Symfony.
+	nullEntries(&doc, "oauth2_clients", "scopes", len(c.Seed.OAuth2Clients), func(i int) { c.Seed.OAuth2Clients[i].Scopes = &List{} })
+	nullEntries(&doc, "apps", "receive_claims", len(c.Seed.Apps), func(i int) { c.Seed.Apps[i].NullReceiveClaims = true })
 	return nil
 }
 
@@ -100,7 +104,7 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t == ignoredType {
+	if t == ignoredType || t == optionsType {
 		return // never read
 	}
 	defer p.enter(n)()
@@ -133,7 +137,6 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 		p.mapping(n, t, path)
 	case t.Kind() == reflect.Map && n.Kind == yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
-			p.key(n.Content[i], path)
 			p.walk(n.Content[i+1], t.Elem(), join(path, n.Content[i].Value))
 		}
 	case t.Kind() == reflect.Slice && n.Kind == yaml.SequenceNode:
@@ -214,8 +217,9 @@ func (p *prepare) alias(n *yaml.Node, t reflect.Type, path string, walk func()) 
 // scalar expands ${VAR} in n. An expanded value loses its quoting and is
 // typed by what it became ("${TIMEOUT:-5s}" decodes as a duration,
 // "${UI:-false}" as a boolean), with two exceptions. An explicit tag stays:
-// !!str ${CLIENT_ID} is a string. It is never null: "" stays an empty string,
-// so an empty variable empties a list instead of restoring its default.
+// !!str ${FLAG} is a string, which a boolean key refuses. It is never null: ""
+// stays an empty string, so an empty variable empties a list instead of
+// restoring its default.
 func (p *prepare) scalar(n *yaml.Node, path string) {
 	if p.done[n] {
 		return
@@ -245,8 +249,8 @@ func (p *prepare) scalar(n *yaml.Node, path string) {
 	}
 }
 
-// key refuses a NUL character in a key of the seed, a locale or an option:
-// only a "\0" escape gives one, and Postgres does not store it.
+// key refuses a NUL character in a key of the seed, a locale: only a "\0"
+// escape gives one, and Postgres does not store it.
 func (p *prepare) key(k *yaml.Node, path string) {
 	if inSeed(path) && strings.ContainsRune(k.Value, 0) {
 		p.fail(k, path, "key %q contains a NUL character, which Postgres does not store", k.Value)
@@ -305,20 +309,21 @@ func nullSettings(doc *yaml.Node) []string {
 	return keys
 }
 
-// nullScopes gives no scope to the clients whose scopes are null, as Symfony
-// does: only absent scopes get the default, admin:flows.
-func nullScopes(doc *yaml.Node, clients []SeedClient) {
-	seq := mappingValue(mappingValue(doc, "dispatcher"), "oauth2_clients")
+// nullEntries calls set with the index of each of the count decoded entries of
+// a list of the seed whose key is null, which the decoder does not tell from
+// an absent key.
+func nullEntries(doc *yaml.Node, list, key string, count int, set func(i int)) {
+	seq := mappingValue(mappingValue(doc, "dispatcher"), list)
 	if seq == nil || seq.Kind != yaml.SequenceNode {
 		return
 	}
 	i := 0
 	for _, item := range seq.Content {
-		if deref(item).ShortTag() == nullTag || i == len(clients) {
+		if deref(item).ShortTag() == nullTag || i == count {
 			continue // the decoder drops a null entry
 		}
-		if s := mappingValue(item, "scopes"); s != nil && s.ShortTag() == nullTag {
-			clients[i].Scopes = &List{}
+		if v := mappingValue(item, key); v != nil && v.ShortTag() == nullTag {
+			set(i)
 		}
 		i++
 	}

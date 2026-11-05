@@ -1,7 +1,7 @@
 // Command hydra-dispatcher is the single login app Ory Hydra talks to. It
 // chains several real login apps into a flow (MFA, identity provider choice)
 // by replaying Hydra's login/consent protocol towards each of them. Go rewrite
-// of the Symfony hydra-dispatcher-v2.
+// of the Symfony dispatcher.
 package main
 
 import (
@@ -36,7 +36,7 @@ type command struct {
 
 var commands = []command{
 	{"serve", "run the HTTP server", serve},
-	{"migrate", "apply the database migrations", migrate},
+	{"migrate", "apply the database migrations; migrate down rolls back the last one", migrate},
 	{"bootstrap", "write the seed of the configuration file to the database", bootstrap},
 	{"healthcheck", "probe /health of a local server (container HEALTHCHECK)", healthcheck},
 	{"version", "print the version", printVersion},

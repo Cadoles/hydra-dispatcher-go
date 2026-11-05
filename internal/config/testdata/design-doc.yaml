@@ -1,4 +1,4 @@
-# Example configuration of "Conception Dispatcher Go.md" v1.3.15, section
+# Example configuration of "Conception Dispatcher Go.md" v1.3.31, section
 # "Configuration et deploiement", copied verbatim: it must keep loading.
 server:
   listen: ":8080"
@@ -12,7 +12,7 @@ hydra:
   max_in_flight: 512            # appels simultanés ; au-delà, 503 immédiat avec Retry-After
   version: "2.2"                # 2.1, 2.2 ou 2.3 : fixe le format des challenges chiffrés (voir Versions Hydra)
   system_secrets: "${HYDRA_SYSTEM_SECRETS}"   # optionnel : secrets.system d'Hydra, séparés par des virgules (ou system_secrets_file) ; vide = repli
-  login_consent_ttl: 30m        # = ttl.login_consent_request d'Hydra
+  login_consent_ttl: 30m        # = ttl.login_consent_request d'Hydra ; plus de 60 s
 security:
   admin_authorized_hosts: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]   # /admin et /admin/v1
   emulated_api_authorized_hosts: ["10.0.1.0/24"]   # obligatoire, sans défaut : réseaux d'où appellent les login apps
@@ -32,7 +32,7 @@ tls:
   pinned_spki_sha256: []         # épinglage optionnel
   hsts_include_subdomains: false
 state:
-  redis_dsn: "${REDIS_DSN}"     # renseigné = Redis (voie privilégiée) ; vide = mémoire, instance unique
+  redis_dsn: "${REDIS_DSN}"     # renseigné = Redis (voie privilégiée) ; vide = mémoire, instance unique ; dial_timeout, read_timeout, write_timeout, max_retries en paramètres d'URL (1 s, 1 s, 1 s, 1 par défaut)
   key_prefix: ""                # préfixe des clés, distinct pendant une cohabitation sur le même Redis
   redis_pool_size: 0            # 0 = 10 connexions par cœur
 remember:

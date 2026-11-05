@@ -104,7 +104,11 @@ func TestMigrateOptions(t *testing.T) {
 		('none', 'x', 'x', 'pwd', '{"theme": "dark"}'),
 		('list', 'x', 'x', 'pwd', '{"receive_claims": ["email", 1, "name"]}'),
 		('empty', 'x', 'x', 'pwd', '{"receive_claims": []}'),
-		('text', 'x', 'x', 'pwd', '{"receive_claims": "email"}')`)
+		('text', 'x', 'x', 'pwd', '{"receive_claims": "email"}'),
+		('null', 'x', 'x', 'pwd', '{"receive_claims": null}'),
+		('number', 'x', 'x', 'pwd', '{"receive_claims": 1}'),
+		('object', 'x', 'x', 'pwd', '{"receive_claims": {"email": true}}'),
+		('mixed', 'x', 'x', 'pwd', '{"theme": "dark", "receive_claims": ["z", null, ["y"], "a", "a"]}')`)
 	if _, err := p.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +116,9 @@ func TestMigrateOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string][]string{"none": nil, "list": {"email", "name"}, "empty": {}, "text": {}} {
+	for id, want := range map[string][]string{
+		"none": nil, "list": {"email", "name"}, "empty": {}, "text": {}, "null": {}, "number": {}, "object": {}, "mixed": {"z", "a", "a"},
+	} {
 		if a, _ := s.App(id); !reflect.DeepEqual(a.ReceiveClaims, want) {
 			t.Errorf("app %s: ReceiveClaims = %#v, want %#v", id, a.ReceiveClaims, want)
 		}
@@ -120,11 +126,60 @@ func TestMigrateOptions(t *testing.T) {
 	if _, err := m.DownTo(ctx, 2); err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string]string{"none": `{}`, "list": `{"receive_claims": ["email", "name"]}`, "empty": `{"receive_claims": []}`} {
+	for id, want := range map[string]string{
+		"none": `{}`, "list": `{"receive_claims": ["email", "name"]}`, "empty": `{"receive_claims": []}`, "null": `{"receive_claims": []}`,
+	} {
 		var options string
 		if err := p.db.QueryRow(`SELECT options::text FROM app WHERE id = $1`, id).Scan(&options); err != nil || options != want {
 			t.Errorf("app %s after the rollback: options = %s, %v; want %s", id, options, err, want)
 		}
+	}
+}
+
+// migrate down rolls back one migration at a time, its data kept as Down says,
+// down to nothing; a version that does not hold the last one refuses.
+func TestMigrateDown(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('a', 'x', 'x', 'pwd', '{email}')`)
+	want := slices.Clone(allMigrations)
+	slices.Reverse(want)
+	for i, name := range want {
+		if last, err := p.LastMigration(ctx); err != nil || last != name {
+			t.Fatalf("LastMigration = %q, %v; want %s", last, err, name)
+		}
+		if got, err := p.MigrateDown(ctx); err != nil || got != name {
+			t.Fatalf("MigrateDown = %q, %v; want %s", got, err, name)
+		}
+		if i == 0 {
+			var options string
+			if err := p.db.QueryRow(`SELECT options::text FROM app WHERE id = 'a'`).Scan(&options); err != nil || options != `{"receive_claims": ["email"]}` {
+				t.Errorf("options after the rollback: %s, %v", options, err)
+			}
+		}
+	}
+	if tables := publicTables(t, p); !slices.Equal(tables, []string{"dispatcher_schema_version"}) {
+		t.Errorf("tables = %q", tables)
+	}
+	if last, err := p.LastMigration(ctx); err != nil || last != "" {
+		t.Errorf("LastMigration with nothing applied = %q, %v", last, err)
+	}
+	if got, err := p.MigrateDown(ctx); err != nil || got != "" {
+		t.Errorf("MigrateDown with nothing applied = %q, %v", got, err)
+	}
+	if applied, err := p.Migrate(ctx); err != nil || !slices.Equal(applied, allMigrations) {
+		t.Fatalf("Migrate after = %q, %v", applied, err)
+	}
+	// A migration of a later version: what it holds, this one cannot undo.
+	exec(t, p, `INSERT INTO dispatcher_schema_version (version_id, is_applied) VALUES (99, true)`)
+	if last, err := p.LastMigration(ctx); err != nil || !strings.Contains(last, "99") {
+		t.Errorf("LastMigration = %q, %v", last, err)
+	}
+	if _, err := p.MigrateDown(ctx); err == nil || !strings.Contains(err.Error(), "roll it back with the version that applied it") {
+		t.Errorf("MigrateDown of an unknown version: %v", err)
+	}
+	if _, err := p.Snapshot(ctx); err != nil {
+		t.Errorf("the refusal changed the schema: %v", err)
 	}
 }
 

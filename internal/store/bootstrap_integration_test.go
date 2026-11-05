@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 )
 
 // actions sums up changes as "action kind id" lines, the fields of an update
@@ -199,6 +201,104 @@ dispatcher:
 }
 
 // Settings that do not hold together refuse the whole bootstrap.
+// Without the key, what the database holds stays: a seed reused from Symfony
+// undoes no restriction, with or without force, even when it rewrites the app.
+// ~ gives every claim back, and says so; a list or [] restricts an app that had
+// none. NULL and {} are never taken for one another.
+func TestBootstrapReceiveClaims(t *testing.T) {
+	ctx := context.Background()
+	const app = "{ id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd%s }"
+	seed := func(extra string) config.Seed {
+		return loadSeed(t, "dispatcher:\n  apps:\n    - "+fmt.Sprintf(app, extra)+"\n")
+	}
+	claims := func(p *Postgres) []string {
+		s, err := p.Snapshot(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, _ := s.App("a")
+		return a.ReceiveClaims
+	}
+	for _, tc := range []struct {
+		name, base, extra string
+		// missing and force are the actions, widens that of a ~ on a list.
+		missing, force Action
+		after          []string
+		old, new       string
+		widens         bool
+	}{
+		{"no key, a list", `'{email}'`, "", Same, Same, []string{"email"}, "", "", false},
+		{"no key, an empty list", `'{}'`, "", Same, Same, []string{}, "", "", false},
+		{"no key, no list", `NULL`, "", Same, Same, nil, "", "", false},
+		{"~, a list", `'{email}'`, ", receive_claims: ~", Keep, Update, nil, `["email"]`, "null", true},
+		{"~, an empty list", `'{}'`, ", receive_claims: ~", Keep, Update, nil, "[]", "null", true},
+		{"~, no list", `NULL`, ", receive_claims: ~", Same, Same, nil, "", "", false},
+		{"a list, no list", `NULL`, ", receive_claims: [email]", Keep, Update, []string{"email"}, "null", `["email"]`, false},
+		{"[], no list", `NULL`, ", receive_claims: []", Keep, Update, []string{}, "null", "[]", false},
+		{"[], a list", `'{email}'`, ", receive_claims: []", Keep, Update, []string{}, `["email"]`, "[]", false},
+		{"empty variable, no list", `NULL`, `, receive_claims: "${NO_CLAIMS}"`, Keep, Update, []string{}, "null", "[]", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := migrated(t)
+			exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('a', 'http://a/login', 'http://a/consent', 'pwd', `+tc.base+`)`)
+			s := seed(tc.extra)
+			before := claims(p)
+			changes, err := p.Bootstrap(ctx, s, Missing, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changes[0].Action != tc.missing {
+				t.Errorf("without force: %+v, want %s", changes[0], tc.missing)
+			}
+			if got := claims(p); !reflect.DeepEqual(got, before) {
+				t.Errorf("without force, claims %#v, was %#v", got, before)
+			}
+			changes, err = p.Bootstrap(ctx, s, Force, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := changes[0]
+			if c.Action != tc.force {
+				t.Errorf("force: %+v, want %s", c, tc.force)
+			}
+			if tc.force == Update && (len(c.Fields) != 1 || c.Fields[0].Old != tc.old || c.Fields[0].New != tc.new || c.Fields[0].WidensClaims() != tc.widens) {
+				t.Errorf("force: fields %+v, want %s -> %s, widens %v", c.Fields, tc.old, tc.new, tc.widens)
+			}
+			if got := claims(p); !reflect.DeepEqual(got, tc.after) {
+				t.Errorf("force: claims %#v, want %#v", got, tc.after)
+			}
+			if changes, err := p.Bootstrap(ctx, s, Force, true); err != nil || changes[0].Action != Same {
+				t.Errorf("second force: %+v, %v", changes, err)
+			}
+		})
+	}
+	t.Run("no key, another field rewritten", func(t *testing.T) {
+		p := migrated(t)
+		exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('a', 'http://old/login', 'http://a/consent', 'pwd', '{email}')`)
+		changes, err := p.Bootstrap(ctx, seed(""), Force, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := actions(changes); !slices.Equal(got, []string{"update app a: login_url"}) {
+			t.Errorf("changes = %q", got)
+		}
+		if got := claims(p); !slices.Equal(got, []string{"email"}) {
+			t.Errorf("claims = %#v", got)
+		}
+	})
+	t.Run("a new app", func(t *testing.T) {
+		for extra, want := range map[string][]string{"": nil, ", receive_claims: ~": nil, ", receive_claims: []": {}, ", receive_claims: [email]": {"email"}} {
+			p := migrated(t)
+			if _, err := p.Bootstrap(ctx, seed(extra), Force, true); err != nil {
+				t.Fatal(err)
+			}
+			if got := claims(p); !reflect.DeepEqual(got, want) {
+				t.Errorf("%q: claims = %#v, want %#v", extra, got, want)
+			}
+		}
+	})
+}
+
 func TestBootstrapRefusedSettings(t *testing.T) {
 	ctx := context.Background()
 	p := migrated(t)
