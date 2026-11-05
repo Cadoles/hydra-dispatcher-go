@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"encoding/json"
 	"net/url"
 	"slices"
 	"strings"
@@ -164,7 +163,7 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	}
 	var skip []Report
 	if snap.Skip {
-		reason, reports := r.memoryFails(ev.Memory, sid, snap.Subject, f, snap.Scope)
+		reason, reports := r.memoryFails(ev.Memory, sid, snap.Subject, f, snap.Scope, snap.Audience)
 		if reason == "" {
 			// SKP-1: before ENT-22, the accept leaves at once; past hx
 			// meanwhile, SKP-10.
@@ -173,6 +172,14 @@ func (r *run) create(ref string, ev Entry) Outcome {
 			return r.skewed(read, out)
 		}
 		skip = []Report{ignored("login", reason)} // ENT-9, SKP-2
+		if promptNone(snap.RequestURL) {
+			// SKP-11 (revue R21): no page may be shown, and Hydra, which has a
+			// session, leaves that to the login app: the client gets
+			// login_required, as without a session.
+			out := r.rejectLogin(f, ReasonPromptNone, rejection(ReasonPromptNone, "The session cannot be used without a login, which prompt=none forbids."), s.redirect)
+			out.Reports = append(skip, out.Reports...)
+			return r.skewed(read, out)
+		}
 	}
 	if f.ExpiresAt <= r.now() && r.now() < f.HydraExpiresAt {
 		// ENT-22 (Q33): read in the last minute of L at Hydra, with Hydra's
@@ -188,6 +195,19 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	out.Response.SetCSRF = f.CSRF
 	out.Reports = append(skip, out.Reports...)
 	return r.skewed(read, out)
+}
+
+// promptNone tells whether the authorization request says prompt=none (OIDC
+// Core 3.1.2.1). A login request does not carry the prompt: only its
+// request_url does, the query of the authorization request; one sent by POST,
+// or with the prompt in a request object, does not show it (doc, Mémoire du
+// skip).
+func promptNone(requestURL string) bool {
+	u, err := url.Parse(requestURL)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(strings.Fields(u.Query().Get("prompt")), "none")
 }
 
 // clockSkewTolerance is how far in the future Hydra's requested_at may be
@@ -372,7 +392,7 @@ func (r *run) consent(ev Consent) Outcome {
 		return s.fail(E1007)
 	}
 	req := read.Request
-	ref, ok := dispatcherRef(req.Context)
+	ref, ok := dispatcherMember(req.Context, memberRef)
 	if !ok {
 		// SKC (A6, P8): a login accepted in skip carries the dispatcher's
 		// marker; without it, rejected as CST-5 (SKC-7).
@@ -525,22 +545,6 @@ func (r *run) notOurs(f *Flow, c, check string) Outcome {
 		out.Call.Check = check
 	}
 	return out
-}
-
-// dispatcherRef returns the x_dispatcher_ref of a consent request's
-// context, which the final accept set.
-func dispatcherRef(context any) (string, bool) {
-	data, err := json.Marshal(context)
-	if err != nil {
-		return "", false
-	}
-	var c struct {
-		Ref *string `json:"x_dispatcher_ref"`
-	}
-	if json.Unmarshal(data, &c) != nil || c.Ref == nil {
-		return "", false
-	}
-	return *c.Ref, true
 }
 
 // hydraMargin is taken from the end of L at Hydra for the flow's expiry:

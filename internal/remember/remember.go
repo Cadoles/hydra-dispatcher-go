@@ -3,7 +3,7 @@
 // secrets.cookie_key, the key's id first so that the previous keys of
 // secrets.cookie_keys_previous still open what they sealed; deflated beyond
 // 1.5 KB, not written beyond 3.8 KB. The flow engine judges what it holds
-// (MEM-3 to MEM-9) and says what to write (WRT-1); this package only opens
+// (MEM-3 to MEM-10) and says what to write (WRT-1); this package only opens
 // and seals, out of the engine, which draws no nonce.
 package remember
 

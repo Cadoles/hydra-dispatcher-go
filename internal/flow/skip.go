@@ -11,18 +11,18 @@ import (
 
 // The memory of the skip (Mémoire du skip of Table de transitions.md, lot
 // P8): Hydra's skip is honoured when the dispatcher_remember cookie passes
-// its checks, MEM-1 to MEM-9, and only when the flow is created (Q44); the
+// its checks, MEM-1 to MEM-10, and only when the flow is created (Q44); the
 // consent of such a login comes without x_dispatcher_ref, and is accepted
 // from the cookie without a flow, the x_dispatcher_skip marker binding it to
 // the login the dispatcher accepted (Q38).
 
 // memoryFails checks the cookie m against a request of Hydra, the login
 // request at the entry or the consent request without a flow, in the order
-// of MEM-1 to MEM-9, and returns the reason of the first check failed, ""
+// of MEM-1 to MEM-10, and returns the reason of the first check failed, ""
 // when all pass. sid and sub are the request's session and subject, probe
-// holds its client and oidc_context for the choice rules, scopes are those
-// it requests. It also returns what the choice rules reported.
-func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes []string) (string, []Report) {
+// holds its client and oidc_context for the choice rules, scopes and audience
+// are those it requests. It also returns what the choice rules reported.
+func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes, audience []string) (string, []Report) {
 	c := m.Content
 	switch {
 	case c == nil && m.Reason == SkipUnreadable:
@@ -52,7 +52,7 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes []strin
 	switch {
 	case c.FH != Composition(apps):
 		return SkipComposition, o.reports // MEM-7
-	case !sameScopes(scopes, c.Scp):
+	case !sameSet(scopes, c.Scp):
 		// MEM-8 (revue R20): the same scopes, not only covered. The cookie's
 		// claims were filtered by the login apps for the scopes of the
 		// consent that wrote it (hydra-sql's FILTER_CLAIMS_BY_SCOPE); fewer
@@ -64,13 +64,18 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes []strin
 		// may have changed since the cookie was written; the accept sends
 		// the cookie's.
 		return SkipACR, o.reports
+	case !sameSet(audience, c.Aud):
+		// MEM-10 (revue R21): the access token claims of the cookie were
+		// written for the audiences of its consent; another audience would
+		// get them, an app's roles for one API read by another.
+		return SkipAudience, o.reports
 	}
 	return "", o.reports
 }
 
-// sameScopes tells whether the scopes requested are those of the cookie,
-// order and repeats aside (MEM-8).
-func sameScopes(requested, remembered []string) bool {
+// sameSet tells whether what is requested is what the cookie holds, order and
+// repeats aside (MEM-8, MEM-10).
+func sameSet(requested, remembered []string) bool {
 	within := func(a, b []string) bool {
 		return !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
 	}
@@ -109,7 +114,7 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 	}
 	ctx = withoutDispatcher(ctx)
 	marker := r.Env.Keys.SkipMarker(f.HydraSessionID, body.Subject, body.GetAcr(), body.Amr, f.Hydra.RequestURL)
-	ctx["x_dispatcher_skip"], _ = json.Marshal(marker) // a string always marshals
+	ctx[memberSkip], _ = json.Marshal(marker) // a string always marshals
 	body.Context = ctx
 
 	d := r.Answers.Accept
@@ -142,7 +147,7 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 // token and the print of the claims shown.
 func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	s := r.page()
-	marker, ok := skipMarkerOf(req.Context)
+	marker, ok := dispatcherMember(req.Context, memberSkip)
 	switch {
 	case !ok:
 		// SKC-7, CST-5 (A6): a login accepted without the dispatcher, or
@@ -157,7 +162,7 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	if err != nil {
 		return s.fail(E1004)
 	}
-	reason, reports := r.memoryFails(ev.Memory, req.GetLoginSessionId(), req.GetSubject(), probe, nonNil(req.RequestedScope))
+	reason, reports := r.memoryFails(ev.Memory, req.GetLoginSessionId(), req.GetSubject(), probe, nonNil(req.RequestedScope), nonNil(req.RequestedAccessTokenAudience))
 	if reason != "" {
 		// SKC-6: the cookie lost, or a flow changed since; nothing can be
 		// played again, the client starts over.
@@ -272,6 +277,7 @@ func (r *run) remembered(f *Flow, body ory.AcceptOAuth2ConsentRequest) *Remember
 		AMR:  nonNil(f.Sent.AMR),
 		Ctx:  withoutDispatcher(f.Sent.Context),
 		Scp:  nonNil(body.GrantScope),
+		Aud:  nonNil(body.GrantAccessTokenAudience),
 		IAT:  now,
 	}
 	if s := body.Session; s != nil {
@@ -300,11 +306,18 @@ func withoutDispatcher(ctx Object) Object {
 	return out
 }
 
-// skipMarkerOf returns the x_dispatcher_skip of a consent request's
-// context, and whether it has one; a context that is not an object has none
-// (SKC-7). A member that is no string, null included, is a marker the
-// dispatcher never wrote: "", which no key gives (SKC-8, revue R20).
-func skipMarkerOf(context any) (string, bool) {
+// The members of a context that are the dispatcher's.
+const (
+	memberRef  = dispatcherPrefix + "ref"
+	memberSkip = dispatcherPrefix + "skip"
+)
+
+// dispatcherMember returns the member name of a consent request's context,
+// and whether it has one; a context that is not an object has none (SKC-7). A
+// member that is no string, null included, is one the dispatcher never wrote:
+// present with "", neither a ref (CST-6, T2) nor a marker, which no key gives
+// (SKC-8, revues R20 et R21).
+func dispatcherMember(context any, name string) (string, bool) {
 	data, err := json.Marshal(context)
 	if err != nil {
 		return "", false
@@ -313,13 +326,13 @@ func skipMarkerOf(context any) (string, bool) {
 	if json.Unmarshal(data, &c) != nil {
 		return "", false
 	}
-	raw, ok := c["x_dispatcher_skip"]
+	raw, ok := c[name]
 	if !ok {
 		return "", false
 	}
-	var marker string
-	if json.Unmarshal(raw, &marker) != nil {
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
 		return "", true
 	}
-	return marker, true
+	return value, true
 }

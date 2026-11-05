@@ -193,6 +193,10 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 					if out.Guard {
 						return failWrite(out, errors.New("write of unknown outcome, twice"))
 					}
+				case out.Guard:
+					// A concurrent load wrote since the read: the accept of a
+					// skip was made, its answer stands (SKP-8, revue R21).
+					return failWrite(out, err)
 				}
 				return o.result(ctx, in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "write failed twice", Sentry: true}))
 			}

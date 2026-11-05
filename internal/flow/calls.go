@@ -107,7 +107,7 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 			func(string) Outcome { return s.fail(E1003) })
 	}
 	ctx = withoutDispatcher(ctx)
-	ctx["x_dispatcher_ref"], _ = json.Marshal(ref) // a string always marshals
+	ctx[memberRef], _ = json.Marshal(ref) // a string always marshals
 	body.Context = ctx
 
 	d := r.Answers.Accept
@@ -347,7 +347,9 @@ func (r *run) unusedFact() (Outcome, bool) {
 		case f.HydraRedirect != "":
 			return s.redirect(a.Accept.RedirectTo), true // ECR-3
 		}
-		return r.accepted(f, a.Accept), true // ECR-4
+		out := r.accepted(f, a.Accept)
+		out.Guard = a.Accept.Call.Skip // SKP-8: reported or not, the accept of a skip was made
+		return out, true               // ECR-4
 	case a.Reject.ok() && !r.used[RejectLogin]:
 		d := a.Reject
 		switch {

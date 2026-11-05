@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/tools/capture"
@@ -69,6 +70,11 @@ var scenarios = []scenario{
 	{name: "second-login-other-subject", run: (*driver).secondLoginOtherSubject},
 	{name: "second-login-prompt-consent-reject", run: (*driver).secondLoginPromptConsentReject},
 	{name: "second-login-reload", run: (*driver).secondLoginReload},
+	{name: "second-login-prompt-none", run: (*driver).secondLoginPromptNone},
+	{name: "second-login-after-replay", run: (*driver).secondLoginAfterReplay},
+	{name: "second-login-cookie-lost-at-consent", run: (*driver).secondLoginCookieLostAtConsent},
+	{name: "second-login-consent-posted-again", run: (*driver).secondLoginConsentPostedAgain},
+	{name: "second-login-concurrent", run: (*driver).secondLoginConcurrent},
 	{name: "logout", run: (*driver).logout},
 	{name: "prompt-consent-accept", run: promptConsent("accept")},
 	{name: "prompt-consent-reject", run: promptConsent("reject")},
@@ -796,6 +802,206 @@ func (d *driver) secondLoginReload() error {
 		return fmt.Errorf("ENT-7, past 10 s: %q, want the page E1002: %w", code, errUnexpected(p))
 	}
 	return nil
+}
+
+// secondLoginPromptNone is prompt=none, which forbids any page (OIDC Core
+// 3.1.2.1), Hydra having a session and leaving that to the dispatcher: with
+// the cookie valid, the code (SKP-1, SKC-1); a skip ignored, for fewer scopes
+// or without the cookie, gives login_required, never the choice page (SKP-11).
+func (d *driver) secondLoginPromptNone() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.start("none")
+	if err != nil {
+		return err
+	}
+	if err := d.granted(outcome{entry: p.Trail[0], seen: []string{d.kind(p)}, end: p}, identities["hydra-sql"]); err != nil {
+		return fmt.Errorf("SKP-1 with prompt=none: %w", err)
+	}
+	for _, tc := range []struct {
+		name  string
+		scope string
+		lost  bool
+	}{{"fewer scopes", "openid", false}, {"the cookie lost", "", true}} {
+		if tc.lost {
+			d.b.forget(d.dispatcher, rememberCookie)
+		}
+		d.client.scope = tc.scope
+		p, err := d.start("none")
+		d.client.scope = ""
+		if err != nil {
+			return err
+		}
+		if d.kind(p) != "callback" {
+			return fmt.Errorf("SKP-11, %s: %w", tc.name, errUnexpected(p))
+		}
+		refused, err := d.client.callbackError(p.URL)
+		if err != nil {
+			return err
+		}
+		if refused != "login_required" {
+			return fmt.Errorf("SKP-11, %s: callback error %q, want login_required", tc.name, refused)
+		}
+	}
+	return nil
+}
+
+// secondLoginAfterReplay checks the cookie written by a flow played again
+// serves the next skip: after a skip ignored, Hydra keeps its session, the
+// same session_id (FIN-2, MEM-4); after prompt=login, Hydra makes a new one,
+// which the cookie written then names.
+func (d *driver) secondLoginAfterReplay() error {
+	l := login{flow: "hydra-sql", user: isabelle, consent: "accept"}
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	honoured := func(after string) error {
+		p, err := d.start("")
+		if err != nil {
+			return err
+		}
+		if err := d.skipped(p); err != nil {
+			return fmt.Errorf("after %s: %w", after, err)
+		}
+		return d.granted(outcome{entry: p.Trail[0], seen: []string{d.kind(p)}, end: p}, identities["hydra-sql"])
+	}
+	d.b.forget(d.dispatcher, rememberCookie)
+	o, err := d.skippedLogin(l)
+	if err != nil {
+		return err
+	}
+	if !o.saw("hydra-sql") {
+		return fmt.Errorf("skip not ignored: pages %v", o.seen)
+	}
+	if err := honoured("a skip ignored"); err != nil {
+		return err
+	}
+	l.prompt = "login"
+	if o, err = d.authorize(l); err != nil {
+		return err
+	}
+	if !o.saw("hydra-sql") {
+		return fmt.Errorf("prompt=login without a login: pages %v", o.seen)
+	}
+	return honoured("prompt=login")
+}
+
+// secondLoginCookieLostAtConsent loses the cookie between the accept of a
+// skip and its consent: nothing can be played again, the client gets
+// login_required (SKC-6).
+func (d *driver) secondLoginCookieLostAtConsent() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	entry, err := d.b.hop(d.client.authURL(""))
+	if err != nil {
+		return err
+	}
+	verifier, err := d.b.hop(entry.String())
+	if err != nil {
+		return fmt.Errorf("SKP-1: %w", err)
+	}
+	d.b.forget(d.dispatcher, rememberCookie)
+	p, err := d.b.get(verifier.String())
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "callback" {
+		return fmt.Errorf("SKC-6: %w", errUnexpected(p))
+	}
+	refused, err := d.client.callbackError(p.URL)
+	if err != nil {
+		return err
+	}
+	if refused != "login_required" {
+		return fmt.Errorf("SKC-6: callback error %q, want login_required", refused)
+	}
+	return nil
+}
+
+// secondLoginConsentPostedAgain posts the screen without a flow again once
+// its verifier is followed: never a second authorization. Hydra 2.1 answers
+// 410 to the read, page E1002; 2.2 and 2.3 accept again, and refuse the
+// verifier: access_denied at the client (SKC-14).
+func (d *driver) secondLoginConsentPostedAgain() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.start("consent")
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "consent" {
+		return fmt.Errorf("no consent screen: %w", errUnexpected(p))
+	}
+	f, _ := p.find(d.pages.consent)
+	v, err := f.values(nil, &d.pages.accept)
+	if err != nil {
+		return err
+	}
+	done, err := d.b.submit(p, f, v)
+	if err != nil {
+		return err
+	}
+	if err := d.granted(outcome{entry: p.Trail[0], seen: []string{"consent", d.kind(done)}, end: done}, identities["hydra-sql"]); err != nil {
+		return err
+	}
+	again, err := d.b.submit(p, f, v)
+	if err != nil {
+		return err
+	}
+	switch d.kind(again) {
+	case "error":
+		if code := errorCode.FindString(again.Body); code != "E1002" {
+			return fmt.Errorf("SKC-14: page %s, want E1002", code)
+		}
+	case "callback":
+		refused, err := d.client.callbackError(again.URL)
+		if err != nil {
+			return err
+		}
+		if refused != "access_denied" {
+			return fmt.Errorf("SKC-14: callback error %q, want access_denied", refused)
+		}
+	default:
+		return fmt.Errorf("SKC-14: %w", errUnexpected(again))
+	}
+	return nil
+}
+
+// secondLoginConcurrent loads the same L four times at once, the cookie
+// valid: Hydra accepts each, one writes the flow, each is redirected to a
+// login verifier, and the authorization goes on from any (SKP-6, ECR-3).
+func (d *driver) secondLoginConcurrent() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	entry, err := d.b.hop(d.client.authURL(""))
+	if err != nil {
+		return err
+	}
+	const loads = 4
+	verifiers := make([]*url.URL, loads)
+	errs := make([]error, loads)
+	var wg sync.WaitGroup
+	for i := range loads {
+		wg.Go(func() { verifiers[i], errs[i] = d.b.hop(entry.String()) })
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("SKP-6: %w", err)
+	}
+	for _, u := range verifiers {
+		if !u.Query().Has("login_verifier") {
+			return fmt.Errorf("SKP-6: redirected to %s, not to a login verifier", u.Redacted())
+		}
+	}
+	p, err := d.b.get(verifiers[0].String())
+	if err != nil {
+		return err
+	}
+	return d.granted(outcome{entry: entry, seen: []string{d.kind(p)}, end: p}, identities["hydra-sql"])
 }
 
 // logout signs in, then out on Hydra, which goes through the dispatcher's

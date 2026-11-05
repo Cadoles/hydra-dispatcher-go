@@ -97,3 +97,24 @@ func TestClaimsPrint(t *testing.T) {
 		t.Error("a print of the previous key refused")
 	}
 }
+
+// SKP-11: the prompt of the authorization request, as request_url shows it.
+func TestPromptNone(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"":                                 false,
+		"http://h/oauth2/auth":             false,
+		"http://h/oauth2/auth?prompt=none": true,
+		"http://h/oauth2/auth?client_id=c&prompt=none&state=s":             true,
+		"http://h/oauth2/auth?prompt=none+login":                           true,
+		"http://h/oauth2/auth?prompt=login":                                false,
+		"http://h/oauth2/auth?prompt=consent":                              false,
+		"http://h/oauth2/auth?prompt=nonesuch":                             false,
+		"http://h/oauth2/auth?state=prompt%3Dnone":                         false,
+		"http://h/oauth2/auth?redirect_uri=http%3A%2F%2Fc%3Fprompt%3Dnone": false,
+		"http://h\x7f/%zz":                                                 false,
+	} {
+		if got := promptNone(raw); got != want {
+			t.Errorf("promptNone(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}

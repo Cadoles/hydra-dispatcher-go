@@ -10,7 +10,9 @@ and journal in `hydra-dev/conception`): the binary serves the pages (choice of
 the flow, consent, errors, logout accepted at once until the confirmation of
 P9), the emulated admin API the login apps call (v2 paths and v1 aliases),
 `/health` and `/ready`; it keeps its configuration in Postgres and the flows in
-progress in memory, or in Redis (or Dragonfly) when `state.redis_dsn` is set.
+progress in memory, or in Redis (or Dragonfly) when `state.redis_dsn` is set, a
+call bounded to 1 s and two attempts unless its URL says otherwise (`dial_timeout`,
+`read_timeout`, `write_timeout`, `max_retries`).
 
 ## Commands
 

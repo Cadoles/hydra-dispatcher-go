@@ -61,10 +61,25 @@ type Redis struct {
 	closed atomic.Bool
 }
 
+// The bounds of a call, unless the URL gives its own (dial_timeout,
+// read_timeout, write_timeout, max_retries): a store takes 1 ms to answer, a
+// page waits on it, and the server bounds no request. go-redis's defaults (5 s
+// to dial, 5 dials per attempt, 5 s to read, 4 attempts) make a host that
+// drops the packets answer after 1 min 42 s (revue R21). A timeout stays an
+// outcome unknown, read again (ECR-5); the script answers written when it was
+// run twice.
+const (
+	redisTimeout  = time.Second
+	redisRetries  = 1 // two attempts
+	redisDialings = 1 // per attempt
+)
+
 // NewRedis returns the store of dsn, a redis://, rediss:// or unix:// URL,
 // its keys under prefix (state.key_prefix). poolSize, when above 0, sets the
 // size of the pool; 0 leaves go-redis's, 10 connections per CPU, or the
-// pool_size of the URL. It connects at the first call.
+// pool_size of the URL. A call's time is bounded (redisTimeout), and by its
+// context, which go-redis otherwise ignores on the socket. It connects at the
+// first call.
 func NewRedis(dsn, prefix string, poolSize int) (*Redis, error) {
 	opt, err := redis.ParseURL(dsn)
 	if err != nil {
@@ -73,6 +88,16 @@ func NewRedis(dsn, prefix string, poolSize int) (*Redis, error) {
 	}
 	if poolSize > 0 {
 		opt.PoolSize = poolSize
+	}
+	opt.DialerRetries = redisDialings
+	opt.ContextTimeoutEnabled = true
+	for _, d := range []*time.Duration{&opt.DialTimeout, &opt.ReadTimeout, &opt.WriteTimeout} {
+		if *d == 0 {
+			*d = redisTimeout
+		}
+	}
+	if opt.MaxRetries == 0 {
+		opt.MaxRetries = redisRetries
 	}
 	return &Redis{client: redis.NewClient(opt), prefix: prefix}, nil
 }

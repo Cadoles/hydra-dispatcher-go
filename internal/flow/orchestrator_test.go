@@ -502,6 +502,28 @@ func TestSkipGuard(t *testing.T) {
 		{"SKP-8 ECR-7, the store unreadable after the write", func(w *world) {
 			w.store.hook = func(int, string, []byte, uint64) (error, bool) { w.store.getErr = w.store.gets + 1; return ioErr, true }
 		}, verifierURL, "", false, `"msg":"state.error"`},
+		// Revue R21: the accept was made, whatever the write finds.
+		{"SKP-8 ECR-5, of unknown outcome, then a conflict when written again", func(w *world) {
+			w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+				if n == 1 {
+					return ioErr, true
+				}
+				return state.ErrConflict, true
+			}
+		}, verifierURL, "", false, `"msg":"state.error"`},
+		{"SKP-8 ECR-4, carried over to a flow in choice, the store failing then", func(w *world) {
+			w.store.hook = func(n int, k string, _ []byte, _ uint64) (error, bool) {
+				if n == 1 {
+					f := choiceFlow(w.t)
+					f.Hydra.Skip, f.Hydra.Subject = true, "alice"
+					data, _ := Encode(f)
+					_ = w.store.StateStore.Put(context.Background(), k, data, time.Hour, 0)
+					return nil, false
+				}
+				w.store.getErr = w.store.gets + 1
+				return ioErr, true
+			}
+		}, verifierURL, "", true, `"msg":"state.error"`},
 		{"SKP-6 ECR-3, a concurrent load wrote the same skip: its own redirect_to", func(w *world) {
 			w.store.hook = func(n int, k string, _ []byte, _ uint64) (error, bool) {
 				if n == 1 {
@@ -540,6 +562,65 @@ func TestSkipGuard(t *testing.T) {
 			}
 			if tc.logged != "" && !strings.Contains(w.logs.String(), tc.logged) {
 				t.Errorf("no %s in\n%s", tc.logged, w.logs.String())
+			}
+		})
+	}
+}
+
+// A final accept is no guard (SKP-8 is a skip's): a store that fails gives
+// E1000, the flow unchanged, and a reload accepts L again (ECR-7).
+func TestFinalAcceptStoreFails(t *testing.T) {
+	w := newWorld(t)
+	w.hydra.consentSkip = true
+	w.handle(Entry{LoginChallenge: hydraL})
+	step := w.handle(Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+	w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+	w.store.hook = func(int, string, []byte, uint64) (error, bool) { return state.ErrClosed, true }
+	if r := w.handle(Loop{Ref: lref, Cookie: w.cookie}); r.Response.Code != E1000 {
+		t.Errorf("answer %+v; want E1000", r.Response)
+	}
+	if f := w.stored(); f.HydraRedirect != "" {
+		t.Errorf("hr %q", f.HydraRedirect)
+	}
+}
+
+// WRT-1: a consent accept whose write conflicts writes the cookie when the
+// transition replayed finishes the flow; neither the loser of a double POST
+// (ECR-3, the flow read again being reduced) nor an accept on a flow finished
+// otherwise (ECR-9).
+func TestRememberAfterConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		edit   func(f *Flow) *Flow
+		url    string
+		code   Code
+		cookie bool
+	}{
+		{"ECR-1, replayed on the flow read again", func(f *Flow) *Flow { g := f.clone(); g.ConsentChallenge = "other"; return g }, callbackURL, "", true},
+		{"ECR-3, the loser of a double POST", func(f *Flow) *Flow {
+			g := f.Reduce()
+			g.ConsentRedirect, g.ConsentAt = "http://hydra/other", testNow.UnixMilli()
+			return g
+		}, callbackURL, "", false},
+		{"ECR-9, a flow finished otherwise", func(f *Flow) *Flow { return f.Reduce() }, "", E1002, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.hydra.consentSkip = true
+			w.handle(Entry{LoginChallenge: hydraL})
+			step := w.handle(Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+			w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+			w.handle(Loop{Ref: lref, Cookie: w.cookie})
+			w.store.puts = 0
+			w.store.hook = func(n int, _ string, _ []byte, _ uint64) (error, bool) {
+				if n == 1 {
+					w.put(tc.edit(w.stored()))
+				}
+				return nil, false
+			}
+			r := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie})
+			if r.Response.URL != tc.url || r.Response.Code != tc.code || (r.Response.Remember != nil) != tc.cookie {
+				t.Errorf("answer %+v; want %q %s, a cookie %v", r.Response, tc.url, tc.code, tc.cookie)
 			}
 		})
 	}

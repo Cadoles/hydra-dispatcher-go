@@ -30,9 +30,10 @@ type Remembered struct {
 	ACR string   `json:"acr"`
 	AMR []string `json:"amr"`
 	Ctx Object   `json:"ctx,omitempty"`
-	// Scp are the scopes the consent granted (MEM-8); IDT and ACT its claims,
-	// after the webhook.
+	// Scp and Aud are the scopes and audiences the consent granted (MEM-8,
+	// MEM-10); IDT and ACT its claims, after the webhook.
 	Scp []string `json:"scp"`
+	Aud []string `json:"aud"`
 	IDT Object   `json:"idt,omitempty"`
 	ACT Object   `json:"act,omitempty"`
 	IAT int64    `json:"iat"`
@@ -52,7 +53,7 @@ type Memory struct {
 }
 
 // The reasons of skip.ignored (doc, Journalisation), one per check of the
-// cookie, MEM-1 to MEM-9 in order.
+// cookie, MEM-1 to MEM-10 in order.
 const (
 	SkipAbsent      = "absent"
 	SkipUnreadable  = "unreadable"
@@ -63,6 +64,7 @@ const (
 	SkipComposition = "composition"
 	SkipScopes      = "scopes"
 	SkipACR         = "acr"
+	SkipAudience    = "audience"
 )
 
 // Composition is the fingerprint of a flow's steps, their apps in order

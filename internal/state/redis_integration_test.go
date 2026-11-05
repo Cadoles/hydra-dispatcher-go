@@ -3,13 +3,18 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -168,6 +173,64 @@ func testRedis(t *testing.T, dsn string) {
 		}
 	})
 
+	// Q42, for real (revue R21): the script runs, a proxy cuts the connection
+	// instead of forwarding its answer, go-redis sends it again.
+	t.Run("a script whose answer is lost answers written", func(t *testing.T) {
+		s := openRedis(t, dsn)
+		if err := putScript.Load(ctx, s.client).Err(); err != nil {
+			t.Fatal(err)
+		}
+		addr, cut := answerCutter(t, s.client.Options().Addr)
+		through, err := NewRedis("redis://"+addr+"/0", s.prefix, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = through.Close() }()
+		if err := through.Put(ctx, "flow:a", []byte("one"), time.Minute, 0); err != nil {
+			t.Fatalf("Put, its answer lost = %v, want written", err)
+		}
+		if cut.Load() != 1 {
+			t.Fatalf("%d answers cut, want 1", cut.Load())
+		}
+		mustGet(t, s, "flow:a", "one")
+	})
+
+	// Concurrent writers lose nothing: the script is atomic on each server,
+	// which Dragonfly's documentation only says in passing. Each write
+	// answered written counted once.
+	t.Run("concurrent writers lose no write", func(t *testing.T) {
+		s := openRedis(t, dsn)
+		mustPut(t, s, "flow:n", "0", time.Minute, 0)
+		var written, failed atomic.Int64
+		var wg sync.WaitGroup
+		for range 16 {
+			wg.Go(func() {
+				for range 100 {
+					data, v, err := s.Get(ctx, "flow:n")
+					if err != nil {
+						failed.Add(1)
+						continue
+					}
+					n, _ := strconv.Atoi(string(data))
+					switch err := s.Put(ctx, "flow:n", []byte(strconv.Itoa(n+1)), time.Minute, v); {
+					case err == nil:
+						written.Add(1)
+					case !errors.Is(err, ErrConflict):
+						failed.Add(1)
+					}
+				}
+			})
+		}
+		wg.Wait()
+		data, _, err := s.Get(ctx, "flow:n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := strconv.Atoi(string(data)); int64(got) != written.Load() || failed.Load() != 0 {
+			t.Errorf("counter %d, %d writes answered written, %d failed", got, written.Load(), failed.Load())
+		}
+	})
+
 	t.Run("an unreachable server", func(t *testing.T) {
 		s, err := NewRedis("redis://127.0.0.1:1", "x:", 1)
 		if err != nil {
@@ -186,4 +249,64 @@ func testRedis(t *testing.T, dsn string) {
 			}
 		}
 	})
+}
+
+// answerCutter is a proxy to target that closes the client's connection
+// instead of forwarding the first answer to an EVALSHA, the script having run
+// on the server. It returns its address and how many answers it cut.
+func answerCutter(t *testing.T, target string) (string, *atomic.Int32) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	cut := &atomic.Int32{}
+	go func() {
+		for {
+			client, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = client.Close() }()
+				server, err := net.Dial("tcp", target)
+				if err != nil {
+					return
+				}
+				defer func() { _ = server.Close() }()
+				var armed atomic.Bool
+				go func() {
+					defer func() { _ = server.Close() }()
+					buf := make([]byte, 64<<10)
+					for {
+						n, err := client.Read(buf)
+						if err != nil {
+							return
+						}
+						if cut.Load() == 0 && bytes.Contains(bytes.ToLower(buf[:n]), []byte("evalsha")) {
+							armed.Store(true)
+						}
+						if _, err := server.Write(buf[:n]); err != nil {
+							return
+						}
+					}
+				}()
+				buf := make([]byte, 64<<10)
+				for {
+					n, err := server.Read(buf)
+					if err != nil {
+						return
+					}
+					if armed.Load() && cut.CompareAndSwap(0, 1) {
+						return
+					}
+					if _, err := client.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), cut
 }

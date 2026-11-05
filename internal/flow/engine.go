@@ -285,9 +285,12 @@ const (
 	// ReasonMemory: a consent without a flow whose remember cookie fails a
 	// check (SKC-6): nothing can be played again.
 	ReasonMemory
+	// ReasonPromptNone: Hydra's skip ignored for a request with prompt=none
+	// (SKP-11): no page may be shown.
+	ReasonPromptNone
 )
 
-var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", "skip_subject", "no_ref", "not_ours", "user", "app", "subject", "memory"}
+var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", "skip_subject", "no_ref", "not_ours", "user", "app", "subject", "memory", "prompt_none"}
 
 func (r Reason) String() string { return reasonNames[r] }
 
@@ -335,8 +338,10 @@ type Call struct {
 	Check string
 	// Gen is the flow's generation when the call was decided.
 	Gen int64
-	// Skip marks the login accept of a skip honoured (SKP-1): never carried
-	// over to a flow as a final accept's.
+	// Skip marks the login accept of a skip honoured (SKP-1): on a flow of
+	// the same skip, its own redirect_to (SKP-6, ECR-3); carried over to a
+	// flow in progress as a final accept's (ECR-4), its write stays a guard
+	// (SKP-8).
 	Skip          bool
 	AcceptLogin   ory.AcceptOAuth2LoginRequest
 	AcceptConsent ory.AcceptOAuth2ConsentRequest

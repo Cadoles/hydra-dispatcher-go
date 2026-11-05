@@ -27,21 +27,27 @@ const (
 func skipRequest(t *testing.T, mod func(r *ory.OAuth2LoginRequest)) *ory.OAuth2LoginRequest {
 	r := withClient(t, `{"client_uri":"`+clientURI+`"}`)
 	r.Skip, r.Subject = true, "alice"
+	r.RequestedAccessTokenAudience = []string{"api"}
 	if mod != nil {
 		mod(r)
 	}
 	return r
 }
 
+// promptNoneRequest gives the authorization request prompt=none, which a login
+// request only shows in its request_url.
+func promptNoneRequest(r *ory.OAuth2LoginRequest) { r.RequestUrl = requestURL + "&prompt=none" }
+
 // memory is a remember cookie that passes every check against
-// skipRequest: hydra-sql, the fixture's scopes, the same set (MEM-8), alive
-// for an hour.
+// skipRequest: hydra-sql, the fixture's scopes and the audience api, the same
+// sets (MEM-8, MEM-10), alive for an hour.
 func memory(mod func(c *Remembered)) Memory {
 	c := &Remembered{
 		V: RememberedFormat, SID: sessionID, Sub: "alice", Flow: "hydra-sql", FH: Composition([]string{"sql"}),
 		ACR: "1", AMR: []string{"pwd"},
 		Ctx: Object{"app": json.RawMessage(`"sql"`), "x_dispatcher_ref": json.RawMessage(`"old"`)},
 		Scp: []string{"openid", "profile", "email"},
+		Aud: []string{"api"},
 		IDT: Object{"email": json.RawMessage(`"alice@example.org"`), "name": json.RawMessage(`"Alice"`), "gone": json.RawMessage(`null`)},
 		ACT: Object{"groups": json.RawMessage(`["a"]`)},
 		IAT: testNow.Add(-time.Hour).Unix(), Exp: testNow.Add(time.Hour).Unix(),
@@ -121,7 +127,7 @@ func skipWritten(t *testing.T, f *Flow) {
 	}
 }
 
-// MEM-1 to MEM-9, at the entry: the first check that fails ignores Hydra's
+// MEM-1 to MEM-10, at the entry: the first check that fails ignores Hydra's
 // skip, the flow played again (ENT-9, SKP-2), with its reason.
 func TestMemoryAtEntry(t *testing.T) {
 	entry := func(m Memory) Entry { return Entry{LoginChallenge: hydraL, Cookie: cookie, Memory: m} }
@@ -148,7 +154,7 @@ func TestMemoryAtEntry(t *testing.T) {
 	}
 	for _, tc := range []pageCase{
 		ignoredCase("MEM-1, no cookie", nil, Memory{}, nil, SkipAbsent),
-		ignoredCase("MEM-1, the second part missing", nil, Memory{Reason: SkipAbsent}, nil, SkipAbsent),
+		ignoredCase("MEM-1, as a page opens it", nil, Memory{Reason: SkipAbsent}, nil, SkipAbsent),
 		ignoredCase("MEM-2, unreadable", nil, Memory{Reason: SkipUnreadable}, nil, SkipUnreadable),
 		ignoredCase("MEM-3, expired", nil, memory(func(c *Remembered) { c.Exp = testNow.Unix() }), nil, SkipExpired),
 		honoured("MEM-3, a second before exp", nil, memory(func(c *Remembered) { c.Exp = testNow.Unix() + 1 }), nil),
@@ -180,6 +186,20 @@ func TestMemoryAtEntry(t *testing.T) {
 		ignoredCase("MEM-9, the cookie's acr not among acr_values", func(e *Env) { withACRs(e); configured(e, "hydra-sql").ACR = "2" }, memory(nil), acrValues("2"), SkipACR),
 		honoured("MEM-9, the cookie's acr among acr_values", withACRs, memory(nil), acrValues("1", "2")),
 		honoured("MEM-9, only the preferred flow's prefix", nil, memory(nil), preferred("hydra-sql")),
+		// MEM-10 (revue R21): the access token claims were written for the
+		// audiences of the consent that wrote the cookie.
+		ignoredCase("MEM-10, another audience", nil, memory(nil), func(r *ory.OAuth2LoginRequest) { r.RequestedAccessTokenAudience = []string{"other"} }, SkipAudience),
+		ignoredCase("MEM-10, an audience more than granted", nil, memory(nil), func(r *ory.OAuth2LoginRequest) { r.RequestedAccessTokenAudience = []string{"api", "other"} }, SkipAudience),
+		ignoredCase("MEM-10, no audience requested", nil, memory(nil), func(r *ory.OAuth2LoginRequest) { r.RequestedAccessTokenAudience = nil }, SkipAudience),
+		ignoredCase("MEM-10, none in a cookie without the member", nil, memory(func(c *Remembered) { c.Aud = nil }), nil, SkipAudience),
+		ignoredCase("MEM-9 before MEM-10", func(e *Env) { withACRs(e); configured(e, "hydra-sql").ACR = "2" }, memory(nil), func(r *ory.OAuth2LoginRequest) {
+			acrValues("2")(r)
+			r.RequestedAccessTokenAudience = []string{"other"}
+		}, SkipACR),
+		honoured("MEM-10, the same audiences, in another order and repeated", nil, memory(func(c *Remembered) { c.Aud = []string{"b", "a"} }), func(r *ory.OAuth2LoginRequest) {
+			r.RequestedAccessTokenAudience = []string{"a", "b", "a"}
+		}),
+		honoured("MEM-10, none on either side", nil, memory(func(c *Remembered) { c.Aud = nil }), func(r *ory.OAuth2LoginRequest) { r.RequestedAccessTokenAudience = nil }),
 	} {
 		tc.run(t)
 	}
@@ -318,6 +338,41 @@ func TestSkipLogin(t *testing.T) {
 				ignoredFor("login", SkipFlow)(t, p)
 				rejected(RejectLogin, "unmet_authentication_requirements")(t, p)
 			}},
+		// SKP-11 (revue R21): prompt=none forbids the page a skip ignored would
+		// show; Hydra, which has a session, leaves that to the login app.
+		{name: "SKP-11, prompt=none without the cookie: login_required", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},
+			says: hydraSays{GetLogin: read(promptNoneRequest), RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished,
+			check: func(t *testing.T, p played) {
+				rejected(RejectLogin, "login_required")(t, p)
+				ignoredFor("login", SkipAbsent)(t, p)
+				if !slices.Contains(p.Reports, Report{Event: "flow.rejected", Detail: "prompt_none"}) {
+					t.Errorf("no flow.rejected prompt_none: %+v", p.Reports)
+				}
+			}},
+		{name: "SKP-11, prompt=none and fewer scopes: login_required", ev: entry,
+			says: hydraSays{GetLogin: read(func(r *ory.OAuth2LoginRequest) {
+				promptNoneRequest(r)
+				r.RequestedScope = []string{"openid"}
+			}), RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished, check: ignoredFor("login", SkipScopes)},
+		{name: "SKP-11 EXP-4, Hydra 401 on the reject", ev: Entry{LoginChallenge: hydraL},
+			says: hydraSays{GetLogin: read(promptNoneRequest), RejectLogin: {err: err401}},
+			kind: ErrorPage, code: E1002, link: true, calls: []Op{GetLogin, RejectLogin}, write: finished},
+		{name: "SKP-11 EXP-4, Hydra unavailable on the reject: not created", ev: Entry{LoginChallenge: hydraL},
+			says: hydraSays{GetLogin: read(promptNoneRequest), RejectLogin: {err: errDown}},
+			kind: ErrorPage, code: E1004, calls: []Op{GetLogin, RejectLogin}},
+		{name: "SKP-11, before ENT-22: prompt=none in the last minute of L", ev: Entry{LoginChallenge: hydraL},
+			says: hydraSays{GetLogin: {login: skipRequest(t, promptNoneRequest), requestedAt: testNow.Add(-29*time.Minute - 30*time.Second)}, RejectLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished,
+			check: func(t *testing.T, p played) {
+				if !slices.Contains(p.Reports, Report{Event: "flow.rejected", Detail: "prompt_none"}) {
+					t.Errorf("no flow.rejected prompt_none: %+v", p.Reports)
+				}
+			}},
+		// With the cookie valid, nothing is shown: prompt=none is honoured.
+		{name: "SKP-1, prompt=none, the cookie valid", ev: entry, says: hydraSays{GetLogin: read(promptNoneRequest), AcceptLogin: {redirectTo: skipCSRF}},
+			kind: Redirect, url: skipCSRF, calls: []Op{GetLogin, AcceptLogin}, write: skipWritten, check: acceptedSkip("login")},
 		// Q44: a flow in store keeps its lines, a cookie valid since or not.
 		{name: "Q44, ENT-2: a flow in choice is not judged again", ev: entry,
 			stored: func() *Flow { f := choiceFlow(t); f.Hydra.Skip, f.Hydra.Subject = true, "alice"; return f }(),
@@ -474,6 +529,10 @@ func TestConsentWithoutFlow(t *testing.T) {
 			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent}},
 		{name: "SKC-4, refused", ev: post(false, nil), says: hydraSays{GetConsent: read(noSkip), RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: rejected(RejectConsent, "access_denied")},
+		// A refusal sends no claim: the print does not hold it back (SKC-12).
+		{name: "SKC-4, refused from a screen whose claims changed", ev: post(false, func(c *Consent) { c.Print = "stale" }),
+			says: hydraSays{GetConsent: read(noSkip), RejectConsent: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: rejected(RejectConsent, "access_denied")},
 		{name: "SKC-5, a token unlike the cookie", ev: post(true, func(c *Consent) { c.Token = otherCSRF }), says: hydraSays{GetConsent: read(noSkip)},
 			kind: ErrorPage, code: E1008, calls: []Op{GetConsent}},
 		{name: "SKC-5, refused without the cookie", ev: post(false, func(c *Consent) { c.Cookie = "" }), says: hydraSays{GetConsent: read(noSkip)},
@@ -503,16 +562,30 @@ func TestConsentWithoutFlow(t *testing.T) {
 				rejected(RejectConsent, "login_required")(t, p)
 				ignoredFor("consent", SkipScopes)(t, p)
 			}},
+		// Revue R21: the access token claims were written for other audiences.
+		{name: "SKC-6 MEM-10, another audience", ev: Consent{Challenge: hydraC, Memory: memory(nil)},
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.RequestedAccessTokenAudience = []string{"other"} }), RejectConsent: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent},
+			check: func(t *testing.T, p played) {
+				rejected(RejectConsent, "login_required")(t, p)
+				ignoredFor("consent", SkipAudience)(t, p)
+			}},
 		{name: "SKC-6 MEM-6, outside the client's restriction", ev: Consent{Challenge: hydraC, Memory: memory(nil)},
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) {
 				r.Client.Metadata = map[string]any{"dispatcher": map[string]any{"flows": []any{"hydra-oidc"}}}
 			}), RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: ignoredFor("consent", SkipFlow)},
-		{name: "SKC-6 MEM-9, acr_values", env: withACRs, ev: Consent{Challenge: hydraC, Memory: memory(nil)},
+		{name: "SKC-6 MEM-6, filtered out by acr_values", env: withACRs, ev: Consent{Challenge: hydraC, Memory: memory(nil)},
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) {
 				r.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{"2"}}
 			}), RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: ignoredFor("consent", SkipFlow)},
+		{name: "SKC-6 MEM-9, the cookie's acr not among acr_values", env: func(e *Env) { withACRs(e); configured(e, "hydra-sql").ACR = "2" },
+			ev: Consent{Challenge: hydraC, Memory: memory(nil)},
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) {
+				r.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{"2"}}
+			}), RejectConsent: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: ignoredFor("consent", SkipACR)},
 		{name: "SKC-7, no marker", ev: get,
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Context = json.RawMessage(`{"app":"sql"}`) }), RejectConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent}, check: rejected(RejectConsent, "login_required")},
@@ -576,6 +649,9 @@ func TestConsentWithoutFlow(t *testing.T) {
 		// client gets access_denied at the verifier: nothing stored tells it.
 		{name: "SKC-14, Hydra 2.1: the consent used, 410", ev: post(true, nil), says: hydraSays{GetConsent: {err: err410}},
 			kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+		{name: "SKC-14, Hydra 2.2 and 2.3: served again, accepted again, as SKC-3", ev: post(true, nil),
+			says: hydraSays{GetConsent: read(noSkip), AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent}, check: consentAccepted},
 		{name: "SKC-12 Q37, the cookie written again since the screen", ev: post(true, func(c *Consent) {
 			c.Memory = memory(func(r *Remembered) { r.IDT = Object{"email": json.RawMessage(`"new@example.org"`)} })
 		}), says: hydraSays{GetConsent: read(noSkip)}, kind: ConsentPage, calls: []Op{GetConsent},
@@ -587,6 +663,16 @@ func TestConsentWithoutFlow(t *testing.T) {
 			}},
 		{name: "SKC-12, no print", ev: post(true, func(c *Consent) { c.Print = "" }), says: hydraSays{GetConsent: read(noSkip)},
 			kind: ConsentPage, calls: []Op{GetConsent}},
+		{name: "SKC-12, only the access token's claims changed", ev: post(true, func(c *Consent) {
+			c.Memory = memory(func(r *Remembered) { r.ACT = Object{"groups": json.RawMessage(`["b"]`)} })
+		}), says: hydraSays{GetConsent: read(noSkip)}, kind: ConsentPage, calls: []Op{GetConsent}},
+		// Rotation des clés: the marker of a skip accepted before the rotation.
+		{name: "SKC-1, the marker of the previous challenge key", ev: get,
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) {
+				m := Keys{oldKey}.SkipMarker(sessionID, "alice", "1", []string{"pwd"}, requestURL)
+				r.Context = json.RawMessage(`{"x_dispatcher_skip":"` + m + `"}`)
+			}), AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent}},
 		{name: "SKC-13, the consent webhook fails", env: consentHook, ev: get, says: hydraSays{GetConsent: read(nil), ConsentHook: {hookErr: errDown}},
 			kind: ErrorPage, code: E1006, calls: []Op{GetConsent, ConsentHook}},
 		{name: "SKC-13, claims that are no object", env: consentHook, ev: post(true, nil),
@@ -599,9 +685,24 @@ func TestConsentWithoutFlow(t *testing.T) {
 				m := testKeys.SkipMarker(sessionID, "alice", "1", []string{"pwd"}, requestURL)
 				r.Context = json.RawMessage(`{"x_dispatcher_ref":"` + lref + `","x_dispatcher_skip":"` + m + `"}`)
 			})}, kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+		// Revue R21: nor a ref of another type, null included, that the
+		// dispatcher never writes.
+		{name: "CST-6 T2, a ref that is a number, and a valid marker", ev: get, says: refOfAnotherType(`123`), kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+		{name: "CST-6 T2, a ref null, and a valid marker", ev: get, says: refOfAnotherType(`null`), kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+		{name: "CST-6 T2, a ref that is an object, and a valid marker", ev: get, says: refOfAnotherType(`{"a":1}`), kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
+		{name: "CST-6 T2, a ref that is a list, and a valid marker", ev: get, says: refOfAnotherType(`["` + lref + `"]`), kind: ErrorPage, code: E1002, calls: []Op{GetConsent}},
 	} {
 		tc.run(t)
 	}
+}
+
+// refOfAnotherType is a consent request whose x_dispatcher_ref is raw, with a
+// marker valid for it.
+func refOfAnotherType(raw string) hydraSays {
+	m := testKeys.SkipMarker(sessionID, "alice", "1", []string{"pwd"}, requestURL)
+	return hydraSays{GetConsent: {consent: consentSkip(func(r *ory.OAuth2ConsentRequest) {
+		r.Context = json.RawMessage(`{"x_dispatcher_ref":` + raw + `,"x_dispatcher_skip":"` + m + `"}`)
+	})}}
 }
 
 // remembered wants the cookie the consent accept writes (WRT-1, Q39): what
@@ -619,7 +720,7 @@ func rememberedOf(want func(c *Remembered)) func(t *testing.T, p played) {
 		w := &Remembered{
 			V: RememberedFormat, SID: sessionID, Sub: "alice", Flow: "hydra-sql-2fa", FH: Composition([]string{"sql", "2fa"}),
 			ACR: "2", AMR: []string{"pwd", "otp"}, Ctx: Object{"from": json.RawMessage(`"2fa"`)},
-			Scp: []string{"openid", "email"},
+			Scp: []string{"openid", "email"}, Aud: []string{},
 			IDT: Object{"email": json.RawMessage(`"alice@example.org"`), "step": json.RawMessage(`"2fa"`)}, ACT: Object{},
 			IAT: testNow.Unix(), Exp: testNow.Unix() + 86400,
 		}
@@ -659,6 +760,10 @@ func TestRememberWritten(t *testing.T) {
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, AcceptConsent}, write: finishedWithCR, check: rememberedOf(func(*Remembered) {})},
 		{name: "WRT-1, CST-14", ev: post(true), stored: sentFlow(t, nil), says: hydraSays{GetConsent: {consent: consentRequest(lref, nil)}, AcceptConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, AcceptConsent}, write: finishedWithCR, check: rememberedOf(func(*Remembered) {})},
+		{name: "WRT-1 MEM-10, the audiences granted", ev: get, stored: sentFlow(t, nil),
+			says: hydraSays{GetConsent: skipped(func(r *ory.OAuth2ConsentRequest) { r.RequestedAccessTokenAudience = []string{"api"} }), AcceptConsent: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, AcceptConsent}, write: finishedWithCR,
+			check: rememberedOf(func(c *Remembered) { c.Aud = []string{"api"} })},
 		{name: "WRT-1, the consent webhook's claims", env: func(e *Env) { e.Config.Settings.ConsentAcceptWebhookURL = "http://hook.test/consent" },
 			ev: get, stored: sentFlow(t, nil),
 			says: hydraSays{GetConsent: skipped(nil), ConsentHook: {consentHook: &ConsentHookAnswer{IDToken: json.RawMessage(`{"hook":1}`)}}, AcceptConsent: {redirectTo: hydraDone}},
@@ -685,9 +790,9 @@ func TestRememberWritten(t *testing.T) {
 			calls: []Op{GetConsent, RejectConsent}, write: finishedWithCR, check: rememberedOf(nil)},
 		{name: "CST-13, the screen writes no cookie", ev: get, stored: sentFlow(t, nil), says: hydraSays{GetConsent: {consent: consentRequest(lref, nil)}},
 			kind: ConsentPage, calls: []Op{GetConsent}, write: func(*testing.T, *Flow) {}, check: rememberedOf(nil)},
-		// ECR-4: the accept carried over to a flow read again, not finished:
-		// written; ECR-9: a flow finished by another transition: never.
-		{name: "WRT-1 ECR-4, the accept carried over", ev: get, stored: sentFlow(t, nil),
+		// CST-17: the accept refused, no cookie. After a write in conflict:
+		// TestRememberAfterConflict.
+		{name: "CST-17, Hydra 409 at the accept: no cookie", ev: get, stored: sentFlow(t, nil),
 			reread: func() *Flow { f := sentFlow(t, nil); f.ConsentChallenge = "other"; return f }(),
 			says:   hydraSays{GetConsent: skipped(nil), AcceptConsent: {err: err409}},
 			kind:   ErrorPage, code: E1007, calls: []Op{GetConsent, AcceptConsent}, check: rememberedOf(nil)},
