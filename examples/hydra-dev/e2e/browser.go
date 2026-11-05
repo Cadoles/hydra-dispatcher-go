@@ -20,12 +20,13 @@ import (
 // OAuth2 test client of hydra-dev would otherwise serve and redeem.
 type browser struct {
 	c *http.Client
-	// stopAt is the redirect_uri: a redirect there ends a walk unfollowed.
-	stopAt string
+	// stopAt are the redirect_uri, and what a scenario adds, a logout_url where a
+	// chain stops: a redirect there ends a walk unfollowed.
+	stopAt []string
 	log    *slog.Logger
 }
 
-func newBrowser(stopAt string, log *slog.Logger) *browser {
+func newBrowser(redirect string, log *slog.Logger) *browser {
 	jar, _ := cookiejar.New(nil)
 	return &browser{
 		c: &http.Client{
@@ -35,7 +36,7 @@ func newBrowser(stopAt string, log *slog.Logger) *browser {
 				return http.ErrUseLastResponse
 			},
 		},
-		stopAt: stopAt,
+		stopAt: []string{redirect},
 		log:    log,
 	}
 }
@@ -92,7 +93,7 @@ func (b *browser) walk(req *http.Request, body []byte) (page, error) {
 		if err != nil || resp.StatusCode < 300 || resp.StatusCode > 399 {
 			return page{URL: req.URL, Status: resp.StatusCode, Body: resp.body, Trail: trail}, nil
 		}
-		if strings.HasPrefix(loc.String(), b.stopAt) {
+		if slices.ContainsFunc(b.stopAt, func(p string) bool { return strings.HasPrefix(loc.String(), p) }) {
 			return page{URL: loc, Status: resp.StatusCode, Trail: append(trail, loc)}, nil
 		}
 		method := http.MethodGet
@@ -140,6 +141,28 @@ func (b *browser) do(req *http.Request, body []byte) (response, error) {
 	}
 	b.log.Debug("browser", "method", req.Method, "url", req.URL.Redacted(), "status", resp.StatusCode)
 	return response{resp, string(data)}, nil
+}
+
+// post sends a form from origin, a site or not, with its Origin, and follows the
+// redirects: what another site's page can make a browser do.
+func (b *browser) post(u string, values url.Values, origin string) (page, error) {
+	req, err := http.NewRequest(http.MethodPost, u, nil)
+	if err != nil {
+		return page{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", origin)
+	return b.walk(req, []byte(values.Encode()))
+}
+
+// cookie returns the value of the cookie name for u, "" without it.
+func (b *browser) cookie(u *url.URL, name string) string {
+	for _, c := range b.c.Jar.Cookies(u) {
+		if c.Name == name {
+			return c.Value
+		}
+	}
+	return ""
 }
 
 // form is an HTML form of a page: what a browser would submit from it.

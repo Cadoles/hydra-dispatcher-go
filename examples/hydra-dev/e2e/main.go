@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/tools/capture"
@@ -76,6 +78,19 @@ var scenarios = []scenario{
 	{name: "second-login-consent-posted-again", run: (*driver).secondLoginConsentPostedAgain},
 	{name: "second-login-concurrent", run: (*driver).secondLoginConcurrent},
 	{name: "logout", run: (*driver).logout},
+	{name: "logout-refused", run: (*driver).logoutRefused},
+	{name: "logout-refused-during-a-chain", run: (*driver).logoutRefusedDuringChain},
+	{name: "logout-refused-after-the-end", run: (*driver).logoutRefusedAfterEnd},
+	{name: "logout-of-a-client", run: (*driver).logoutOfClient},
+	{name: "logout-of-a-client-double-click", run: (*driver).logoutOfClientDoubleClick},
+	{name: "logout-former-id-token", run: (*driver).logoutFormerIDToken},
+	{name: "logout-from-another-site", run: (*driver).logoutFromAnotherSite},
+	{name: "logout-without-memory", run: (*driver).logoutWithoutMemory},
+	{name: "logout-consent-in-another-tab", run: (*driver).logoutConsentInAnotherTab},
+	{name: "logout-chain-stopped-passed", run: (*driver).logoutChainStoppedPassed},
+	{name: "logout-chain-stopped-other-subject", run: (*driver).logoutChainStoppedOtherSubject},
+	{name: "logout-chain-stopped-former-login", run: (*driver).logoutChainStoppedFormerLogin},
+	{name: "logout-chain-stopped-prompt-none", run: (*driver).logoutChainStoppedPromptNone},
 	{name: "prompt-consent-accept", run: promptConsent("accept")},
 	{name: "prompt-consent-reject", run: promptConsent("reject")},
 	{name: "back-to-choice", run: (*driver).backToChoice},
@@ -98,6 +113,8 @@ func run() error {
 	clientID := flag.String("client", "", `OAuth2 client id; empty: the one Hydra gave "OIDC Test Client"`)
 	secret := flag.String("secret", "oidc-test-123456", "the client's secret (files/hydra/clients.d)")
 	redirect := flag.String("redirect", "http://oidc.client.test/auth/callback", "the client's redirect_uri")
+	postLogout := flag.String("post-logout", "http://oidc.client.test/", "the client's post_logout_redirect_uri")
+	backChannel := flag.String("back-channel", "", "where Hydra reaches this host, host:port, for a client with a back-channel, http://10.0.6.1:<port> on hydra-dev; empty leaves that check out")
 	password := flag.String("password", "123456", "password of hydra-sql's accounts")
 	symfony := flag.Bool("symfony", false, "drive the Symfony dispatcher's pages (make capture), checking the subject only")
 	wait := flag.Duration("wait", 0, "expired-on-consent: time spent on the consent screen, beyond the flow's challenge_ttl")
@@ -147,7 +164,7 @@ func run() error {
 		ctx:        ctx,
 		log:        log,
 		dispatcher: urls["dispatcher"],
-		client:     &client{public: urls["public"], admin: urls["admin"], id: *clientID, secret: *secret, redirect: *redirect, http: httpc},
+		client:     &client{public: urls["public"], admin: urls["admin"], id: *clientID, secret: *secret, redirect: *redirect, postLogout: *postLogout, http: httpc},
 		mail:       mailbox{base: urls["smtp"], http: httpc},
 		pages:      goPages,
 		password:   *password,
@@ -155,6 +172,17 @@ func run() error {
 	}
 	if *symfony {
 		d.pages, d.symfony = symfonyPages, true
+	}
+	var err error
+	if d.version, err = d.client.hydraVersion(ctx); err != nil {
+		return err
+	}
+	if *backChannel != "" {
+		stop, err := d.listenBackChannel(*backChannel)
+		if err != nil {
+			return err
+		}
+		defer stop()
 	}
 
 	type planned struct {
@@ -198,6 +226,7 @@ func run() error {
 		// dispatcher or of the apps. Hydra remembers a consent by subject
 		// and client, whatever the browser.
 		d.b, d.notes = newBrowser(*redirect, log), nil
+		d.b.stopAt = append(d.b.stopAt, *postLogout)
 		start := time.Now()
 		err := s.run(d)
 		elapsed := time.Since(start).Round(100 * time.Millisecond)
@@ -272,6 +301,11 @@ type driver struct {
 	symfony  bool
 	password string
 	wait     time.Duration
+	// version is Hydra's; backChannelURL where a client hears of a logout, ""
+	// leaving that check out, and backChannelHits the logout tokens it got.
+	version         string
+	backChannelURL  string
+	backChannelHits atomic.Int32
 	// mark is the newest email when the authorization started: the code of
 	// hydra-passwordless comes after it.
 	mark int
@@ -384,6 +418,9 @@ func (d *driver) kind(p page) string {
 		}
 		if _, ok := p.find(d.pages.consent); ok {
 			return "consent"
+		}
+		if _, ok := p.find("logout_challenge"); ok {
+			return "logout"
 		}
 		if errorCode.MatchString(p.Body) {
 			return "error"
@@ -1004,31 +1041,639 @@ func (d *driver) secondLoginConcurrent() error {
 	return d.granted(outcome{entry: entry, seen: []string{d.kind(p)}, end: p}, identities["hydra-sql"])
 }
 
-// logout signs in, then out on Hydra, which goes through the dispatcher's
-// logout: the memory of the skip is cleared (WRT-4, Q41), and the next
-// authorization, without a session at Hydra, shows the choice page.
-func (d *driver) logout() error {
-	if err := d.remembered(); err != nil {
-		return err
+// The URLs of the apps' logout, as hydra-dev's seed names them.
+const (
+	sqlLogout  = "http://sql.hydra.test/logout"
+	tfaLogout  = "http://2fa.hydra.test/logout"
+	oidcLogout = "http://oidc.hydra.test/logout"
+)
+
+// through checks that a walk went through the logout_url of each app, in order,
+// and returns what it left out.
+func through(p page, urls ...string) error {
+	i := 0
+	for _, u := range p.Trail {
+		if i < len(urls) && strings.HasPrefix(u.String(), urls[i]) {
+			i++
+		}
 	}
-	p, err := d.b.get(d.client.public.JoinPath("/oauth2/sessions/logout").String())
+	if i < len(urls) {
+		return fmt.Errorf("the logout_url of %s not reached: %s", urls[i], trail(p))
+	}
+	return nil
+}
+
+// endsOnVerifier checks that a walk followed Hydra's verifier, the last step of a
+// logout (HLO-2).
+func endsOnVerifier(p page) error {
+	if !slices.ContainsFunc(p.Trail, func(u *url.URL) bool { return u.Query().Has("logout_verifier") }) {
+		return fmt.Errorf("the verifier not followed: %s", trail(p))
+	}
+	return nil
+}
+
+// signedIn signs in through flow, and returns once the memory of the skip is
+// written.
+func (d *driver) signedIn(flow string) error {
+	if err := d.signIn(login{flow: flow, user: isabelle, consent: "accept"}); err != nil {
+		return fmt.Errorf("sign-in: %w", err)
+	}
+	if !d.b.has(d.dispatcher, rememberCookie) {
+		return fmt.Errorf("sign-in: no %s cookie (WRT-1)", rememberCookie)
+	}
+	return nil
+}
+
+// askLogout asks for the logout as a user does, and returns the page of the
+// confirmation (LGO-6).
+func (d *driver) askLogout() (page, error) {
+	p, err := d.b.get(d.client.logoutURL("", ""))
+	if err != nil {
+		return page{}, err
+	}
+	if d.kind(p) != "logout" {
+		return page{}, fmt.Errorf("no confirmation: %w", errUnexpected(p))
+	}
+	return p, nil
+}
+
+// answerLogout presses a button of the confirmation p.
+func (d *driver) answerLogout(p page, button string) (page, error) {
+	f, ok := p.find("logout_challenge")
+	if !ok {
+		return page{}, errUnexpected(p)
+	}
+	v, err := f.values(nil, &pressed{"action", button})
+	if err != nil {
+		return page{}, err
+	}
+	return d.b.submit(p, f, v)
+}
+
+// honoured checks that the skip is still honoured in this browser (SKP-1).
+func (d *driver) honoured(what string) error {
+	p, err := d.start("")
 	if err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(p.Trail, func(u *url.URL) bool { return u.Host == d.dispatcher.Host && u.Path == "/logout" }) {
-		return fmt.Errorf("the logout went without the dispatcher: %s", trail(p))
+	if err := d.skipped(p); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
-	if d.b.has(d.dispatcher, rememberCookie) {
-		return fmt.Errorf("WRT-4: %s kept after the logout", rememberCookie)
-	}
-	o, err := d.authorize(login{flow: "hydra-sql", user: isabelle, consent: "accept"})
+	return d.granted(outcome{entry: p.Trail[0], seen: []string{d.kind(p)}, end: p}, identities["hydra-sql"])
+}
+
+// loggedOut checks that the next authorization has no session at Hydra: the
+// choice page and the app.
+func (d *driver) loggedOut(flow string) error {
+	o, err := d.authorize(login{flow: flow, user: isabelle, consent: "accept"})
 	if err != nil {
 		return err
 	}
 	if !o.saw("choice") || !o.saw("hydra-sql") {
 		return fmt.Errorf("after the logout, pages %v: want the choice page and the app", o.seen)
 	}
+	return d.granted(o, identities[flow])
+}
+
+// logout signs in with two apps, then out: the question, then the logout_url of
+// each app of the flow (LST-1), the verifier last. The cookie is now a note, and
+// the next authorization, without a session at Hydra, shows the choice page.
+func (d *driver) logout() error {
+	if err := d.signedIn("hydra-sql-2fa"); err != nil {
+		return err
+	}
+	memory := d.b.cookie(d.dispatcher, rememberCookie)
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	if d.b.cookie(d.dispatcher, rememberCookie) != memory {
+		return errors.New("WRT-4: the cookie changed at the confirmation")
+	}
+	end, err := d.answerLogout(p, "accept")
+	if err != nil {
+		return err
+	}
+	if err := through(end, sqlLogout, tfaLogout); err != nil {
+		return err
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	note := d.b.cookie(d.dispatcher, rememberCookie)
+	if note == "" || len(note) >= len(memory) {
+		return fmt.Errorf("WRT-4: a note of %d bytes, after a memory of %d: without its claims", len(note), len(memory))
+	}
+	return d.loggedOut("hydra-sql")
+}
+
+// logoutRefused refuses the confirmation: the skip stays honoured, the cookie
+// kept (LGO-12).
+func (d *driver) logoutRefused() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	memory := d.b.cookie(d.dispatcher, rememberCookie)
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	end, err := d.answerLogout(p, "reject")
+	if err != nil {
+		return err
+	}
+	if end.Status != http.StatusOK || !strings.Contains(end.Body, "restez connecté") || strings.Contains(end.Body, "<form") {
+		return fmt.Errorf("LGO-12: %w", errUnexpected(end))
+	}
+	if d.b.cookie(d.dispatcher, rememberCookie) != memory {
+		return errors.New("LGO-12: the cookie changed")
+	}
+	// LGO-15, the double click.
+	again, err := d.answerLogout(p, "reject")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(again.Body, "restez connecté") {
+		return fmt.Errorf("LGO-15: %w", errUnexpected(again))
+	}
+	return d.honoured("refused")
+}
+
+// logoutRefusedDuringChain refuses a second demand while a chain goes on: no
+// reject of its verifier's demand, a page that says it, its link taking the chain
+// up (LGO-14).
+func (d *driver) logoutRefusedDuringChain() error {
+	if err := d.signedIn("hydra-sql-2fa"); err != nil {
+		return err
+	}
+	d.b.stopAt = append(d.b.stopAt, sqlLogout)
+	first, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	stopped, err := d.answerLogout(first, "accept")
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(stopped.URL.String(), sqlLogout) {
+		return fmt.Errorf("the chain did not stop at hydra-sql: %s", trail(stopped))
+	}
+	second, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	if d.kind(second) != "logout" {
+		return fmt.Errorf("the second demand: %w", errUnexpected(second))
+	}
+	refused, err := d.answerLogout(second, "reject")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(refused.Body, "déjà commencée") {
+		return fmt.Errorf("LGO-14: %w", errUnexpected(refused))
+	}
+	links := regexp.MustCompile(`href="([^"]*/logout/next\?ref=[^"]*)"`).FindStringSubmatch(refused.Body)
+	if links == nil {
+		return fmt.Errorf("LGO-14, no link: %w", errUnexpected(refused))
+	}
+	d.b.stopAt = d.b.stopAt[:len(d.b.stopAt)-1]
+	end, err := d.b.get(links[1])
+	if err != nil {
+		return err
+	}
+	if err := through(end, sqlLogout, tfaLogout); err != nil {
+		return err
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	return d.loggedOut("hydra-sql")
+}
+
+// logoutRefusedAfterEnd refuses a page left open once the logout is over: the page
+// says it, not "you stay connected" (LGO-16).
+func (d *driver) logoutRefusedAfterEnd() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	end, err := d.answerLogout(p, "accept")
+	if err != nil {
+		return err
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	late, err := d.answerLogout(p, "reject")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(late.Body, "déjà déconnecté") {
+		return fmt.Errorf("LGO-16: %w", errUnexpected(late))
+	}
+	return nil
+}
+
+// logoutOfClient is a logout asked by the client, id_token_hint and
+// post_logout_redirect_uri: no page, the apps of the session, then back to the
+// client with its state (LGO-8).
+func (d *driver) logoutOfClient() error {
+	if err := d.signedIn("hydra-sql-2fa"); err != nil {
+		return err
+	}
+	const state = "e2e-logout-state"
+	end, err := d.b.get(d.client.logoutURL(d.client.idToken, state))
+	if err != nil {
+		return err
+	}
+	if err := through(end, sqlLogout, tfaLogout); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(end.URL.String(), d.client.postLogout) || end.URL.Query().Get("state") != state {
+		return fmt.Errorf("not back to the client with its state: %s", trail(end))
+	}
+	return d.loggedOut("hydra-sql")
+}
+
+// logoutOfClientDoubleClick follows that link twice before the browser leaves:
+// Hydra makes two logout requests, the first's answer dropped. No app is passed:
+// the browser was sent there under 15 s ago (DEP-4, Q46).
+func (d *driver) logoutOfClientDoubleClick() error {
+	if err := d.signedIn("hydra-sql-2fa"); err != nil {
+		return err
+	}
+	link := d.client.logoutURL(d.client.idToken, "e2e-double-click")
+	first, err := d.b.hop(link)
+	if err != nil {
+		return err
+	}
+	if _, err := d.b.hop(first.String()); err != nil {
+		return fmt.Errorf("the first click: %w", err)
+	}
+	end, err := d.b.get(link)
+	if err != nil {
+		return err
+	}
+	if err := through(end, sqlLogout, tfaLogout); err != nil {
+		return err
+	}
+	if end.URL.Query().Get("state") != "e2e-double-click" {
+		return fmt.Errorf("not back to the client with its state: %s", trail(end))
+	}
+	return nil
+}
+
+// logoutFormerIDToken logs in again with prompt=login, a new session, then asks
+// for the logout with the id_token of the former: the cookie names another
+// session, and the page asks (LGO-7, Q47). Refused, the current session lives.
+func (d *driver) logoutFormerIDToken() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	former := d.client.idToken
+	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept", prompt: "login"}); err != nil {
+		return fmt.Errorf("prompt=login: %w", err)
+	}
+	p, err := d.b.get(d.client.logoutURL(former, "e2e-former"))
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "logout" || !strings.Contains(p.Body, "autre session") {
+		return fmt.Errorf("LGO-7: %w", errUnexpected(p))
+	}
+	refused, err := d.answerLogout(p, "reject")
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(refused.Body, "restez connecté") {
+		return fmt.Errorf("LGO-12: %w", errUnexpected(refused))
+	}
+	return d.honoured("refused")
+}
+
+// logoutFromAnotherSite posts the confirmation from another site, then without its
+// token: E1008, and the session lives (LGO-9, LGO-10).
+func (d *driver) logoutFromAnotherSite() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	f, _ := p.find("logout_challenge")
+	v, err := f.values(nil, &pressed{"action", "accept"})
+	if err != nil {
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		form   url.Values
+		origin string
+	}{
+		{"another site", v, "http://evil.example"},
+		{"no token", url.Values{"logout_challenge": v["logout_challenge"], "action": {"accept"}}, p.URL.Scheme + "://" + p.URL.Host},
+	} {
+		end, err := d.b.post(f.Action.String(), tc.form, tc.origin)
+		if err != nil {
+			return err
+		}
+		if code := errorCode.FindString(end.Body); code != "E1008" {
+			return fmt.Errorf("%s: %q, want E1008: %w", tc.name, code, errUnexpected(end))
+		}
+	}
+	return d.honoured("after a forged form")
+}
+
+// logoutWithoutMemory logs out of an hydra-oidc session in a browser that lost the
+// cookie: the three apps of the configuration (LST-2), hydra-oidc through the
+// end_session of its provider and back.
+func (d *driver) logoutWithoutMemory() error {
+	if err := d.signedIn("hydra-oidc"); err != nil {
+		return err
+	}
+	d.b.forget(d.dispatcher, rememberCookie)
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	end, err := d.answerLogout(p, "accept")
+	if err != nil {
+		return err
+	}
+	// The order of the snapshot, by id.
+	if err := through(end, tfaLogout, oidcLogout, sqlLogout); err != nil {
+		return err
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	idp := slices.ContainsFunc(end.Trail, func(u *url.URL) bool {
+		return u.Host != d.dispatcher.Host && u.Host != "oidc.hydra.test" && u.Host != "sql.hydra.test" && u.Host != "2fa.hydra.test" && u.Host != d.client.public.Host
+	})
+	callback := slices.ContainsFunc(end.Trail, func(u *url.URL) bool { return strings.HasPrefix(u.String(), oidcLogout+"/callback") })
+	if !idp || !callback {
+		return fmt.Errorf("hydra-oidc did not go through its provider's end_session: %s", trail(end))
+	}
+	return nil
+}
+
+// logoutConsentInAnotherTab finishes a logout while a flow is at its consent in
+// another tab, the session deleted under it: on 2.1, Hydra empties its
+// login_session_id, and the dispatcher rejects it (CST-24); from 2.2 it cannot
+// tell, and the client gets error=error at the verifier (HLO-15, Q55).
+func (d *driver) logoutConsentInAnotherTab() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	d.b.forget(d.dispatcher, rememberCookie)
+	p, err := d.start("consent")
+	if err != nil {
+		return err
+	}
+	// The skip ignored: the flow played again, to the screen, left there.
+	for d.kind(p) != "consent" {
+		switch d.kind(p) {
+		case "choice":
+			p, err = d.choose(p, "hydra-sql")
+		case "hydra-sql":
+			p, err = d.sqlLogin(p, isabelle)
+		default:
+			return fmt.Errorf("to the consent: %w", errUnexpected(p))
+		}
+		if err != nil {
+			return err
+		}
+	}
+	screen := p
+	confirm, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	end, err := d.answerLogout(confirm, "accept")
+	if err != nil {
+		return err
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	done, err := d.consentScreen(screen, "accept", 0)
+	if err != nil {
+		return err
+	}
+	if d.kind(done) != "callback" {
+		return fmt.Errorf("the consent: %w", errUnexpected(done))
+	}
+	refused, err := d.client.callbackError(done.URL)
+	if err != nil {
+		return err
+	}
+	want := "error"
+	if strings.HasPrefix(d.version, "v2.1") {
+		want = "login_required"
+	}
+	if refused != want {
+		return fmt.Errorf("callback error %q on %s, want %q", refused, d.version, want)
+	}
+	return nil
+}
+
+// stoppedChain signs in with two apps, and starts a logout the browser abandons at
+// the logout_url of the first: an app that does not answer (browser.stopAt).
+func (d *driver) stoppedChain() error {
+	if err := d.signedIn("hydra-sql-2fa"); err != nil {
+		return err
+	}
+	return d.stopChain()
+}
+
+func (d *driver) stopChain() error {
+	memory := d.b.cookie(d.dispatcher, rememberCookie)
+	d.b.stopAt = append(d.b.stopAt, sqlLogout)
+	defer func() { d.b.stopAt = d.b.stopAt[:len(d.b.stopAt)-1] }()
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	stopped, err := d.answerLogout(p, "accept")
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(stopped.URL.String(), sqlLogout) {
+		return fmt.Errorf("the chain did not stop at hydra-sql: %s", trail(stopped))
+	}
+	if note := d.b.cookie(d.dispatcher, rememberCookie); note == "" || len(note) >= len(memory) {
+		return fmt.Errorf("WRT-4: a note of %d bytes, after a memory of %d: without its claims", len(note), len(memory))
+	}
+	return nil
+}
+
+// passDelay is how long after the browser was sent to an app a new demand passes
+// it (Q46), plus a margin.
+const passDelay = 15*time.Second + 500*time.Millisecond
+
+// logoutChainStoppedPassed stops a chain at hydra-sql: a second demand under 15 s
+// goes back there; past 15 s it passes it, and the logout ends (DEP-4, Q46).
+func (d *driver) logoutChainStoppedPassed() error {
+	if err := d.stoppedChain(); err != nil {
+		return err
+	}
+	d.log.Info("waiting past the delay of a new demand", "for", passDelay)
+	time.Sleep(passDelay)
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	end, err := d.answerLogout(p, "accept")
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(end.Trail, func(u *url.URL) bool { return strings.HasPrefix(u.String(), sqlLogout) }) {
+		return fmt.Errorf("hydra-sql not passed: %s", trail(end))
+	}
+	if err := through(end, tfaLogout); err != nil {
+		return err
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	return d.loggedOut("hydra-sql")
+}
+
+// listenBackChannel serves the logout tokens of a client with a back-channel.
+func (d *driver) listenBackChannel(reach string) (func(), error) {
+	u, err := url.Parse(reach)
+	if err != nil || u.Port() == "" {
+		return nil, fmt.Errorf("-back-channel: %q is not http://host:port", reach)
+	}
+	ln, err := net.Listen("tcp", ":"+u.Port())
+	if err != nil {
+		return nil, err
+	}
+	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { d.backChannelHits.Add(1) })}
+	go func() { _ = srv.Serve(ln) }()
+	d.backChannelURL = reach + "/logout"
+	return func() { _ = srv.Close() }, nil
+}
+
+// logoutChainStoppedOtherSubject stops a chain, and the next authorization in this
+// browser is someone else's: the session is deleted, which sends the back-channel,
+// the authorization started again, the choice page, a code, without E1003 (SKP-12,
+// HLO-18).
+func (d *driver) logoutChainStoppedOtherSubject() error {
+	if d.backChannelURL != "" {
+		id, remove, err := d.client.backChannelClient(d.ctx, d.backChannelURL)
+		if err != nil {
+			return err
+		}
+		defer remove()
+		former := d.client.id
+		d.client.id = id
+		defer func() { d.client.id = former }()
+	}
+	if err := d.stoppedChain(); err != nil {
+		return err
+	}
+	session := d.client.idToken
+	before := d.backChannelHits.Load()
+	o, err := d.authorize(login{flow: "hydra-sql", user: henri, consent: "accept"})
+	if err != nil {
+		return err
+	}
+	if !o.saw("choice") || !o.saw("hydra-sql") {
+		return fmt.Errorf("pages %v: want the choice page and the app", o.seen)
+	}
+	if d.kind(o.end) != "callback" {
+		return fmt.Errorf("%w: pages %v, ended on %s %s", errNoCallback, o.seen, o.code, endURL(o))
+	}
+	claims, err := d.client.redeem(d.ctx, o.end.URL)
+	if err != nil {
+		return err
+	}
+	if err := (identity{Sub: henri}).check(claims); err != nil {
+		return err
+	}
+	alive, err := d.client.sessionAlive(d.ctx, session)
+	if err != nil {
+		return err
+	}
+	if alive {
+		return errors.New("SKP-12: the session is still in Hydra's base")
+	}
+	if d.backChannelURL == "" {
+		d.note("back-channel not checked: no -back-channel")
+		return nil
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for d.backChannelHits.Load() == before && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d.backChannelHits.Load() == before {
+		return errors.New("SKP-12: no logout token on the back-channel")
+	}
+	return nil
+}
+
+// logoutChainStoppedFormerLogin stops a chain, and a login request read before the
+// session was deleted comes back: it starts the authorization again, by SKP-12
+// (2.2 and 2.3, which keep its session_id) or SKP-13 (2.1, which empties it).
+func (d *driver) logoutChainStoppedFormerLogin() error {
+	if err := d.stoppedChain(); err != nil {
+		return err
+	}
+	// An L read in another tab, its load left unanswered, then this one.
+	entry, err := d.b.hop(d.client.authURL(""))
+	if err != nil {
+		return err
+	}
+	state, nonce := d.client.state, d.client.nonce
+	p, err := d.b.get(d.client.authURL(""))
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "choice" {
+		return fmt.Errorf("SKP-12: %w", errUnexpected(p))
+	}
+	back, err := d.b.get(entry.String())
+	if err != nil {
+		return err
+	}
+	if d.kind(back) != "choice" || back.URL.Query().Get("login_challenge") == entry.Query().Get("login_challenge") {
+		return fmt.Errorf("the former L: %w", errUnexpected(back))
+	}
+	// Started again from the request_url of the former L: its state and nonce.
+	d.client.state, d.client.nonce = state, nonce
+	o, err := d.drive(back, login{flow: "hydra-sql", user: isabelle, consent: "accept"})
+	if err != nil {
+		return err
+	}
 	return d.granted(o, identities["hydra-sql"])
+}
+
+// logoutChainStoppedPromptNone stops a chain, and an authorization that admits no
+// page comes: the session deleted, Hydra answers login_required (SKP-12, HLO-18).
+func (d *driver) logoutChainStoppedPromptNone() error {
+	if err := d.stoppedChain(); err != nil {
+		return err
+	}
+	p, err := d.start("none")
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "callback" {
+		return fmt.Errorf("SKP-12 with prompt=none: %w", errUnexpected(p))
+	}
+	refused, err := d.client.callbackError(p.URL)
+	if err != nil {
+		return err
+	}
+	if refused != "login_required" {
+		return fmt.Errorf("callback error %q, want login_required", refused)
+	}
+	return nil
 }
 
 // promptConsent signs in with hydra-sql and prompt=consent: the dispatcher's

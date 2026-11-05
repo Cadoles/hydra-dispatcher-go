@@ -26,6 +26,10 @@ type client struct {
 	redirect      string
 	http          *http.Client
 	state, nonce  string // of the last authorization request
+	// idToken is the one redeemed last, what a client gives back as
+	// id_token_hint; postLogout the client's post_logout_redirect_uri.
+	idToken    string
+	postLogout string
 	// scope is that of the next authorization requests, "openid profile
 	// email" when empty.
 	scope string
@@ -127,6 +131,7 @@ func (c *client) redeem(ctx context.Context, cb *url.URL) (map[string]any, error
 	if err := json.Unmarshal(data, &tokens); err != nil || tokens.IDToken == "" {
 		return nil, fmt.Errorf("token endpoint: no id_token in %s", data)
 	}
+	c.idToken = tokens.IDToken
 	parts := strings.Split(tokens.IDToken, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("id_token is not a JWS")
@@ -162,6 +167,92 @@ func (c *client) loginSkip(ctx context.Context, challenge string) (bool, error) 
 		return false, fmt.Errorf("login request on Hydra: %w", err)
 	}
 	return lr.Skip, nil
+}
+
+// logoutURL is Hydra's logout, as a client asks for it with hint: back to the
+// client with state (HLO-7); without hint, as a user does.
+func (c *client) logoutURL(hint, state string) string {
+	u := c.public.JoinPath("/oauth2/sessions/logout")
+	if hint != "" {
+		u.RawQuery = url.Values{"id_token_hint": {hint}, "post_logout_redirect_uri": {c.postLogout}, "state": {state}}.Encode()
+	}
+	return u.String()
+}
+
+// hydraVersion reads the release Hydra reports: some ends differ (HLO-15).
+func (c *client) hydraVersion(ctx context.Context) (string, error) {
+	var v struct {
+		Version string `json:"version"`
+	}
+	if err := getJSON(ctx, c.http, c.admin.JoinPath("/version").String(), &v); err != nil {
+		return "", fmt.Errorf("version of Hydra: %w", err)
+	}
+	return v.Version, nil
+}
+
+// sessionAlive tells whether a logout request comes for hint from a browser
+// without a cookie: without one, the session is gone from Hydra's base (HLO-13).
+func (c *client) sessionAlive(ctx context.Context, hint string) (bool, error) {
+	u := c.public.JoinPath("/oauth2/sessions/logout")
+	u.RawQuery = url.Values{"id_token_hint": {hint}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return false, err
+	}
+	noFollow := &http.Client{Timeout: c.http.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noFollow.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	loc, err := resp.Location()
+	if err != nil {
+		return false, fmt.Errorf("logout of a session: %d, no redirect", resp.StatusCode)
+	}
+	return loc.Query().Has("logout_challenge"), nil
+}
+
+// backChannelClient registers a copy of the client that hears of a logout at
+// listener, and returns its id: hydra-dev's has no back-channel. Removed at the
+// end of the run, as a client of a scenario.
+func (c *client) backChannelClient(ctx context.Context, listener string) (string, func(), error) {
+	body, _ := json.Marshal(map[string]any{
+		"client_name":                "e2e back-channel",
+		"client_secret":              c.secret,
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"scope":                      "openid email profile offline_access",
+		"redirect_uris":              []string{c.redirect},
+		"post_logout_redirect_uris":  []string{c.postLogout},
+		"token_endpoint_auth_method": "client_secret_basic",
+		"backchannel_logout_uri":     listener,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.admin.JoinPath("/admin/clients").String(), strings.NewReader(string(body)))
+	if err != nil {
+		return "", nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var created struct {
+		ID string `json:"client_id"`
+	}
+	if resp.StatusCode != http.StatusCreated || json.Unmarshal(data, &created) != nil || created.ID == "" {
+		return "", nil, fmt.Errorf("client with a back-channel: %d %s", resp.StatusCode, data)
+	}
+	remove := func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.admin.JoinPath("/admin/clients", created.ID).String(), nil)
+		if err == nil {
+			if resp, err := c.http.Do(req); err == nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}
+	return created.ID, remove, nil
 }
 
 // identity is what the final id_token must say.
