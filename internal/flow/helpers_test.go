@@ -29,7 +29,7 @@ func testApps() []store.App {
 	return []store.App{
 		{ID: "sql", LoginURL: "http://sql.hydra.test/login", ConsentURL: "http://sql.hydra.test/consent", Method: "pwd"},
 		{ID: "2fa", LoginURL: "http://2fa.hydra.test/login", ConsentURL: "http://2fa.hydra.test/consent", Method: "otp",
-			Options: map[string]any{"receive_claims": []any{"email"}}},
+			ReceiveClaims: []string{"email"}},
 		{ID: "oidc", LoginURL: "http://oidc.hydra.test/login", ConsentURL: "http://oidc.hydra.test/consent", Method: "oidc"},
 	}
 }

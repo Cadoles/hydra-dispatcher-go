@@ -79,9 +79,14 @@ type SeedApp struct {
 	LoginURL   string `yaml:"login_url"`
 	ConsentURL string `yaml:"consent_url"`
 	// LogoutURL is optional: an app without one is left out of the logout.
-	LogoutURL string         `yaml:"logout_url"`
-	Method    string         `yaml:"method"`
-	Options   map[string]any `yaml:"options"`
+	LogoutURL string `yaml:"logout_url"`
+	Method    string `yaml:"method"`
+	// Options, which Symfony accepts and never reads, are ignored with a
+	// warning, their values unread; the keys of appKeys are refused.
+	Options map[string]ignored `yaml:"options"`
+	// ReceiveClaims names the claims of the previous steps the app receives:
+	// all of them when nil, none when empty. An empty variable gives none.
+	ReceiveClaims *List `yaml:"receive_claims"`
 	// AuthMode is how the emulated API identifies the app: network, by
 	// AllowedSources, or mtls, by ClientCertFingerprint. Empty until Load
 	// applies the default, network.
@@ -95,8 +100,9 @@ type SeedApp struct {
 }
 
 // appKeys are the app fields of the Go model: in options, where the design
-// document once put two of them, they would pass unread.
-var appKeys = []string{"auth_mode", "allowed_sources", "client_cert_fingerprint"}
+// document once put them, they would pass unread, and an app would receive
+// every claim for want of its receive_claims.
+var appKeys = []string{"auth_mode", "allowed_sources", "client_cert_fingerprint", "receive_claims"}
 
 type SeedFlow struct {
 	ID string `yaml:"id"`
@@ -371,6 +377,11 @@ func (s *Seed) warnings() []string {
 	} {
 		if k.set {
 			warnings = append(warnings, fmt.Sprintf("dispatcher.%s is ignored: %s", k.name, k.reason))
+		}
+	}
+	for i, a := range s.Apps {
+		if len(a.Options) > 0 {
+			warnings = append(warnings, fmt.Sprintf("dispatcher.apps[%d].options is ignored: never read by the Symfony app either", i))
 		}
 	}
 	settings := yamlFields(reflect.TypeFor[SeedSettings]())

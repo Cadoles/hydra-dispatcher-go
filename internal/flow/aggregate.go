@@ -81,21 +81,16 @@ func (f *Flow) PreviousClaims(k int) Object {
 	return MergeClaims(parts...)
 }
 
-// ReceivedClaims keeps the claims an app receives: those named by its option
-// receive_claims, all without the option. An option that is not a list of
-// names gives none: it is there to minimise what the app sees.
+// ReceivedClaims keeps the claims an app receives: those it names in
+// receive_claims, all when it names none (nil), none when the list is empty.
 func ReceivedClaims(claims Object, app store.App) Object {
-	option, ok := app.Options["receive_claims"]
-	if !ok {
+	if app.ReceiveClaims == nil {
 		return claims
 	}
 	out := Object{}
-	names, _ := option.([]any)
-	for _, n := range names {
-		if name, ok := n.(string); ok {
-			if v, ok := claims[name]; ok {
-				out[name] = v
-			}
+	for _, name := range app.ReceiveClaims {
+		if v, ok := claims[name]; ok {
+			out[name] = v
 		}
 	}
 	return out
@@ -178,7 +173,7 @@ func (f *Flow) request() (ory.OAuth2LoginRequest, error) {
 }
 
 // errAppGone is the error of a request for an app gone from the snapshot:
-// without its options, it would receive every claim.
+// without its receive_claims, it would receive every claim.
 var errAppGone = errors.New("flow: app gone from the configuration")
 
 // LoginRequestFor is the login request served to the app of step k (EMU-8):

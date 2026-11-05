@@ -5,7 +5,7 @@ chains several real login apps into a flow (MFA, identity provider choice,
 protocol choice) by replaying Hydra's login/consent protocol towards each of
 them.
 
-Go rewrite of the Symfony `hydra-dispatcher`. Work in progress, phase 1 (plan
+Go rewrite of the Symfony `hydra-dispatcher-v2`. Work in progress, phase 1 (plan
 and journal in `hydra-dev/conception`): the binary serves the pages (choice of
 the flow, consent, errors, logout accepted at once until the confirmation of
 P9), the emulated admin API the login apps call (v2 paths and v1 aliases),
@@ -17,12 +17,12 @@ call bounded to 1 s and two attempts unless its URL says otherwise (`dial_timeou
 ## Commands
 
 ```
-dispatcher serve [-config dispatcher.yaml]          run the HTTP server
-dispatcher migrate [-config ...]                    apply the database migrations
-dispatcher bootstrap [-config ...] [-force] [-dry-run] [-yes]
+hydra-dispatcher serve [-config dispatcher.yaml]    run the HTTP server
+hydra-dispatcher migrate [-config ...]              apply the database migrations
+hydra-dispatcher bootstrap [-config ...] [-force] [-dry-run] [-yes]
                                                     write the seed of the configuration file to the database
-dispatcher healthcheck [-url ...]                   probe /health of a local server (container HEALTHCHECK)
-dispatcher version                                  print the version
+hydra-dispatcher healthcheck [-url ...]             probe /health of a local server (container HEALTHCHECK)
+hydra-dispatcher version                            print the version
 ```
 
 `-config` defaults to `$DISPATCHER_CONFIG`, which `healthcheck` reads too for

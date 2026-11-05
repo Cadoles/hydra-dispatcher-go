@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/netip"
 	"net/url"
@@ -87,7 +86,47 @@ func exec(t *testing.T, p *Postgres, query string, args ...any) {
 }
 
 // allMigrations are the migrations of an empty database.
-var allMigrations = []string{"00001_schema.sql", "00002_checks.sql"}
+var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql"}
+
+// What the code read of the options of an app becomes its receive_claims, and
+// comes back with a rollback: an app restricted before stays restricted.
+func TestMigrateOptions(t *testing.T) {
+	ctx := context.Background()
+	p := newDatabase(t)
+	m, err := p.migrator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.UpTo(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, options) VALUES
+		('none', 'x', 'x', 'pwd', '{"theme": "dark"}'),
+		('list', 'x', 'x', 'pwd', '{"receive_claims": ["email", 1, "name"]}'),
+		('empty', 'x', 'x', 'pwd', '{"receive_claims": []}'),
+		('text', 'x', 'x', 'pwd', '{"receive_claims": "email"}')`)
+	if _, err := p.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s, err := p.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string][]string{"none": nil, "list": {"email", "name"}, "empty": {}, "text": {}} {
+		if a, _ := s.App(id); !reflect.DeepEqual(a.ReceiveClaims, want) {
+			t.Errorf("app %s: ReceiveClaims = %#v, want %#v", id, a.ReceiveClaims, want)
+		}
+	}
+	if _, err := m.DownTo(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"none": `{}`, "list": `{"receive_claims": ["email", "name"]}`, "empty": `{"receive_claims": []}`} {
+		var options string
+		if err := p.db.QueryRow(`SELECT options::text FROM app WHERE id = $1`, id).Scan(&options); err != nil || options != want {
+			t.Errorf("app %s after the rollback: options = %s, %v; want %s", id, options, err, want)
+		}
+	}
+}
 
 func TestMigrate(t *testing.T) {
 	ctx := context.Background()
@@ -250,15 +289,16 @@ func TestSchemaKeys(t *testing.T) {
 // would refuse the whole snapshot.
 func TestSchemaChecks(t *testing.T) {
 	p := migrated(t)
-	app := `INSERT INTO app (id, login_url, consent_url, method, auth_mode, allowed_sources, options) VALUES ('a', 'x', 'x', 'pwd', `
+	app := `INSERT INTO app (id, login_url, consent_url, method, auth_mode, allowed_sources, receive_claims) VALUES ('a', 'x', 'x', 'pwd', `
 	flow := `INSERT INTO flow (id, title, description, icon_url) VALUES ('f', `
 	for insert, check := range map[string]string{
-		app + `'cert', '{}', '{}')`:                      "app_auth_mode",
-		app + `'network', '{NULL}', '{}')`:               "app_allowed_sources",
-		app + `'network', '{10.0.0.0/8,NULL}', '{}')`:    "app_allowed_sources",
-		app + `'network', '{{10.0.0.0/8}}', '{}')`:       "app_allowed_sources",
-		app + `'network', '{}', '[]')`:                   "app_options",
-		app + `'network', '{}', 'null')`:                 "app_options",
+		app + `'cert', '{}', NULL)`:                      "app_auth_mode",
+		app + `'network', '{NULL}', NULL)`:               "app_allowed_sources",
+		app + `'network', '{10.0.0.0/8,NULL}', NULL)`:    "app_allowed_sources",
+		app + `'network', '{{10.0.0.0/8}}', NULL)`:       "app_allowed_sources",
+		app + `'network', '{}', '{NULL}')`:               "app_receive_claims",
+		app + `'network', '{}', '{email,NULL}')`:         "app_receive_claims",
+		app + `'network', '{}', '{{email}}')`:            "app_receive_claims",
 		flow + `'"SQL"', '{}', NULL)`:                    "flow_title",
 		flow + `'{"fr": 1}', '{}', NULL)`:                "flow_title",
 		flow + `'{}', 'null', NULL)`:                     "flow_description",
@@ -271,7 +311,9 @@ func TestSchemaChecks(t *testing.T) {
 		}
 	}
 	for _, insert := range []string{
-		app + `'mtls', '{10.0.0.0/8,2001:db8::/32}', '{"n": 1}')`,
+		app + `'mtls', '{10.0.0.0/8,2001:db8::/32}', '{email,name}')`,
+		`INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('b', 'x', 'x', 'pwd', '{}')`,
+		`INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('c', 'x', 'x', 'pwd', NULL)`,
 		`INSERT INTO flow (id, title, description, icon_url) VALUES ('f1', '{"fr": "SQL", "en": null}', '{}', NULL)`,
 		`INSERT INTO flow (id, title, description, icon_url) VALUES ('f2', '{}', '{}', 'null')`,
 		`INSERT INTO flow (id, title, description, icon_url) VALUES ('f3', '{}', '{}', '{"fr": "http://icons/a.svg"}')`,
@@ -294,11 +336,12 @@ func TestSnapshotEmpty(t *testing.T) {
 
 func TestSnapshot(t *testing.T) {
 	p := migrated(t)
-	exec(t, p, `INSERT INTO app (id, login_url, consent_url, logout_url, method, allowed_sources, options) VALUES
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, logout_url, method, allowed_sources, receive_claims) VALUES
 		('sql', 'http://sql/login', 'http://sql/consent', 'http://sql/logout', 'pwd', '{10.1.0.0/16,10.2.0.5,2001:db8::/32}',
-		 '{"theme": "dark", "n": 2, "tenant_id": 12345678901234567891}')`)
+		 '{email,name}')`)
 	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, auth_mode, client_cert_fingerprint) VALUES
 		('otp', 'http://otp/login', 'http://otp/consent', 'otp', 'mtls', 'ab12')`)
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('none', 'http://n/login', 'http://n/consent', 'pwd', '{}')`)
 	exec(t, p, `INSERT INTO flow (id, title, description, icon_url, enabled, acr) VALUES
 		('sql-2fa', '{"fr": "SQL 2FA"}', '{"fr": "Deux facteurs", "en": "Two factors", "de": null, "es": ""}',
 		 '{"fr": "http://icons/2fa.svg", "en": ""}', false, 'loa2')`)
@@ -315,11 +358,12 @@ func TestSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantApps := []App{
+		{ID: "none", LoginURL: "http://n/login", ConsentURL: "http://n/consent", Method: "pwd", AuthMode: "network", ReceiveClaims: []string{}},
 		{ID: "otp", LoginURL: "http://otp/login", ConsentURL: "http://otp/consent", Method: "otp", AuthMode: "mtls",
-			ClientCertFingerprint: "ab12", Options: map[string]any{}},
+			ClientCertFingerprint: "ab12"},
 		{ID: "sql", LoginURL: "http://sql/login", ConsentURL: "http://sql/consent", LogoutURL: "http://sql/logout", Method: "pwd", AuthMode: "network",
 			AllowedSources: []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16"), netip.MustParsePrefix("10.2.0.5/32"), netip.MustParsePrefix("2001:db8::/32")},
-			Options:        map[string]any{"theme": "dark", "n": json.Number("2"), "tenant_id": json.Number("12345678901234567891")}},
+			ReceiveClaims:  []string{"email", "name"}},
 	}
 	if !reflect.DeepEqual(s.Apps, wantApps) {
 		t.Errorf("apps = %+v\nwant %+v", s.Apps, wantApps)

@@ -59,14 +59,11 @@ type Change struct {
 }
 
 // FieldChange is a field of an entry, before and after, in JSON. Secret is
-// set instead for a client secret, never written, and Keys for the options of
-// an app, which may hold its secrets: the keys whose values change, without
-// the values.
+// set instead for a client secret, never written.
 type FieldChange struct {
 	Name     string
 	Old, New string
 	Secret   bool
-	Keys     []string
 }
 
 // bootstrapLock is the advisory lock that serializes bootstraps: replicas
@@ -156,8 +153,6 @@ type field struct {
 	old, new any
 	// secret compares a client secret with its hash.
 	secret func() bool
-	// keys shows the keys of options that change, not their values.
-	keys bool
 }
 
 func (f field) change() (FieldChange, bool) {
@@ -166,33 +161,7 @@ func (f field) change() (FieldChange, bool) {
 	}
 	o, _ := json.Marshal(f.old)
 	n, _ := json.Marshal(f.new)
-	if f.keys {
-		return FieldChange{Name: f.name, Keys: changedKeys(f.old.(map[string]any), f.new.(map[string]any))}, !bytes.Equal(o, n)
-	}
 	return FieldChange{Name: f.name, Old: string(o), New: string(n)}, !bytes.Equal(o, n)
-}
-
-// changedKeys lists, in order, the keys that one map has and not the other or
-// that they give different values.
-func changedKeys(old, new map[string]any) []string {
-	all := map[string]bool{}
-	for k := range old {
-		all[k] = true
-	}
-	for k := range new {
-		all[k] = true
-	}
-	var keys []string
-	for _, k := range slices.Sorted(maps.Keys(all)) {
-		o, inOld := old[k]
-		n, inNew := new[k]
-		ob, _ := json.Marshal(o)
-		nb, _ := json.Marshal(n)
-		if inOld != inNew || !bytes.Equal(ob, nb) {
-			keys = append(keys, k)
-		}
-	}
-	return keys
 }
 
 func (b *bootstrap) settings(seed config.Seed) error {
@@ -304,7 +273,7 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		return fmt.Errorf("read apps: %w", err)
 	}
 	for _, sa := range seed.Apps {
-		a, err := b.appFromSeed(sa)
+		a, err := appFromSeed(sa)
 		if err != nil {
 			return err
 		}
@@ -321,7 +290,7 @@ func (b *bootstrap) apps(seed config.Seed) error {
 			{name: "auth_mode", old: old.AuthMode, new: a.AuthMode},
 			{name: "allowed_sources", old: old.AllowedSources, new: a.AllowedSources},
 			{name: "client_cert_fingerprint", old: old.ClientCertFingerprint, new: a.ClientCertFingerprint},
-			{name: "options", old: old.Options, new: a.Options, keys: true},
+			{name: "receive_claims", old: old.ReceiveClaims, new: a.ReceiveClaims},
 		}) {
 			continue
 		}
@@ -329,18 +298,14 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		for i, s := range a.AllowedSources {
 			sources[i] = s.String()
 		}
-		options, err := json.Marshal(a.Options)
-		if err != nil {
-			return fmt.Errorf("app %s: options: %w", a.ID, err)
-		}
 		if _, err := b.tx.ExecContext(b.ctx, `
-			INSERT INTO app (id, login_url, consent_url, logout_url, method, auth_mode, allowed_sources, client_cert_fingerprint, options)
-			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7::text[]::cidr[], NULLIF($8, ''), $9::jsonb)
+			INSERT INTO app (id, login_url, consent_url, logout_url, method, auth_mode, allowed_sources, client_cert_fingerprint, receive_claims)
+			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7::text[]::cidr[], NULLIF($8, ''), $9::text[])
 			ON CONFLICT (id) DO UPDATE SET login_url = EXCLUDED.login_url, consent_url = EXCLUDED.consent_url,
 				logout_url = EXCLUDED.logout_url, method = EXCLUDED.method, auth_mode = EXCLUDED.auth_mode,
 				allowed_sources = EXCLUDED.allowed_sources, client_cert_fingerprint = EXCLUDED.client_cert_fingerprint,
-				options = EXCLUDED.options`,
-			a.ID, a.LoginURL, a.ConsentURL, a.LogoutURL, a.Method, a.AuthMode, sources, a.ClientCertFingerprint, string(options)); err != nil {
+				receive_claims = EXCLUDED.receive_claims`,
+			a.ID, a.LoginURL, a.ConsentURL, a.LogoutURL, a.Method, a.AuthMode, sources, a.ClientCertFingerprint, a.ReceiveClaims); err != nil {
 			return fmt.Errorf("app %s: %w", a.ID, err)
 		}
 	}
@@ -355,7 +320,7 @@ func (b *bootstrap) apps(seed config.Seed) error {
 }
 
 // appFromSeed gives a seed app the form readApps reads.
-func (b *bootstrap) appFromSeed(a config.SeedApp) (App, error) {
+func appFromSeed(a config.SeedApp) (App, error) {
 	sources, err := a.AllowedSources.Prefixes()
 	if err != nil {
 		return App{}, fmt.Errorf("app %s: %w", a.ID, err)
@@ -363,25 +328,13 @@ func (b *bootstrap) appFromSeed(a config.SeedApp) (App, error) {
 	if len(sources) == 0 {
 		sources = nil
 	}
-	// Through jsonb, as the database gives them back: it keeps a number as a
-	// numeric, written without exponent and never -0, where encoding/json
-	// writes 1e-07 for 0.0000001. Numbers as json.Number.
-	options := map[string]any{}
-	if len(a.Options) > 0 {
-		raw, err := json.Marshal(a.Options)
-		if err != nil {
-			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
-		}
-		if err := b.tx.QueryRowContext(b.ctx, `SELECT $1::jsonb::text`, string(raw)).Scan(&raw); err != nil {
-			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
-		}
-		if err := unmarshalNumbers(raw, &options); err != nil {
-			return App{}, fmt.Errorf("app %s: options: %w", a.ID, err)
-		}
+	var claims []string // nil: every claim, and NULL in the database
+	if a.ReceiveClaims != nil {
+		claims = *a.ReceiveClaims
 	}
 	return App{
 		ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
-		AuthMode: a.AuthMode, AllowedSources: sources, ClientCertFingerprint: a.ClientCertFingerprint, Options: options,
+		AuthMode: a.AuthMode, AllowedSources: sources, ClientCertFingerprint: a.ClientCertFingerprint, ReceiveClaims: claims,
 	}, nil
 }
 

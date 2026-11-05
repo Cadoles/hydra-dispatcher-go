@@ -1,7 +1,7 @@
-// Command dispatcher is the single login app Ory Hydra talks to. It chains
-// several real login apps into a flow (MFA, identity provider choice) by
-// replaying Hydra's login/consent protocol towards each of them. Go rewrite of
-// the Symfony hydra-dispatcher.
+// Command hydra-dispatcher is the single login app Ory Hydra talks to. It
+// chains several real login apps into a flow (MFA, identity provider choice)
+// by replaying Hydra's login/consent protocol towards each of them. Go rewrite
+// of the Symfony hydra-dispatcher-v2.
 package main
 
 import (
@@ -86,7 +86,7 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: dispatcher <command> [flags]")
+	fmt.Fprintln(w, "Usage: hydra-dispatcher <command> [flags]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
 	for _, c := range commands {

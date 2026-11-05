@@ -4,7 +4,6 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"embed"
@@ -121,9 +120,9 @@ type App struct {
 	AuthMode              string
 	AllowedSources        []netip.Prefix
 	ClientCertFingerprint string
-	// Options are free JSON, numbers as json.Number: a float64 would round
-	// an id of 20 digits.
-	Options map[string]any
+	// ReceiveClaims names the claims of the previous steps the app receives:
+	// all of them when nil, none when empty.
+	ReceiveClaims []string
 }
 
 // Flow is a sequence of apps the user may choose.
@@ -222,20 +221,19 @@ func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 func readApps(ctx context.Context, q querier) ([]App, error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT id, login_url, consent_url, coalesce(logout_url, ''), method, auth_mode,
-		       allowed_sources::text[], coalesce(client_cert_fingerprint, ''), options
+		       allowed_sources::text[], coalesce(client_cert_fingerprint, ''), receive_claims
 		FROM app ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	m := pgtype.NewMap() // its types scan the text[] of the sources
+	m := pgtype.NewMap() // its types scan the text[] of the sources and the claims
 	var apps []App
 	for rows.Next() {
 		var a App
 		var sources []string
-		var options []byte
 		if err := rows.Scan(&a.ID, &a.LoginURL, &a.ConsentURL, &a.LogoutURL, &a.Method, &a.AuthMode,
-			m.SQLScanner(&sources), &a.ClientCertFingerprint, &options); err != nil {
+			m.SQLScanner(&sources), &a.ClientCertFingerprint, m.SQLScanner(&a.ReceiveClaims)); err != nil {
 			return nil, err
 		}
 		for _, src := range sources {
@@ -245,19 +243,9 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 			}
 			a.AllowedSources = append(a.AllowedSources, prefix)
 		}
-		if err := unmarshalNumbers(options, &a.Options); err != nil {
-			return nil, fmt.Errorf("app %s: options: %w", a.ID, err)
-		}
 		apps = append(apps, a)
 	}
 	return apps, rows.Err()
-}
-
-// unmarshalNumbers is json.Unmarshal with numbers as json.Number, exact.
-func unmarshalNumbers(data []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	return dec.Decode(v)
 }
 
 func readFlows(ctx context.Context, q querier) ([]Flow, error) {

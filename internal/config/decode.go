@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"math"
-	"math/big"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -124,16 +121,14 @@ func (p *prepare) walk(n *yaml.Node, t reflect.Type, path string) {
 		p.alias(n, t, path, func() { p.walk(n.Alias, t, path) })
 		return
 	case yaml.ScalarNode:
-		p.scalar(n, path, t.Kind() == reflect.Interface)
+		p.scalar(n, path)
 		p.typed(n, t, path)
 		return
 	}
 	switch {
-	case t.Kind() == reflect.Interface: // app options
-		p.values(n, path, true)
 	case reflect.PointerTo(t).Implements(unmarshalerType):
 		// List, Localized, SeedStep…: they check their own shape.
-		p.values(n, path, false)
+		p.values(n, path)
 	case t.Kind() == reflect.Struct && n.Kind == yaml.MappingNode:
 		p.mapping(n, t, path)
 	case t.Kind() == reflect.Map && n.Kind == yaml.MappingNode:
@@ -174,21 +169,21 @@ func (p *prepare) mapping(n *yaml.Node, t reflect.Type, path string) {
 }
 
 // values expands every scalar under n, without checking keys.
-func (p *prepare) values(n *yaml.Node, path string, keepQuoted bool) {
+func (p *prepare) values(n *yaml.Node, path string) {
 	defer p.enter(n)()
 	switch n.Kind {
 	case yaml.ScalarNode:
-		p.scalar(n, path, keepQuoted)
+		p.scalar(n, path)
 	case yaml.AliasNode:
-		p.alias(n, nil, path, func() { p.values(n.Alias, path, keepQuoted) })
+		p.alias(n, nil, path, func() { p.values(n.Alias, path) })
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			p.key(n.Content[i], path)
-			p.values(n.Content[i+1], join(path, n.Content[i].Value), keepQuoted)
+			p.values(n.Content[i+1], join(path, n.Content[i].Value))
 		}
 	case yaml.SequenceNode:
 		for i, item := range n.Content {
-			p.values(item, fmt.Sprintf("%s[%d]", path, i), keepQuoted)
+			p.values(item, fmt.Sprintf("%s[%d]", path, i))
 		}
 	}
 }
@@ -218,12 +213,10 @@ func (p *prepare) alias(n *yaml.Node, t reflect.Type, path string, walk func()) 
 
 // scalar expands ${VAR} in n. An expanded value loses its quoting and is
 // typed by what it became ("${TIMEOUT:-5s}" decodes as a duration,
-// "${UI:-false}" as a boolean), with three exceptions. An explicit tag stays:
+// "${UI:-false}" as a boolean), with two exceptions. An explicit tag stays:
 // !!str ${CLIENT_ID} is a string. It is never null: "" stays an empty string,
-// so an empty variable empties a list instead of restoring its default. Under
-// an any-typed key (app options), a quoted value stays a string:
-// "${CLIENT_ID}" holding 0123 must not become the number 83.
-func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
+// so an empty variable empties a list instead of restoring its default.
+func (p *prepare) scalar(n *yaml.Node, path string) {
 	if p.done[n] {
 		return
 	}
@@ -238,22 +231,17 @@ func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
 		return
 	}
 	if v != n.Value {
-		quoted := n.Style&quotedStyles != 0
 		n.Value, n.Style = v, n.Style&yaml.TaggedStyle
 		if n.Style == 0 {
 			// The parser tagged the reference itself (!!str): let the value decide.
 			n.Tag = ""
-			if (keepQuoted && quoted) || n.ShortTag() == nullTag {
+			if n.ShortTag() == nullTag {
 				n.Tag = strTag
 			}
 		}
 	}
 	if inSeed(path) && strings.ContainsRune(n.Value, 0) {
 		p.fail(n, path, "contains a NUL character, which Postgres does not store")
-		return
-	}
-	if keepQuoted {
-		p.exact(n, path)
 	}
 }
 
@@ -262,30 +250,6 @@ func (p *prepare) scalar(n *yaml.Node, path string, keepQuoted bool) {
 func (p *prepare) key(k *yaml.Node, path string) {
 	if inSeed(path) && strings.ContainsRune(k.Value, 0) {
 		p.fail(k, path, "key %q contains a NUL character, which Postgres does not store", k.Value)
-	}
-}
-
-// exact refuses, under an any-typed key (app options), a number YAML does not
-// keep as written: yaml.v3 reads an integer past 64 bits as a float64, which
-// rounds it as it rounds a decimal with more digits than it holds, and .inf or
-// .nan is no JSON number. Quoted, the value stays text.
-func (p *prepare) exact(n *yaml.Node, path string) {
-	if n.ShortTag() != floatTag {
-		return // an integer within 64 bits is kept exactly
-	}
-	var f float64
-	if err := n.Decode(&f); err != nil {
-		return // the decoder reports it
-	}
-	if math.IsInf(f, 0) || math.IsNaN(f) {
-		p.fail(n, path, "%s is not a JSON number: quote it to keep it as text", n.Value)
-		return
-	}
-	// 1.50 and 1e3 are kept: their value is that of the float64.
-	shortest := strconv.FormatFloat(f, 'g', -1, 64)
-	written, ok := new(big.Rat).SetString(strings.ReplaceAll(n.Value, "_", ""))
-	if kept, _ := new(big.Rat).SetString(shortest); !ok || written.Cmp(kept) != 0 {
-		p.fail(n, path, "%s would be rounded to %s: quote it to keep it as text", n.Value, shortest)
 	}
 }
 

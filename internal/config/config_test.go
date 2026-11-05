@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
-	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -605,13 +604,6 @@ dispatcher:
       login_url: http://a/login
       consent_url: http://a/consent
       method: pwd
-      options:
-        literal: "0123"
-        quoted: "${CLIENT_ID}"
-        plain: ${CLIENT_ID}
-        tagged: !!str ${CLIENT_ID}
-        flag: ${FLAG}
-        empty: "${UNSET}"
   oauth2_clients:
     - id: admin
       secret: "${ADMIN_CLIENT_SECRET}"
@@ -623,15 +615,12 @@ dispatcher:
 		"SECRETS":             "youReallyNeedToChangeThis,second",
 		"TTL":                 "",
 		"ADMIN_CLIENT_SECRET": "s3cr3t: with colon",
-		"CLIENT_ID":           "0123",
-		"FLAG":                "true",
 		"TILDE":               "~",
 		"PEM":                 pem,
 	})))
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := c.Seed.Apps[0].Options
 	for _, check := range []struct {
 		name      string
 		got, want any
@@ -649,14 +638,6 @@ dispatcher:
 		{"admin.api.public_key", c.Admin.API.PublicKey, pem},
 		{"observability.sentry.environment", c.Observability.Sentry.Environment, "123"},
 		{"observability.sentry.release", c.Observability.Sentry.Release, "${NOT_EXPANDED}"},
-		// Options keep their YAML types: quoted text stays text.
-		{"options.literal", options["literal"], "0123"},
-		{"options.quoted", options["quoted"], "0123"},
-		{"options.plain", options["plain"], 83},
-		// An explicit tag survives the expansion.
-		{"options.tagged", options["tagged"], "0123"},
-		{"options.flag", options["flag"], true},
-		{"options.empty", options["empty"], ""},
 		{"dispatcher.oauth2_clients[0].secret", c.Seed.OAuth2Clients[0].Secret, "s3cr3t: with colon"},
 		{"dispatcher.oauth2_clients[1].secret", c.Seed.OAuth2Clients[1].Secret, "~"},
 	} {
@@ -832,21 +813,21 @@ dispatcher:
 	}
 	// An anchor that contains itself is an error, not an endless walk.
 	for content, want := range map[string]string{
-		"server:\n  trusted_proxies: &a [*a]\n":                          "line 2: server.trusted_proxies[0]: anchor \"a\" contains itself",
-		"dispatcher:\n  apps:\n    - { id: a, options: &o { x: *o } }\n": "line 3: dispatcher.apps[0].options.x: anchor \"o\" contains itself",
-		"dispatcher:\n  flows: &f [{ id: f, steps: *f }]\n":              "contains itself",
+		"server:\n  trusted_proxies: &a [*a]\n":             "line 2: server.trusted_proxies[0]: anchor \"a\" contains itself",
+		"dispatcher:\n  flows: &f [{ id: f, steps: *f }]\n": "contains itself",
 	} {
 		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want %q", content, err, want)
 		}
 	}
-	// Ten levels of ten aliases: 10^10 values unfolded, walked once each.
+	// Ten levels of ten aliases: 10^10 values unfolded, walked once each. A
+	// list takes no nested list: the decoder refuses it, without unfolding.
 	var bomb strings.Builder
-	bomb.WriteString("dispatcher:\n  apps:\n    - id: a\n      options:\n        l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n")
+	bomb.WriteString("dispatcher:\n  apps:\n    - id: a\n      allowed_sources:\n        - &l0 [x, x, x, x, x, x, x, x, x, x]\n")
 	for i := 1; i <= 10; i++ {
-		fmt.Fprintf(&bomb, "        l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d, ", i-1), 10), ", "))
+		fmt.Fprintf(&bomb, "        - &l%d [%s]\n", i, strings.TrimSuffix(strings.Repeat(fmt.Sprintf("*l%d, ", i-1), 10), ", "))
 	}
-	if _, _, err := load(t, bomb.String(), nil); err == nil || !strings.Contains(err.Error(), "excessive aliasing") {
+	if _, _, err := load(t, bomb.String(), nil); err == nil || !strings.Contains(err.Error(), "cannot unmarshal") {
 		t.Errorf("alias bomb: err = %v", err)
 	}
 	// options take any key, an app does not.
@@ -875,20 +856,20 @@ func TestMalformed(t *testing.T) {
 			t.Errorf("%q: err = %v, want %q", content, err, want)
 		}
 	}
-	// Aliases under options, and a list of merged mappings.
+	// Aliases of a list, and a list of merged mappings.
 	c, _, err := load(t, `
 dispatcher:
   apps:
-    - { id: a, login_url: &login "http://a", consent_url: "http://a", method: m, options: { scopes: &scopes ["${SCOPE}"] } }
-    - { id: b, login_url: *login, consent_url: "http://b", method: m, options: { scopes: *scopes, all: [*scopes] } }
+    - { id: a, login_url: &login "http://a", consent_url: "http://a", method: m, receive_claims: &claims ["${CLAIM}"] }
+    - { id: b, login_url: *login, consent_url: "http://b", method: m, receive_claims: *claims }
     - <<: [{ login_url: "http://c" }, { consent_url: "http://c" }]
       id: c
       method: m
-`, map[string]string{"SCOPE": "openid"})
+`, map[string]string{"CLAIM": "email"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if apps := c.Seed.Apps; !reflect.DeepEqual(apps[1].Options["scopes"], []any{"openid"}) || apps[1].LoginURL != "http://a" ||
+	if apps := c.Seed.Apps; !reflect.DeepEqual(apps[1].ReceiveClaims, &List{"email"}) || apps[1].LoginURL != "http://a" ||
 		apps[2].LoginURL != "http://c" || apps[2].ConsentURL != "http://c" {
 		t.Errorf("apps = %+v", apps)
 	}
@@ -1256,7 +1237,7 @@ dispatcher:
 		"NUL in a title":           {apps + "  flows:\n    - { id: f, title: \"a\\0b\", description: D, steps: [{ id: a, order: 0 }] }\n", "line 7: dispatcher.flows[0].title: contains a NUL character"},
 		"NUL in a locale":          {apps + "  flows:\n    - { id: f, title: { \"fr\\0\": F }, description: D, steps: [{ id: a, order: 0 }] }\n", "line 7: dispatcher.flows[0].title: key \"fr\\x00\" contains a NUL character"},
 		"NUL in an option key":     {app + "      options: { \"k\\0\": 1 }\n", "dispatcher.apps[0].options: key \"k\\x00\" contains a NUL character"},
-		"NUL in an option":         {app + "      options: { k: [\"\\0\"] }\n", "dispatcher.apps[0].options.k[0]: contains a NUL character"},
+		"NUL in a claim":           {app + "      receive_claims: [\"a\\0\"]\n", "dispatcher.apps[0].receive_claims[0]: contains a NUL character"},
 		"NUL in a method":          {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: \"m\\0\" }\n", "dispatcher.apps[0].method: contains a NUL character"},
 		"acr with a space":         {apps + "  flows:\n    - { id: f, title: T, description: D, acr: \"loa 2\", steps: [{ id: a, order: 0 }] }\n", "dispatcher.flows[0].acr: \"loa 2\" contains a space"},
 		"auth mode":                {app + "      auth_mode: token\n", "dispatcher.apps[0].auth_mode: \"token\" is not network or mtls"},
@@ -1266,6 +1247,8 @@ dispatcher:
 		"mtls without fingerprint": {app + "      auth_mode: mtls\n", "dispatcher.apps[0].client_cert_fingerprint: must be the SHA-256"},
 		"short fingerprint":        {app + "      auth_mode: mtls\n      client_cert_fingerprint: abcd\n", "dispatcher.apps[0].client_cert_fingerprint: must be the SHA-256"},
 		"source in options":        {app + "      options: { allowed_sources: [10.1.0.0/16] }\n", "dispatcher.apps[0].options.allowed_sources: is a key of the app"},
+		"claims in options":        {app + "      options: { receive_claims: [email] }\n", "dispatcher.apps[0].options.receive_claims: is a key of the app"},
+		"claims as a mapping":      {app + "      receive_claims: { a: b }\n", "expected a list"},
 		"no locale":                {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
 	} {
 		if _, _, err := load(t, tt.content, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
@@ -1274,56 +1257,48 @@ dispatcher:
 	}
 }
 
-// A number of the options is kept as written, or refused: yaml.v3 reads an
-// integer past 64 bits as a float64, and a float64 rounds what it cannot hold.
-func TestExactOptions(t *testing.T) {
-	c, _, err := load(t, `
-dispatcher:
-  apps:
-    - id: a
-      login_url: http://a/login
-      consent_url: http://a/consent
-      method: pwd
-      options:
-        uint: 12345678901234567890
-        tolerance: 0.0000001
-        big: 1e21
-        scale: 1.50
-        under: 1_000.5
-        negative: -0.0
-        quoted: "123456789012345678901"
-        id: ${ID}
-`, map[string]string{"ID": "18446744073709551615"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := map[string]any{
-		"uint": uint64(12345678901234567890), "tolerance": 1e-7, "big": 1e21, "scale": 1.5, "under": 1000.5,
-		"negative": math.Copysign(0, -1), "quoted": "123456789012345678901", "id": uint64(18446744073709551615),
-	}; !reflect.DeepEqual(c.Seed.Apps[0].Options, want) {
-		t.Errorf("options = %#v", c.Seed.Apps[0].Options)
-	}
-	const app = "dispatcher:\n  apps:\n    - { id: a, login_url: http://a, consent_url: http://a, method: m, options: %s }\n"
-	for options, want := range map[string]string{
-		"{ id: 123456789012345678901 }":        "line 3: dispatcher.apps[0].options.id: 123456789012345678901 would be rounded to 1.2345678901234568e+20: quote it",
-		"{ x: [0.12345678901234567890] }":      "dispatcher.apps[0].options.x[0]: 0.12345678901234567890 would be rounded to 0.12345678901234568",
-		"{ x: { y: .inf } }":                   "dispatcher.apps[0].options.x.y: .inf is not a JSON number",
-		"{ x: -.Inf }":                         "dispatcher.apps[0].options.x: -.Inf is not a JSON number",
-		"{ x: .nan }":                          "dispatcher.apps[0].options.x: .nan is not a JSON number",
-		"{ x: !!float 123456789012345678901 }": "dispatcher.apps[0].options.x: 123456789012345678901 would be rounded",
-		// Not a number at all: the decoder says so.
-		"{ x: !!float abc }": "cannot decode !!str `abc` as a !!float",
+// Absent or null, every claim; a list, those it names; empty, none: an empty
+// variable must not widen what the app sees.
+func TestReceiveClaims(t *testing.T) {
+	const app = "dispatcher:\n  apps:\n    - { id: a, login_url: http://a, consent_url: http://a, method: m%s }\n"
+	for extra, want := range map[string]*List{
+		"":                                 nil,
+		", receive_claims: ~":              nil,
+		", receive_claims: []":             {},
+		", receive_claims: [email, name]":  {"email", "name"},
+		`, receive_claims: "email, name"`:  {"email", "name"},
+		`, receive_claims: "${NO_CLAIMS}"`: {},
 	} {
-		if _, _, err := load(t, fmt.Sprintf(app, options), nil); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: err = %v, want %q", options, err, want)
+		c, _, err := load(t, fmt.Sprintf(app, extra), nil)
+		if err != nil {
+			t.Errorf("%q: %v", extra, err)
+			continue
+		}
+		if got := c.Seed.Apps[0].ReceiveClaims; !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: ReceiveClaims = %v, want %v", extra, got, want)
 		}
 	}
-	// A variable is typed by what it holds, unless quoted.
-	_, _, err = load(t, "dispatcher:\n  apps:\n    - id: a\n      login_url: http://a\n      consent_url: http://a\n      method: m\n      options:\n        quoted: \"${BIG}\"\n        plain: ${BIG}\n",
-		map[string]string{"BIG": "99999999999999999999"})
-	if err == nil || !strings.Contains(err.Error(), "line 9: dispatcher.apps[0].options.plain: 99999999999999999999 would be rounded") ||
-		strings.Contains(err.Error(), "options.quoted") {
-		t.Errorf("variables: err = %v", err)
+}
+
+// The options of an app, which Symfony never read, are dropped unread: their
+// values may hold what the expansion refuses.
+func TestOptionsIgnored(t *testing.T) {
+	const app = "dispatcher:\n  apps:\n    - { id: a, login_url: http://a, consent_url: http://a, method: m, options: %s }\n"
+	const warning = "dispatcher.apps[0].options is ignored"
+	for options, warned := range map[string]bool{
+		`{ theme: "%env(THEME)%", n: 123456789012345678901 }`: true,
+		`{ x: &o { y: *o } }`: true,
+		`{}`:                  false,
+		`~`:                   false,
+	} {
+		_, warnings, err := load(t, fmt.Sprintf(app, options), nil)
+		if err != nil {
+			t.Errorf("%s: %v", options, err)
+			continue
+		}
+		if got := strings.Contains(strings.Join(warnings, "\n"), warning); got != warned {
+			t.Errorf("%s: warnings = %q, want the warning: %v", options, warnings, warned)
+		}
 	}
 }
 

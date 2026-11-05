@@ -107,18 +107,16 @@ func TestPreviousClaims(t *testing.T) {
 func TestReceivedClaims(t *testing.T) {
 	claims := Object{"email": json.RawMessage(`"a@b"`), "name": json.RawMessage(`"A"`)}
 	for _, tc := range []struct {
-		name    string
-		options map[string]any
-		want    string
+		name   string
+		claims []string
+		want   string
 	}{
 		{"no receive_claims, all", nil, `{"email":"a@b","name":"A"}`},
-		{"receive_claims", map[string]any{"receive_claims": []any{"email", "phone"}}, `{"email":"a@b"}`},
-		{"receive_claims empty", map[string]any{"receive_claims": []any{}}, `{}`},
-		{"receive_claims not a list", map[string]any{"receive_claims": "email"}, `{}`},
-		{"receive_claims with a number", map[string]any{"receive_claims": []any{json.Number("1"), "name"}}, `{"name":"A"}`},
+		{"receive_claims", []string{"email", "phone"}, `{"email":"a@b"}`},
+		{"receive_claims empty", []string{}, `{}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := js(t, ReceivedClaims(claims, store.App{Options: tc.options})); got != tc.want {
+			if got := js(t, ReceivedClaims(claims, store.App{ReceiveClaims: tc.claims})); got != tc.want {
 				t.Errorf("ReceivedClaims = %s; want %s", got, tc.want)
 			}
 		})

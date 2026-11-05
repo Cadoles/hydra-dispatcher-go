@@ -1,7 +1,7 @@
 # Allowlist: only the Go sources this Dockerfile and tools/recorder/Dockerfile
-# build from enter the context, never a local binary (cmd/dispatcher/dispatcher
-# after a go build there), an .env or editor files. Files a package embeds
-# will need a line of their own.
+# build from enter the context, never a local binary
+# (cmd/hydra-dispatcher/hydra-dispatcher after a go build there), an .env or
+# editor files. Files a package embeds will need a line of their own.
 *
 !go.mod
 !go.sum

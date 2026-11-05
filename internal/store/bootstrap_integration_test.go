@@ -4,7 +4,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -116,7 +115,7 @@ func TestBootstrapHydraDev(t *testing.T) {
 func TestBootstrapModes(t *testing.T) {
 	ctx := context.Background()
 	p := migrated(t)
-	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, options) VALUES ('a', 'http://old/login', 'http://a/consent', 'pwd', '{"client_secret": "old-secret", "gone": 1}')`)
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('a', 'http://old/login', 'http://a/consent', 'pwd', '{email}')`)
 	exec(t, p, `INSERT INTO flow (id, title, description) VALUES ('legacy', '{"fr": "L"}', '{"fr": "L"}')`)
 	exec(t, p, `INSERT INTO flow_step (flow_id, app_id, position) VALUES ('legacy', 'a', 0)`)
 	exec(t, p, `INSERT INTO setting (key, value) VALUES ('consent_auto_accept', 'true'), ('remember', 'false'), ('old_key', '1')`)
@@ -124,7 +123,7 @@ func TestBootstrapModes(t *testing.T) {
 	seed := loadSeed(t, `
 dispatcher:
   apps:
-    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd, options: { theme: dark, client_secret: new-secret } }
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd, receive_claims: [email, name] }
   flows:
     - { id: f, title: F, description: D, steps: [{ id: a, order: 0 }] }
   oauth2_clients:
@@ -139,7 +138,7 @@ dispatcher:
 	}
 	want := []string{
 		"keep setting consent_auto_accept: value", "keep setting remember: value", "absent setting old_key",
-		"keep app a: login_url,options",
+		"keep app a: login_url,receive_claims",
 		"create flow f", "absent flow legacy",
 		"keep api_client c: secret,scopes", "absent api_client legacy",
 	}
@@ -158,7 +157,7 @@ dispatcher:
 	}
 	want = []string{
 		"update setting consent_auto_accept: value", "reset setting remember: value", "absent setting old_key",
-		"update app a: login_url,options",
+		"update app a: login_url,receive_claims",
 		"same flow f", "absent flow legacy",
 		"update api_client c: secret,scopes", "absent api_client legacy",
 	}
@@ -175,9 +174,8 @@ dispatcher:
 	if f := changes[6].Fields[0]; !f.Secret || f.Old != "" || f.New != "" {
 		t.Errorf("secret change = %+v, want no value", f)
 	}
-	// Options may hold an app's secrets: the keys that change, no value.
-	if f := changes[3].Fields[1]; !slices.Equal(f.Keys, []string{"client_secret", "gone", "theme"}) || f.Old != "" || f.New != "" {
-		t.Errorf("options change = %+v, want the keys only", f)
+	if f := changes[3].Fields[1]; f.Old != `["email"]` || f.New != `["email","name"]` {
+		t.Errorf("receive_claims change = %+v", f)
 	}
 	if s, _ := p.Snapshot(ctx); !s.Settings.ConsentAutoAccept {
 		t.Error("the dry run wrote")
@@ -188,7 +186,7 @@ dispatcher:
 	}
 	s, _ = p.Snapshot(ctx)
 	a, _ := s.App("a")
-	if a.LoginURL != "http://a/login" || a.Options["theme"] != "dark" || s.Settings.ConsentAutoAccept || !s.Settings.Remember || len(s.Flows) != 2 {
+	if a.LoginURL != "http://a/login" || !slices.Equal(a.ReceiveClaims, []string{"email", "name"}) || s.Settings.ConsentAutoAccept || !s.Settings.Remember || len(s.Flows) != 2 {
 		t.Errorf("force: app a = %+v, settings = %+v, flows = %d", a, s.Settings, len(s.Flows))
 	}
 	if !slices.Equal(s.Warnings, []string{`setting "old_key" is unknown to this version: ignored`}) {
@@ -349,8 +347,7 @@ func replica(t *testing.T, p *Postgres) *Postgres {
 }
 
 // Every kind of field comes back as written: a second pass, with or without
-// force, finds it the same. The numbers of the options too, which jsonb
-// writes without exponent.
+// force, finds it the same.
 func TestBootstrapRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	p := migrated(t)
@@ -363,8 +360,9 @@ dispatcher:
       consent_url: http://a/consent
       method: pwd
       allowed_sources: ["10.0.0.1", "::ffff:10.1.0.0/112", "2001:DB8::/32", "10.2.0.1/16"]
-      options: { tolerance: 0.0000001, big: 1e21, zero: -0.0, uint: 12345678901234567890, scale: 1.50, nested: { list: [1, "x", ~, true] } }
-    - { id: m, login_url: http://m/login, consent_url: http://m/consent, logout_url: http://m/logout, method: otp, auth_mode: mtls, client_cert_fingerprint: "`+fingerprint+`" }
+      receive_claims: [email, "given name"]
+    - { id: m, login_url: http://m/login, consent_url: http://m/consent, logout_url: http://m/logout, method: otp, auth_mode: mtls, client_cert_fingerprint: "`+fingerprint+`", receive_claims: [] }
+    - { id: n, login_url: http://n/login, consent_url: http://n/consent, method: pwd }
   flows:
     - id: f
       title: F
@@ -402,13 +400,15 @@ dispatcher:
 		sources = append(sources, src.String())
 	}
 	if !slices.Equal(sources, []string{"10.0.0.1/32", "10.1.0.0/16", "2001:db8::/32", "10.2.0.0/16"}) ||
-		a.Options["tolerance"] != json.Number("0.0000001") || a.Options["big"] != json.Number("1000000000000000000000") ||
-		a.Options["zero"] != json.Number("0") || a.Options["uint"] != json.Number("12345678901234567890") {
-		t.Errorf("app a: sources %q, options %v", sources, a.Options)
+		!slices.Equal(a.ReceiveClaims, []string{"email", "given name"}) {
+		t.Errorf("app a: sources %q, claims %q", sources, a.ReceiveClaims)
 	}
 	if m, _ := s.App("m"); m.AuthMode != "mtls" || m.ClientCertFingerprint != strings.ToLower(strings.ReplaceAll(fingerprint, ":", "")) ||
-		m.AllowedSources != nil || m.LogoutURL != "http://m/logout" {
+		m.AllowedSources != nil || m.LogoutURL != "http://m/logout" || m.ReceiveClaims == nil || len(m.ReceiveClaims) != 0 {
 		t.Errorf("app m = %+v", m)
+	}
+	if n, _ := s.App("n"); n.ReceiveClaims != nil {
+		t.Errorf("app n: claims %#v, want nil", n.ReceiveClaims)
 	}
 	want := []Flow{{
 		ID: "f", Title: map[string]string{"": "F"}, Description: map[string]string{"fr": "D"}, IconURL: map[string]string{"": "http://i/f.svg"},

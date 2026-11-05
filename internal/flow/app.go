@@ -167,7 +167,7 @@ func (r *run) appCall(ev AppCall) Outcome {
 
 // served answers with a login or consent request served to an app (EMU-8,
 // EMU-18): its app gone from the snapshot is E1005, as on the pages (EMU-28,
-// BCL-11, Q21), its options with it; a stored flow it cannot read, E1000.
+// BCL-11, Q21), its receive_claims with it; a stored flow it cannot read, E1000.
 func (s surface) served(req any, err error) Outcome {
 	switch {
 	case errors.Is(err, errAppGone):

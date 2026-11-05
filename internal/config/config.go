@@ -211,7 +211,7 @@ type Logout struct {
 	PropagateWithoutRecord string `yaml:"propagate_without_record"`
 }
 
-// Serve lets `dispatcher serve` migrate and bootstrap at startup, for
+// Serve lets `hydra-dispatcher serve` migrate and bootstrap at startup, for
 // development; production prefers the explicit subcommands.
 type Serve struct {
 	Migrate bool `yaml:"migrate"`

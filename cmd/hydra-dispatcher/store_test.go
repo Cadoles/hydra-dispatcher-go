@@ -122,7 +122,7 @@ var someChanges = []store.Change{
 	{Kind: "setting", ID: "remember", Action: store.Reset, Fields: []store.FieldChange{{Name: "value", Old: "false", New: "true"}}},
 	{Kind: "app", ID: "hydra-sql", Action: store.Update, Fields: []store.FieldChange{
 		{Name: "login_url", Old: `"http://old"`, New: `"http://new"`},
-		{Name: "options", Keys: []string{"client_secret", "theme"}},
+		{Name: "receive_claims", Old: `null`, New: `["email"]`},
 	}},
 	{Kind: "api_client", ID: "test", Action: store.Keep, Fields: []store.FieldChange{{Name: "secret", Secret: true}}},
 	{Kind: "flow", ID: "hydra-sql", Action: store.Same},
@@ -136,7 +136,7 @@ func TestPrintChanges(t *testing.T) {
           value: false -> true
 update  app hydra-sql
           login_url: "http://old" -> "http://new"
-          options: client_secret, theme changed
+          receive_claims: null -> ["email"]
 keep    api_client test (left as it is without -force)
           secret: changed
 same    flow hydra-sql
@@ -263,7 +263,7 @@ func TestServePreparesStore(t *testing.T) {
 		t.Fatalf("err = %v, calls = %q", err, f.Calls())
 	}
 	for _, want := range []string{
-		`"msg":"bootstrap.change"`, `"kind":"app","id":"hydra-sql","action":"update","fields":["login_url","options"]`,
+		`"msg":"bootstrap.change"`, `"kind":"app","id":"hydra-sql","action":"update","fields":["login_url","receive_claims"]`,
 		`"msg":"bootstrap.done"`, `"mode":"force","summary":"update 1, reset 1, keep 1, same 1, absent 1"`,
 	} {
 		if !strings.Contains(logs, want) {
@@ -271,7 +271,7 @@ func TestServePreparesStore(t *testing.T) {
 		}
 	}
 	// A change left as it is logged, an unchanged one is not; a change
-	// without fields has none. The values stay out: options may hold secrets.
+	// without fields has none. The values stay out.
 	if strings.Contains(logs, `"action":"same"`) || strings.Index(logs, "bootstrap.done") > strings.Index(logs, "server.started") ||
 		!strings.Contains(logs, `"kind":"flow","id":"legacy","action":"absent"}`) || strings.Contains(logs, "http://new") {
 		t.Errorf("logs:\n%s", logs)

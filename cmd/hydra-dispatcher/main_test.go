@@ -26,7 +26,7 @@ func TestRun(t *testing.T) {
 		wantErr error
 		wantOut string
 	}{
-		{"no command", nil, errUsage, "Usage: dispatcher"},
+		{"no command", nil, errUsage, "Usage: hydra-dispatcher"},
 		{"unknown command", []string{"nope"}, errUsage, `unknown command "nope"`},
 		{"help", []string{"help"}, nil, "serve"},
 		{"bad flag", []string{"serve", "-nope"}, errUsage, ""},
@@ -174,7 +174,7 @@ func TestMainProcess(t *testing.T) {
 		{"healthcheck -url http://127.0.0.1:1/health", 1},
 	} {
 		if got := exitCode(child(tt.args).Run()); got != tt.want {
-			t.Errorf("dispatcher %s: exit code %d, want %d", tt.args, got, tt.want)
+			t.Errorf("hydra-dispatcher %s: exit code %d, want %d", tt.args, got, tt.want)
 		}
 	}
 
