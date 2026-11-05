@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/logout?logout_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "04398899-b22a-41b1-8a57-c32e8f3eb203",
+      "subject": "alice",
+      "sid": "f1b997b1-5458-4253-829d-771268729418",
+      "request_url": "/oauth2/sessions/logout",
+      "rp_initiated": false,
+      "client": null
+    }
+  }
+}

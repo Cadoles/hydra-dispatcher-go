@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/logout?logout_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 410,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "redirect_to": "/oauth2/sessions/logout"
+    }
+  }
+}

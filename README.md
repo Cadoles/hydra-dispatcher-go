@@ -117,6 +117,35 @@ REDIS_URLS='redis://127.0.0.1:56379/0,redis://127.0.0.1:56380/0' \
   go test -race -tags integration ./internal/state/...
 ```
 
+`internal/hydra`'s integration test (same tag) plays what a browser does to
+Hydra's logout, which no admin answer shows: the verifier, the back-channel, the
+session cookie (the HLO lines of the transitions table). It needs a Hydra 2.1.2,
+2.2.0 and 2.3.0 on Postgres, on ports of their own, never the stack's, given by
+`HYDRA_URLS`, comma-separated, each `public|admin`, with
+`urls.post_logout_redirect` and the short `id_token` lifetime below;
+`HYDRA_CALLBACK_HOST` is where they reach the test for the back-channel, the docker
+bridge by default. The tag without `HYDRA_URLS` fails. The CI does not run it: its
+services cannot be given Hydra's command, nor migrate first:
+
+```sh
+docker run -d --rm --name hydra-pg -e POSTGRES_PASSWORD=hydra postgres:17-alpine
+PG=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' hydra-pg)
+port=56444
+for v in 2.1.2 2.2.0 2.3.0; do
+  db=h$(echo $v | tr -d .)
+  docker exec hydra-pg psql -U postgres -c "create database $db"
+  dsn="postgres://postgres:hydra@$PG:5432/$db?sslmode=disable"
+  docker run --rm -e DSN="$dsn" oryd/hydra:v$v migrate sql -e --yes
+  docker run -d --rm --name hydra-$db -p 127.0.0.1:$port:4444 -p 127.0.0.1:$((port+1)):4445 -e DSN="$dsn" \
+    -e SECRETS_SYSTEM=youReallyNeedToChangeThis -e URLS_SELF_ISSUER=http://127.0.0.1:$port \
+    -e URLS_LOGIN=http://login.test/login -e URLS_CONSENT=http://login.test/consent -e URLS_LOGOUT=http://login.test/logout \
+    -e URLS_POST_LOGOUT_REDIRECT=http://post.test/default -e TTL_ID_TOKEN=3s oryd/hydra:v$v serve all --dev
+  port=$((port+2))
+done
+HYDRA_URLS='http://127.0.0.1:56444|http://127.0.0.1:56445,http://127.0.0.1:56446|http://127.0.0.1:56447,http://127.0.0.1:56448|http://127.0.0.1:56449' \
+  go test -race -tags integration ./internal/hydra/...
+```
+
 The golden files are rewritten with `-update`; review the diff:
 
 - the emulated API's (`internal/hydra/testdata/emulated`):
@@ -157,4 +186,8 @@ go run ./examples/hydra-dev/e2e -v second-login
 - `tools/flowfixtures`: records Hydra 2.2 login and consent challenges with the
   matching admin API responses, for `internal/hydra/flowcodec`. Run it against
   `make up-hydra22`:
-  `go run ./tools/flowfixtures -client <client_id> -out internal/hydra/flowcodec/testdata/hydra-v2.2.0`
+  `go run ./tools/flowfixtures -client <client_id> -out internal/hydra/flowcodec/testdata/hydra-v2.2.0`.
+  With `-errors`, Hydra's answers to unknown, handled, refused and expired
+  requests, of any version (`internal/hydra/testdata/errors`); with `-secret` and
+  `-post-logout` too, the logout's, for which it redeems an `id_token`. The command
+  is at the top of `tools/flowfixtures/main.go`.

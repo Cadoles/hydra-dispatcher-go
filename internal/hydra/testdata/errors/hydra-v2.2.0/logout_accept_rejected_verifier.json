@@ -1,0 +1,11 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/oauth2/sessions/logout?logout_verifier=\u003clogout_verifier\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "text/html; charset=utf-8",
+    "body": "\u003chtml\u003e\n\u003chead\u003e\n    \u003cmeta http-equiv=\"refresh\" content=\"7; URL=http://post.test/default\"\u003e\n\u003c/head\u003e\n\u003cstyle type=\"text/css\"\u003e\n    iframe { position: absolute; left: 0; top: 0; height: 0; width: 0; border: none; }\n\u003c/style\u003e\n\u003cscript\u003e\n    var total =  1 ;\n    var redir = \"http://post.test/default\";\n\n\tvar timeouts = [];\n\tvar redirected = false;\n\t\n\twindow.onbeforeunload = () =\u003e {\n\t\tredirected = true;\n\t\tfor (var i=0; i\u003ctimeouts.length; i++) {\n\t\t\tclearTimeout(timeouts[i]);\n\t\t}\n\t\ttimeouts = [];\n\t};\n\tfunction setAndRegisterTimeout(fct, duration) {\n\t\tif (redirected) {\n\t\t\treturn;\n\t\t}\n\t\ttimeouts.push(setTimeout(fct, duration));\n\t}\n\n\tfunction redirect() {\n\t\twindow.location.replace(redir);\n\n\t\t\n\t\tsetAndRegisterTimeout(function () {\n\t\t\twindow.location.href = redir;\n\t\t}, 250);\n\t}\n\n    function done() {\n        total--;\n        if (total \u003c 1) {\n\t\t\tsetAndRegisterTimeout(redirect, 500);\n        }\n    }\n\n\tsetAndRegisterTimeout(redirect, 7000); \n\n\t\n\tsetTimeout(function () {\n\t\tdocument.getElementById(\"redir\").style.display = \"block\";\n\t}, 2000);\n\u003c/script\u003e\n\u003cbody\u003e\n\u003cnoscript\u003e\n    \u003cp\u003e\n        JavaScript is disabled - you should be redirected in 5 seconds but if not, click \u003ca\n            href=\"http://post.test/default\"\u003ehere\u003c/a\u003e to continue.\n    \u003c/p\u003e\n\u003c/noscript\u003e\n\n\u003cp id=\"redir\" style=\"display: none\"\u003e\n    Redirection takes unusually long. If you are not being redirected within the next seconds, click \u003ca href=\"http://post.test/default\"\u003ehere\u003c/a\u003e to continue.\n\u003c/p\u003e\n\n\u003ciframe src=\"http://oidc.client.test/front?iss=\u003ciss\u003e\u0026amp;sid=\u003csid\u003e\" onload=\"done(this)\"\u003e\u003c/iframe\u003e\n\n\u003c/body\u003e\n\u003c/html\u003e"
+  }
+}

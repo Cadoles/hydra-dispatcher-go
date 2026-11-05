@@ -1,0 +1,20 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/logout?logout_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "b0cb3057-b4c7-400c-9b68-c5fabb8524bc",
+      "subject": "alice",
+      "sid": "b6dd2ff9-8b2c-4f69-aafa-8804c52d2e14",
+      "request_url": "/oauth2/sessions/logout",
+      "rp_initiated": false,
+      "expires_at": "2026-11-05T20:24:51Z",
+      "requested_at": "2026-11-05T20:24:46Z",
+      "client": null
+    }
+  }
+}

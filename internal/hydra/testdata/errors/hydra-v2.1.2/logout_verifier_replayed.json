@@ -1,0 +1,12 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/oauth2/sessions/logout?logout_verifier=\u003clogout_verifier\u003e"
+  },
+  "response": {
+    "status": 302,
+    "content_type": "text/html; charset=utf-8",
+    "location": "/oauth2/fallbacks/error?error=Not+Found\u0026error_description=Unable+to+locate+the+requested+resource",
+    "body": ""
+  }
+}

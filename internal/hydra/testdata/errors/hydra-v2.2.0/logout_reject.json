@@ -1,0 +1,11 @@
+{
+  "request": {
+    "method": "PUT",
+    "uri": "/admin/oauth2/auth/requests/logout/reject?logout_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 204,
+    "content_type": "",
+    "body": ""
+  }
+}

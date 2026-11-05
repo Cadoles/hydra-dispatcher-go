@@ -1,0 +1,65 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/logout?logout_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "b692b258-a2d3-476c-b9c4-57a9739e6ef9",
+      "subject": "alice",
+      "sid": "f1b997b1-5458-4253-829d-771268729418",
+      "request_url": "/oauth2/sessions/logout",
+      "rp_initiated": true,
+      "client": {
+        "client_id": "b9f69fbb-8f52-4736-b231-3f19a91b5d47",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-11-05T20:24:22Z",
+        "updated_at": "2026-11-05T20:24:22.237774Z",
+        "frontchannel_logout_uri": "http://oidc.client.test/front",
+        "post_logout_redirect_uris": [
+          "http://oidc.client.test/post"
+        ],
+        "metadata": {
+          "tenant": "t"
+        },
+        "skip_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      }
+    }
+  }
+}

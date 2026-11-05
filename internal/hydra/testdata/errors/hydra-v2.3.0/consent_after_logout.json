@@ -1,0 +1,84 @@
+{
+  "request": {
+    "method": "GET",
+    "uri": "/admin/oauth2/auth/requests/consent?consent_challenge=\u003cchallenge\u003e"
+  },
+  "response": {
+    "status": 200,
+    "content_type": "application/json; charset=utf-8",
+    "body": {
+      "challenge": "M3Ztz1gihsD4Fq3fMG0MEbMtWIQBRndYT5MItPv-zOq0VYgI1XKQyH9UGyYC91wvsXmTE0OYEjlc1q0Rc_jLr7ponDtRn7siJzsoY9LIFd036MuHHWBprhYM38YL4jUvbNYbI8P46gnygURu-iEEVcDohiiXPSCWOLsARwTr4zRHVBjSU9qaL-Lw13q54tsxW3r93gJSKM0P3uT-YfplfTcGF3cvYVUoDeL91fCbw2GjV3DHkukNw9mUSklmz9tvK6zzVnZJ1wbRPCD1Becm6U4pevS2VkFnDO9PtfHZjH8_OnbObB9npQ9bgBBYZVzHnGVQtl_7cu4ma5XcvxQ-mqA2j4QyrY5g-5-4_TFR6SP1UxUKy1lqaXcrowvfr_aUMg4iFmU8aKkEhXEXvuT6-7K2S03feU8YajhxAlA98iD_lKm7Tv5L3fpLqwCm1jrWmZZXaqLEjnS2sM4mZzSylRY053jEdEi2_OUqKMIoTohUG-pYC3WBz0Xxapilh5uTtlfM0DOLeCqjvnzRT7mlQustgtDN3qQbiLW3AQVI3wNB-LIAmOvbumSFSgSnjpZFvKN-osPWERck24Om0rEMeAJavd2Ri1hpJiOAyEQr4KMhRZyhoJdfhGhSlAbJaYIX3OuNwkgu9gIsRyQkcrP3XsQTzB9qcN6BnO10ueA5GzBDca7sMpEP4TDC001xwIht6ish5Ylc4MhvUQMPRr8bTDWULEkDYMeNvVhXCgAjF7YVTLfMxiDZ0VGrjaeSWXwFtJtBdFClOlpyXIp0D3iY5K9xYuIZofWFbhcNVYZZQ6jhpuEvEW0w4RQqofK85-WjlvvjOdsVXIYQ_IqL0ixERyOPq5JC5w1i04YaKVMTzsj-X3wbTXCE_1k-fWDWU1nWfsr2p6B_BI0FOg1LJmL7fE7z_4geHdOZyeteqaUyt1XhxwlSoJAvK4VrJFH_um7wEuUbrx_6XM7P7mOX0KWSIoqxbZ0puRi3kpsql35hDvknTkPlx_DnVaBpv5psdnthBZ2T-SUMJSmi2s3a8wV9tKC3BBl6ufXfDVcZ8Oql_4jn-_wvr8DzFDW7ln4t5wxUfnPMsb_E5-poCey5TO8krfZwX_eEpIQ_SOB9RNOaG7LVNB5Euzp4SvaGne8Nf58pc0IgytWzSYpHjsJLQ0rgaN45hMgNXoV-EGV4SDoBNIaDoqa4RFHHO-hMHydgn71B74YWAjiu66QQtpRjvejhbTWb7FFE_Gwfjn_Owso-3uDCV6FgnLtjx0F8hBl3zO2YtuioInlnFCnhvIQEHd-8WGIfP7NLULiE8j8IkJ4qgbedJiH0pukInQtlLtcVOPAL-hPQ-ftXCLmhwyumHa9T4HIr2fCTBiAsjijh",
+      "requested_scope": [
+        "openid",
+        "profile",
+        "email"
+      ],
+      "requested_access_token_audience": [],
+      "skip": true,
+      "subject": "alice",
+      "oidc_context": {
+        "ui_locales": [
+          "fr",
+          "en"
+        ]
+      },
+      "client": {
+        "client_id": "a14ea9ee-b5aa-41da-80f0-18c3112378fd",
+        "client_name": "OIDC Test Client",
+        "redirect_uris": [
+          "http://oidc.client.test/auth/callback"
+        ],
+        "grant_types": [
+          "authorization_code"
+        ],
+        "response_types": [
+          "code"
+        ],
+        "scope": "openid profile email",
+        "audience": [],
+        "owner": "",
+        "policy_uri": "",
+        "allowed_cors_origins": [],
+        "tos_uri": "",
+        "client_uri": "",
+        "logo_uri": "",
+        "contacts": [],
+        "client_secret_expires_at": 0,
+        "subject_type": "public",
+        "jwks": {},
+        "token_endpoint_auth_method": "client_secret_basic",
+        "request_object_signing_alg": "RS256",
+        "userinfo_signed_response_alg": "none",
+        "created_at": "2026-11-05T20:24:42Z",
+        "updated_at": "2026-11-05T20:24:42.297436Z",
+        "frontchannel_logout_uri": "http://oidc.client.test/front",
+        "post_logout_redirect_uris": [
+          "http://oidc.client.test/post"
+        ],
+        "metadata": {
+          "tenant": "t"
+        },
+        "skip_consent": false,
+        "skip_logout_consent": false,
+        "authorization_code_grant_access_token_lifespan": null,
+        "authorization_code_grant_id_token_lifespan": null,
+        "authorization_code_grant_refresh_token_lifespan": null,
+        "client_credentials_grant_access_token_lifespan": null,
+        "implicit_grant_access_token_lifespan": null,
+        "implicit_grant_id_token_lifespan": null,
+        "jwt_bearer_grant_access_token_lifespan": null,
+        "refresh_token_grant_id_token_lifespan": null,
+        "refresh_token_grant_access_token_lifespan": null,
+        "refresh_token_grant_refresh_token_lifespan": null
+      },
+      "request_url": "http://127.0.0.1:24448/oauth2/auth?client_id=a14ea9ee-b5aa-41da-80f0-18c3112378fd\u0026nonce=flowfixtures-nonce-0123456789\u0026redirect_uri=http%3A%2F%2Foidc.client.test%2Fauth%2Fcallback\u0026response_type=code\u0026scope=openid+profile+email\u0026state=flowfixtures-state-0123456789\u0026ui_locales=fr+en",
+      "login_challenge": "47f8bee1fd944018815e339f6c399171",
+      "login_session_id": "dee59354-dd57-4224-8c8e-6c8e88ef08de",
+      "acr": "",
+      "amr": [
+        "pwd"
+      ],
+      "context": null
+    }
+  }
+}
