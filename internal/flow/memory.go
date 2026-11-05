@@ -23,17 +23,24 @@ type Remembered struct {
 	Sub string `json:"sub"`
 	// Flow and FH are the flow chosen and the fingerprint of its steps
 	// (MEM-6, MEM-7).
-	Flow string `json:"flow"`
-	FH   string `json:"fh"`
+	Flow string `json:"flow,omitempty"`
+	FH   string `json:"fh,omitempty"`
+	// AP are the apps this session saw, gathered from one consent to the other
+	// under a same sid (WRT-1, Q56): those to log out (LST-1).
+	AP []string `json:"ap,omitempty"`
+	// Lo marks a note of logout (WRT-4): v, sid, sub, ap, iat, exp and no claim.
+	// It never serves a skip (MEM-11), and the next login deletes a session
+	// Hydra still says alive (SKP-12, Q45).
+	Lo bool `json:"lo,omitempty"`
 	// ACR, AMR and Ctx are those of the final login accept, after the
 	// webhook; Ctx without x_dispatcher_* members.
-	ACR string   `json:"acr"`
-	AMR []string `json:"amr"`
+	ACR string   `json:"acr,omitempty"`
+	AMR []string `json:"amr,omitempty"`
 	Ctx Object   `json:"ctx,omitempty"`
 	// Scp and Aud are the scopes and audiences the consent granted (MEM-8,
 	// MEM-10); IDT and ACT its claims, after the webhook.
-	Scp []string `json:"scp"`
-	Aud []string `json:"aud"`
+	Scp []string `json:"scp,omitempty"`
+	Aud []string `json:"aud,omitempty"`
 	IDT Object   `json:"idt,omitempty"`
 	ACT Object   `json:"act,omitempty"`
 	IAT int64    `json:"iat"`
@@ -53,10 +60,11 @@ type Memory struct {
 }
 
 // The reasons of skip.ignored (doc, Journalisation), one per check of the
-// cookie, MEM-1 to MEM-10 in order.
+// cookie, MEM-1 to MEM-11.
 const (
 	SkipAbsent      = "absent"
 	SkipUnreadable  = "unreadable"
+	SkipLogout      = "logout"
 	SkipExpired     = "expired"
 	SkipSession     = "session"
 	SkipSubject     = "subject"

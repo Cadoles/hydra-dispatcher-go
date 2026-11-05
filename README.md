@@ -7,9 +7,8 @@ them.
 
 Go rewrite of the Symfony dispatcher (repository `hydra-dispatcher`). Work in
 progress, phase 1 (plan and journal in `hydra-dev/conception`): the binary serves the pages (choice of
-the flow, consent, errors, logout accepted at once until the confirmation of
-P9), the emulated admin API the login apps call (v2 paths and v1 aliases),
-`/health` and `/ready`; it keeps its configuration in Postgres and the flows in
+the flow, consent, errors, logout with its confirmation), the emulated admin API
+the login apps call (v2 paths and v1 aliases), `/health` and `/ready`; it keeps its configuration in Postgres and the flows in
 progress in memory, or in Redis (or Dragonfly) when `state.redis_dsn` is set, a
 call bounded to 1 s and two attempts unless its URL says otherwise (`dial_timeout`,
 `read_timeout`, `write_timeout`, `max_retries`).
@@ -164,15 +163,21 @@ three flows, through the real login apps, and checks the claims of the final
 `id_token`: first login on each flow; second login, Hydra's skip honoured from
 the `dispatcher_remember` cookie, then without it (the skip ignored, then
 another account refused), with `prompt=consent` (the screen without a flow,
-refused) and reloaded during the redirection; a logout that clears the
-cookie; `prompt=consent` accepted and refused; back to the choice. Start `make up-go` in `hydra-dev`, whose README sets the
-`*.hydra.test` names up, then:
+refused) and reloaded during the redirection; the logout, confirmed through the
+`logout_url` of each app, refused, asked by a client with its `id_token_hint`,
+and a chain stopped at an app, passed by a new demand or cut by the next login;
+`prompt=consent` accepted and refused; back to the choice. Start `make up-go` in
+`hydra-dev`, whose README sets the `*.hydra.test` names up, then:
 
 ```sh
 go run ./examples/hydra-dev/e2e            # every default scenario
 go run ./examples/hydra-dev/e2e -h         # flags and scenarios
 go run ./examples/hydra-dev/e2e -v second-login
 ```
+
+`-back-channel http://10.0.6.1:<port>` adds a check to the scenario of a chain
+stopped: a client registered for the run hears of the session deleted on that
+port of this host, which Hydra's container reaches.
 
 ## Fixture tools
 

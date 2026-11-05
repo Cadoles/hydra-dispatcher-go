@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Se déconnecter</title>
+<link rel="stylesheet" href="/static/base.css?v=737a015ac8fc">
+<link rel="stylesheet" href="/static/theme.css?v=2ede3c5a8501">
+</head>
+<body>
+<header><div class="client"><span>Client</span></div></header>
+<main>
+
+<h1>Se déconnecter</h1>
+
+<p class="lead">Voulez-vous vous déconnecter ?</p>
+<p role="alert">Cette demande vient d&#39;une autre session que celle ouverte dans ce navigateur. Si vous ne l&#39;avez pas demandée, restez connecté.</p>
+<form method="post" action="/logout?logout_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">
+<input type="hidden" name="csrf_token" value="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef">
+<input type="hidden" name="logout_challenge" value="c2FtcGxlX2NoYWxsZW5nZQ==">
+<button type="submit" name="action" value="accept">Se déconnecter</button>
+<button type="submit" name="action" value="reject" class="secondary">Rester connecté</button>
+</form>
+
+
+</main>
+<footer><form method="post" class="locales" aria-label="Langue"><input type="hidden" name="return" value="/"><button type="submit" formaction="/locale/en" lang="en">English</button><button type="submit" formaction="/locale/fr" lang="fr" aria-current="true" disabled>Français</button></form></footer>
+</body>
+</html>

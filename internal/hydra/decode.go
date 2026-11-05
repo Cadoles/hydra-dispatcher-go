@@ -53,7 +53,9 @@ func decodeConsentRequest(body []byte) (*ory.OAuth2ConsentRequest, error) {
 }
 
 // decodeLogoutRequest decodes the logout request of a 2xx answer. Its client
-// is null when the logout was not initiated by one.
+// is null when the logout was not initiated by one. Its subject and sid are
+// required (Q57): no Hydra serves one without them, and all such requests would
+// share one chain of logout, between users.
 func decodeLogoutRequest(body []byte) (*ory.OAuth2LogoutRequest, error) {
 	r, err := decodeRequest(body, func(r *ory.OAuth2LogoutRequest, c *ory.OAuth2Client, members map[string]json.RawMessage) {
 		r.Client = c
@@ -65,6 +67,8 @@ func decodeLogoutRequest(body []byte) (*ory.OAuth2LogoutRequest, error) {
 	if err := required(
 		member{"challenge", r.GetChallenge()},
 		member{"request_url", r.GetRequestUrl()},
+		member{"subject", r.GetSubject()},
+		member{"sid", r.GetSid()},
 	); err != nil {
 		return nil, err
 	}

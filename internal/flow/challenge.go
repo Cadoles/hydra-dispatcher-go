@@ -27,6 +27,9 @@ type Kind string
 const (
 	KindLogin   Kind = "login"
 	KindConsent Kind = "consent"
+	// KindLogout signs a logout's challenge, whose generation is the position
+	// in its chain.
+	KindLogout Kind = "logout"
 )
 
 // Keys are secrets.challenge_key then secrets.challenge_keys_previous: the

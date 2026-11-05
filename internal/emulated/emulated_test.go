@@ -110,6 +110,12 @@ func TestEvents(t *testing.T) {
 		{http.MethodGet, "/admin/oauth2/auth/requests/consent?consent_challenge=" + challenge, "", flow.AppGetConsent},
 		{http.MethodPut, "/admin/oauth2/auth/requests/consent/accept?consent_challenge=" + challenge, `{}`, flow.AppAcceptConsent},
 		{http.MethodPut, "/oauth2/auth/requests/consent/reject?consent_challenge=" + challenge, `{"error":"x"}`, flow.AppRejectConsent},
+		{http.MethodGet, "/admin/oauth2/auth/requests/logout?logout_challenge=" + challenge, "", flow.AppGetLogout},
+		{http.MethodPut, "/admin/oauth2/auth/requests/logout/accept?logout_challenge=" + challenge, `null`, flow.AppAcceptLogout},
+		{http.MethodPut, "/admin/oauth2/auth/requests/logout/reject?logout_challenge=" + challenge, "", flow.AppRejectLogout},
+		{http.MethodGet, "/oauth2/auth/requests/logout?logout_challenge=" + challenge, "", flow.AppGetLogout},
+		{http.MethodPut, "/oauth2/auth/requests/logout/accept?logout_challenge=" + challenge, `null`, flow.AppAcceptLogout},
+		{http.MethodPut, "/oauth2/auth/requests/logout/reject?logout_challenge=" + challenge, "", flow.AppRejectLogout},
 	} {
 		s.engine.events = nil
 		w := s.do(tc.method, tc.path, appIP, tc.body)
@@ -203,14 +209,16 @@ func TestOtherPaths(t *testing.T) {
 	}{
 		{http.MethodPut, "/admin/oauth2/auth/requests/login", outsideIP, http.StatusForbidden, "", ""},
 		{http.MethodGet, "/admin/oauth2/auth/requests/logout", outsideIP, http.StatusForbidden, "", ""},
+		{http.MethodPut, "/admin/oauth2/auth/requests/logout", appIP, http.StatusMethodNotAllowed, "GET, HEAD", ""},
+		{http.MethodGet, "/admin/oauth2/auth/requests/logout/reject", appIP, http.StatusMethodNotAllowed, "PUT", ""},
 		{http.MethodPut, "/admin/oauth2/auth/requests/login", appIP, http.StatusMethodNotAllowed, "GET, HEAD", ""},
 		{http.MethodGet, "/admin/oauth2/auth/requests/consent/accept", appIP, http.StatusMethodNotAllowed, "PUT", ""},
-		{http.MethodGet, "/admin/oauth2/auth/requests/logout", appIP, http.StatusNotFound, "", ""},
+		{http.MethodGet, "/admin/oauth2/auth/requests/nope", appIP, http.StatusNotFound, "", ""},
 		{http.MethodGet, "/admin/oauth2/auth/requests/login/", appIP, http.StatusNotFound, "", ""},
 		// An alias: its Deprecation, the refusal's too.
 		{http.MethodPost, "/oauth2/auth/requests/login/accept", outsideIP, http.StatusForbidden, "", "@1793577600"},
 		{http.MethodPost, "/oauth2/auth/requests/login/accept", appIP, http.StatusMethodNotAllowed, "PUT", "@1793577600"},
-		{http.MethodGet, "/oauth2/auth/requests/logout", appIP, http.StatusNotFound, "", ""},
+		{http.MethodGet, "/oauth2/auth/requests/nope", appIP, http.StatusNotFound, "", ""},
 	} {
 		w := s.do(tc.method, tc.path+"?login_challenge="+challenge, tc.from, "")
 		var b errorBody

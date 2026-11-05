@@ -31,7 +31,7 @@ import (
 )
 
 // pageNames are the pages, each parsed with the layout and the partials.
-var pageNames = []string{"select", "consent", "error"}
+var pageNames = []string{"select", "consent", "error", "logout"}
 
 type pages struct {
 	templates map[string]*template.Template
@@ -89,6 +89,7 @@ type page struct {
 	Audience []string
 	Error    *pageError
 	Form     form
+	Logout   logoutData
 }
 
 type localeChoice struct {
@@ -114,7 +115,16 @@ type pageError struct{ Code, MessageKey, TraceID, Link string }
 
 // form is what a page's form posts back. Print is the print of the claims a
 // consent screen without a flow shows (SKC-2, Q37), "" on a flow's.
-type form struct{ Action, LoginChallenge, ConsentChallenge, CSRF, Print string }
+type form struct{ Action, LoginChallenge, ConsentChallenge, LogoutChallenge, CSRF, Print string }
+
+// logoutData is what the logout page says: confirm, declined, in_progress or
+// already_out, the text for a demand on another session (LGO-7), and the link to
+// take a chain up again (LGO-14).
+type logoutData struct {
+	State        string
+	OtherSession bool
+	Next         string
+}
 
 // T translates key in the page's locale.
 func (p page) T(key string, args ...any) string {
@@ -298,6 +308,33 @@ func (h *Handler) consentPage(r *http.Request, cfg *store.Snapshot, c *flow.Cons
 	return p
 }
 
+// logoutStates name the states of the logout page, in its data.
+var logoutStates = map[flow.LogoutState]string{
+	flow.LogoutConfirm:    "confirm",
+	flow.LogoutDeclined:   "declined",
+	flow.LogoutInProgress: "in_progress",
+	flow.LogoutAlreadyOut: "already_out",
+}
+
+// logoutPage is the logout page (LGO): the confirmation posts to the URL of GET
+// /logout, for an error page to keep its way back to the language; after a
+// refusal, an answer to a POST, the same template has no form nor switcher, for
+// it has no URL to go back to.
+func (h *Handler) logoutPage(r *http.Request, cfg *store.Snapshot, l *flow.LogoutScreen) page {
+	p := h.page(r, cfg, nil)
+	if l.Client != nil {
+		data, _ := json.Marshal(l.Client)
+		p.Client = clientOf(data)
+	}
+	p.Logout = logoutData{State: logoutStates[l.State], OtherSession: l.OtherSession, Next: l.Next}
+	if l.State == flow.LogoutConfirm {
+		p.Form = form{Action: h.path + "/logout?logout_challenge=" + url.QueryEscape(l.Challenge), LogoutChallenge: l.Challenge, CSRF: l.CSRF}
+		return p
+	}
+	p.Locales, p.Return = nil, ""
+	return p
+}
+
 // sentClaims are the claims the consent sends, by name, each with its
 // values: the subject, as sub, then those of the id_token and of the access
 // token, a value both send only once.
@@ -426,6 +463,7 @@ func (h *Handler) samples(r *http.Request, cfg *store.Snapshot) []sample {
 		Scopes: append(scopes, "custom"), Audience: []string{"https://api.example/"}, Subject: "s", Claims: claims, AccessClaims: flow.Object{"roles": json.RawMessage(`["admin"]`)}}
 	choiceFields := map[string]string{"flow": "f", "login_challenge": sampleChallenge, "csrf_token": sampleCSRF}
 	consentFields := map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept"}
+	logoutFields := map[string]string{"logout_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept"}
 	out := []sample{
 		{"select", "flows, one refused", h.choicePage(r, cfg, &flow.ChoiceScreen{Flows: []string{"f"}, LoginChallenge: sampleChallenge, CSRF: sampleCSRF, Client: client, Invalid: true}), choiceFields},
 		{"select", "no flow", h.choicePage(r, cfg, &flow.ChoiceScreen{LoginChallenge: sampleChallenge, CSRF: sampleCSRF}), nil},
@@ -433,6 +471,11 @@ func (h *Handler) samples(r *http.Request, cfg *store.Snapshot) []sample {
 		{"consent", "nothing asked", h.consentPage(r, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF}), consentFields},
 		{"consent", "without a flow", h.consentPage(r, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint, Subject: "s", Claims: flow.Object{"email": json.RawMessage(`"v"`)}}),
 			map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept", "claims_print": samplePrint}},
+		{"logout", "confirm", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF}), logoutFields},
+		{"logout", "other session", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF, OtherSession: true, Client: &ory.OAuth2Client{ClientId: ory.PtrString("c"), ClientName: ory.PtrString("Client")}}), logoutFields},
+		{"logout", "declined", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutDeclined}), nil},
+		{"logout", "in progress", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutInProgress, Next: "/logout/next?ref=0"}), nil},
+		{"logout", "already out", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutAlreadyOut}), nil},
 	}
 	for _, code := range slices.Sorted(maps.Keys(statuses)) {
 		for _, link := range []string{"", "https://client.example/"} {

@@ -18,7 +18,11 @@ func TestDecodeRefusals(t *testing.T) {
 		{"login without request_url", loginAnswer, `{"challenge":"L","client":{"client_id":"c"},"request_url":"","skip":false,"subject":""}`, errIncompleteAnswer},
 		{"consent without subject", consentAnswer, `{"challenge":"C","client":{"client_id":"c"},"request_url":"u"}`, errIncompleteAnswer},
 		{"consent with a null client", consentAnswer, `{"challenge":"C","subject":"s","client":null,"request_url":"u"}`, errIncompleteAnswer},
-		{"logout without request_url", logoutAnswer, `{"challenge":"U","client":null}`, errIncompleteAnswer},
+		{"logout without request_url", logoutAnswer, `{"challenge":"U","client":null,"subject":"s","sid":"i"}`, errIncompleteAnswer},
+		{"logout without subject (Q57)", logoutAnswer, `{"challenge":"U","client":null,"request_url":"u","sid":"i"}`, errIncompleteAnswer},
+		{"logout with an empty subject (Q57)", logoutAnswer, `{"challenge":"U","client":null,"request_url":"u","subject":"","sid":"i"}`, errIncompleteAnswer},
+		{"logout without sid (Q57)", logoutAnswer, `{"challenge":"U","client":null,"request_url":"u","subject":"s"}`, errIncompleteAnswer},
+		{"logout with an empty sid (Q57)", logoutAnswer, `{"challenge":"U","client":null,"request_url":"u","subject":"s","sid":""}`, errIncompleteAnswer},
 		{"blank", logoutAnswer, " \n", errEmptyAnswer},
 		{"null", consentAnswer, "null", errEmptyAnswer},
 		{"not JSON", logoutAnswer, "<html></html>", nil},
@@ -34,7 +38,7 @@ func TestDecodeRefusals(t *testing.T) {
 
 // A logout request initiated by a client keeps it, jwks included.
 func TestDecodeLogoutClient(t *testing.T) {
-	r, err := decodeLogoutRequest([]byte(`{"challenge":"U","request_url":"/oauth2/sessions/logout","rp_initiated":true,
+	r, err := decodeLogoutRequest([]byte(`{"challenge":"U","subject":"s","sid":"i","request_url":"/oauth2/sessions/logout","rp_initiated":true,
 		"client":{"client_id":"c","jwks":{"keys":[{"kty":"EC","crv":"P-256","x":"x","y":"y"}]}}}`))
 	if err != nil {
 		t.Fatal(err)

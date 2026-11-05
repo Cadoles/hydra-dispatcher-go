@@ -22,6 +22,10 @@ const (
 	AppGetConsent
 	AppAcceptConsent
 	AppRejectConsent
+	// The logout's (LEM): a chain of their own, not a step of a flow.
+	AppGetLogout
+	AppAcceptLogout
+	AppRejectLogout
 )
 
 // kind is the kind of the challenges the endpoint takes.
@@ -32,7 +36,10 @@ func (o AppOp) kind() Kind {
 	return KindConsent
 }
 
-func (o AppOp) get() bool { return o == AppGetLogin || o == AppGetConsent }
+func (o AppOp) get() bool { return o == AppGetLogin || o == AppGetConsent || o == AppGetLogout }
+
+// logout tells an endpoint of the logout, which has its own path (LEM).
+func (o AppOp) logout() bool { return o >= AppGetLogout }
 
 // AppCall is a call of a login app to the emulated API: the endpoint, the
 // step challenge, the body of a PUT, and whether the caller is the app

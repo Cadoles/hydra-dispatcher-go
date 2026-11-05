@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	ory "github.com/ory/hydra-client-go/v26"
+
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 )
 
@@ -163,6 +165,9 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	}
 	var skip []Report
 	if snap.Skip {
+		if out, ok := r.sessionGone(read.Request, ev.Memory); ok {
+			return r.skewed(read, out)
+		}
 		reason, reports := r.memoryFails(ev.Memory, sid, snap.Subject, f, snap.Scope, snap.Audience)
 		if reason == "" {
 			// SKP-1: before ENT-22, the accept leaves at once; past hx
@@ -195,6 +200,39 @@ func (r *run) create(ref string, ev Entry) Outcome {
 	out.Response.SetCSRF = f.CSRF
 	out.Reports = append(skip, out.Reports...)
 	return r.skewed(read, out)
+}
+
+// sessionGone answers a login request in skip whose session must not, or does
+// not, serve: before SKP-1, SKP-2, SKP-11 and ENT-22, no flow is born.
+// Restarting the authorization on its request_url gives a new L without a skip,
+// or login_required from Hydra itself with prompt=none (HLO-18).
+//
+// SKP-13: session_id empty, whatever the cookie: on 2.1, the session was deleted
+// since L was created; the flow would be born without a sid, which CST-24 does
+// not see, and Hydra deliver an id_token without one.
+//
+// SKP-12 (Q45): a note of logout of this session: its chain stopped in this
+// browser, or this is one more load on an L of before the delete, 204 again. The
+// session is deleted, which sends the back-channel; the note stays, only of use
+// to an L of before. A Hydra unavailable gives E1004, a reload plays it again.
+func (r *run) sessionGone(req *ory.OAuth2LoginRequest, m Memory) (Outcome, bool) {
+	s, sid := r.page(), req.GetSessionId()
+	if sid == "" {
+		return s.redirect(req.RequestUrl), true // SKP-13
+	}
+	if c := m.Content; c == nil || !c.Lo || c.SID != sid {
+		return Outcome{}, false
+	}
+	d := r.Answers.Revoke
+	if d == nil {
+		return Outcome{Call: &Call{Op: RevokeSession, Challenge: sid}}, true
+	}
+	if d.Err != nil {
+		return s.unavailable(d.Err), true
+	}
+	return s.redirect(req.RequestUrl).
+		report(ignored("login", SkipLogout)).
+		report(Report{Event: "logout.session_revoked", Audit: true}), true
 }
 
 // promptNone tells whether the authorization request says prompt=none (OIDC
@@ -426,6 +464,12 @@ func (r *run) consent(ev Consent) Outcome {
 		return r.notOurs(f, ev.Challenge, checkFlow)
 	}
 	switch {
+	case f.HydraSessionID != "" && req.GetLoginSessionId() == "":
+		// CST-24 (Q55): on 2.1, the session was deleted since by a logout finished
+		// in another tab, a foreign key emptying the field (HLO-15): no audit nor
+		// Sentry, for two tabs. Without a check, Hydra would deliver an id_token
+		// without a sid. Before A3's checks and the cookie.
+		return r.rejectConsent(f, ev.Challenge, ReasonSessionGone, rejection(ReasonSessionGone, "The session ended during the authentication."), s.redirect)
 	case f.HydraSessionID != req.GetLoginSessionId():
 		return r.notOurs(f, ev.Challenge, checkSession) // CST-9
 	case f.Sent == nil || f.Sent.Subject != req.GetSubject():

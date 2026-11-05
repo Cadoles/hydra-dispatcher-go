@@ -42,6 +42,11 @@ type fakeHydra struct {
 	before   map[string]func()
 	accepted *ory.AcceptOAuth2LoginRequest
 	consent  *ory.AcceptOAuth2ConsentRequest
+	// logouts are the logout requests Hydra knows, by challenge; revoked the
+	// sessions deleted.
+	logouts          map[string]*ory.OAuth2LogoutRequest
+	revoked          []string
+	noLogoutRedirect bool
 }
 
 func (h *fakeHydra) called(op string) error {
@@ -118,6 +123,38 @@ func (h *fakeHydra) RejectConsent(context.Context, string, ory.RejectOAuth2Reque
 	return hydraDone, h.called("reject_consent")
 }
 
+func (h *fakeHydra) LogoutRequest(_ context.Context, challenge string) (*ory.OAuth2LogoutRequest, error) {
+	if err := h.called("get_logout"); err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	r, ok := h.logouts[challenge]
+	if !ok {
+		return nil, err404
+	}
+	return r, nil
+}
+
+func (h *fakeHydra) AcceptLogout(_ context.Context, challenge string) (string, error) {
+	if err := h.called("accept_logout"); err != nil {
+		return "", err
+	}
+	if h.noLogoutRedirect {
+		return "", nil
+	}
+	return verifierOf(challenge), nil
+}
+
+func (h *fakeHydra) RejectLogout(context.Context, string) error { return h.called("reject_logout") }
+
+func (h *fakeHydra) RevokeLoginSession(_ context.Context, sid string) error {
+	h.mu.Lock()
+	h.revoked = append(h.revoked, sid)
+	h.mu.Unlock()
+	return h.called("revoke_session")
+}
+
 // fakeStore is the memory store, whose Put a test may intercept: hook runs
 // first, and its error, when it says so, replaces the write.
 type fakeStore struct {
@@ -168,7 +205,7 @@ type world struct {
 func newWorld(t *testing.T) *world {
 	mem := state.NewMemory()
 	t.Cleanup(func() { _ = mem.Close() })
-	w := &world{t: t, hydra: &fakeHydra{login: loginRequest(t), errs: map[string]error{}, before: map[string]func(){}}, store: &fakeStore{StateStore: mem}, now: testNow}
+	w := &world{t: t, hydra: &fakeHydra{login: loginRequest(t), errs: map[string]error{}, before: map[string]func(){}, logouts: map[string]*ory.OAuth2LogoutRequest{}}, store: &fakeStore{StateStore: mem}, now: testNow}
 	env := testEnv()
 	w.o = &Orchestrator{
 		Store:           w.store,

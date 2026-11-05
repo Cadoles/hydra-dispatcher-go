@@ -160,7 +160,7 @@ func TestMemoryAtEntry(t *testing.T) {
 		honoured("MEM-3, a second before exp", nil, memory(func(c *Remembered) { c.Exp = testNow.Unix() + 1 }), nil),
 		honoured("MEM-3, exp 0: a cookie of the browser's session", nil, memory(func(c *Remembered) { c.Exp = 0 }), nil),
 		ignoredCase("MEM-4, another session", nil, memory(func(c *Remembered) { c.SID = "other" }), nil, SkipSession),
-		ignoredCase("MEM-4, no session on either side", nil, memory(func(c *Remembered) { c.SID = "" }), func(r *ory.OAuth2LoginRequest) { r.SessionId = ory.PtrString("") }, SkipSession),
+		ignoredCase("MEM-4, a cookie without a session", nil, memory(func(c *Remembered) { c.SID = "" }), nil, SkipSession),
 		ignoredCase("MEM-5, another subject", nil, memory(func(c *Remembered) { c.Sub = "bob" }), nil, SkipSubject),
 		ignoredCase("MEM-6, a flow unknown", nil, memory(func(c *Remembered) { c.Flow = "gone" }), nil, SkipFlow),
 		ignoredCase("MEM-6, the flow disabled", func(e *Env) { configured(e, "hydra-sql").Enabled = false }, memory(nil), nil, SkipFlow),
@@ -718,7 +718,7 @@ func rememberedOf(want func(c *Remembered)) func(t *testing.T, p played) {
 			return
 		}
 		w := &Remembered{
-			V: RememberedFormat, SID: sessionID, Sub: "alice", Flow: "hydra-sql-2fa", FH: Composition([]string{"sql", "2fa"}),
+			V: RememberedFormat, SID: sessionID, Sub: "alice", Flow: "hydra-sql-2fa", FH: Composition([]string{"sql", "2fa"}), AP: []string{"sql", "2fa"},
 			ACR: "2", AMR: []string{"pwd", "otp"}, Ctx: Object{"from": json.RawMessage(`"2fa"`)},
 			Scp: []string{"openid", "email"}, Aud: []string{},
 			IDT: Object{"email": json.RawMessage(`"alice@example.org"`), "step": json.RawMessage(`"2fa"`)}, ACT: Object{},

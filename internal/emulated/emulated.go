@@ -1,6 +1,7 @@
 // Package emulated serves the login apps Hydra's admin API for their step
-// (lot P4): the six login and consent endpoints on the v2 paths, and the v1
-// paths of the Symfony dispatcher as deprecated aliases. Each call is an
+// (lot P4): the six login and consent endpoints and the three of the logout (P9)
+// on the v2 paths, and the v1 paths of the Symfony dispatcher as deprecated
+// aliases, which hydra-passwordless still calls. Each call is an
 // event of the flow engine, which decides; the handlers check where the call
 // comes from, read it, and write the engine's answer.
 package emulated
@@ -61,7 +62,7 @@ type endpoint struct {
 	op                  flow.AppOp
 }
 
-// endpoints are the six of Hydra's admin API a login app calls, by their v1
+// endpoints are the nine of Hydra's admin API a login app calls, by their v1
 // path; the v2 one has the /admin prefix.
 var endpoints = []endpoint{
 	{http.MethodGet, "/oauth2/auth/requests/login", "login_challenge", flow.AppGetLogin},
@@ -70,9 +71,12 @@ var endpoints = []endpoint{
 	{http.MethodGet, "/oauth2/auth/requests/consent", "consent_challenge", flow.AppGetConsent},
 	{http.MethodPut, "/oauth2/auth/requests/consent/accept", "consent_challenge", flow.AppAcceptConsent},
 	{http.MethodPut, "/oauth2/auth/requests/consent/reject", "consent_challenge", flow.AppRejectConsent},
+	{http.MethodGet, "/oauth2/auth/requests/logout", "logout_challenge", flow.AppGetLogout},
+	{http.MethodPut, "/oauth2/auth/requests/logout/accept", "logout_challenge", flow.AppAcceptLogout},
+	{http.MethodPut, "/oauth2/auth/requests/logout/reject", "logout_challenge", flow.AppRejectLogout},
 }
 
-// prefix is the path of the six endpoints, by their v1 path.
+// prefix is the path of the nine endpoints, by their v1 path.
 const prefix = "/oauth2/auth/requests/"
 
 // Register adds the endpoints to mux, and under their prefix an answer to
@@ -284,7 +288,7 @@ func writeError(w http.ResponseWriter, r *http.Request, e flow.AppError) {
 	writeJSON(w, e.StatusCode, b)
 }
 
-// write answers the engine's response: a login or consent request, a
+// write answers the engine's response: a login, consent or logout request, a
 // redirect_to, or an error. Hydra saturated (max_in_flight) is a 503 with
 // Retry-After; the engine answering a page is a bug, E1000.
 func write(w http.ResponseWriter, r *http.Request, resp flow.Response) {

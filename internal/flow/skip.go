@@ -11,14 +11,14 @@ import (
 
 // The memory of the skip (Mémoire du skip of Table de transitions.md, lot
 // P8): Hydra's skip is honoured when the dispatcher_remember cookie passes
-// its checks, MEM-1 to MEM-10, and only when the flow is created (Q44); the
+// its checks, MEM-1 to MEM-11, and only when the flow is created (Q44); the
 // consent of such a login comes without x_dispatcher_ref, and is accepted
 // from the cookie without a flow, the x_dispatcher_skip marker binding it to
 // the login the dispatcher accepted (Q38).
 
 // memoryFails checks the cookie m against a request of Hydra, the login
 // request at the entry or the consent request without a flow, in the order
-// of MEM-1 to MEM-10, and returns the reason of the first check failed, ""
+// of MEM-1 to MEM-11, and returns the reason of the first check failed, ""
 // when all pass. sid and sub are the request's session and subject, probe
 // holds its client and oidc_context for the choice rules, scopes and audience
 // are those it requests. It also returns what the choice rules reported.
@@ -29,6 +29,8 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes, audien
 		return SkipUnreadable, nil // MEM-2
 	case c == nil:
 		return SkipAbsent, nil // MEM-1
+	case c.Lo:
+		return SkipLogout, nil // MEM-11 (Q45): nothing to serve a skip with
 	case c.Exp != 0 && !r.Env.Now.Before(time.Unix(c.Exp, 0)):
 		return SkipExpired, nil // MEM-3: 0 is a cookie of the browser's session
 	case c.SID == "" || c.SID != sid:
@@ -153,6 +155,11 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 		// SKC-7, CST-5 (A6): a login accepted without the dispatcher, or
 		// accepted by Symfony (a context that is no object).
 		return r.rejectConsent(nil, ev.Challenge, ReasonNoRef, rejection(ReasonNoRef, "No authentication of the dispatcher is in progress."), s.redirect)
+	case req.GetLoginSessionId() == "":
+		// SKC-15 (Q55): on 2.1, a session deleted since the accept of the skip.
+		// The marker, signed on the sid, can no longer be checked: neither the
+		// audit of SKC-8 nor Sentry, for two tabs.
+		return r.rejectConsent(nil, ev.Challenge, ReasonSessionGone, rejection(ReasonSessionGone, "The session ended during the authentication."), s.redirect)
 	case !r.Env.Keys.validSkipMarker(marker, req.GetLoginSessionId(), req.GetSubject(), req.GetAcr(), req.Amr, req.GetRequestUrl()):
 		// SKC-8 (Q38): a login the dispatcher did not accept, or not with
 		// these values.
@@ -261,9 +268,18 @@ func consentProbe(req *ory.OAuth2ConsentRequest) (*Flow, error) {
 // remembered is the remember cookie the consent accept body writes for the
 // flow f it finishes (WRT-1, Q39): what the final accept sent, after the
 // webhook, and what the consent grants; nil when the remember sent is false
-// (WRT-3), Hydra not remembering that session.
+// (WRT-3), Hydra not remembering that session, or when the cookie read is a note
+// of logout of this session, which stays: a consent in progress in another tab
+// does not make the skip honoured again (Q45).
 func (r *run) remembered(f *Flow, body ory.AcceptOAuth2ConsentRequest) *Remembered {
 	if f.Sent == nil || !f.Sent.Remember {
+		return nil
+	}
+	var read *Remembered
+	if ev, ok := r.Event.(Consent); ok {
+		read = ev.Memory.Content
+	}
+	if read != nil && read.Lo && read.SID == f.HydraSessionID {
 		return nil
 	}
 	now := r.Env.Now.Unix()
@@ -273,6 +289,7 @@ func (r *run) remembered(f *Flow, body ory.AcceptOAuth2ConsentRequest) *Remember
 		Sub:  f.Sent.Subject,
 		Flow: f.FlowID,
 		FH:   f.composition(),
+		AP:   f.appsSeen(read),
 		ACR:  f.Sent.ACR,
 		AMR:  nonNil(f.Sent.AMR),
 		Ctx:  withoutDispatcher(f.Sent.Context),
@@ -288,6 +305,22 @@ func (r *run) remembered(f *Flow, body ory.AcceptOAuth2ConsentRequest) *Remember
 		m.Exp = now + f.Sent.RememberFor // 0: a cookie of the browser's session
 	}
 	return m
+}
+
+// appsSeen are the apps of the session after f (WRT-1, Q56): those of the cookie
+// read, when it is of this session, then those of f, without a repeat. The cookie
+// only names the last flow, and a session may have gone through two.
+func (f *Flow) appsSeen(read *Remembered) []string {
+	var apps []string
+	if read != nil && read.SID == f.HydraSessionID {
+		apps = slices.Clone(read.AP)
+	}
+	for _, s := range f.Steps {
+		if !slices.Contains(apps, s.App) {
+			apps = append(apps, s.App)
+		}
+	}
+	return apps
 }
 
 // dispatcherPrefix starts the members of a context that are the

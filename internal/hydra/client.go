@@ -482,6 +482,16 @@ func (c *Client) RejectLogout(ctx context.Context, challenge string) error {
 	return err
 }
 
+// RevokeLoginSession deletes a session of login, which sends its back-channel: 204,
+// again if it is gone (HLO-11, HLO-18). For a chain of logout that stopped (SKP-12).
+func (c *Client) RevokeLoginSession(ctx context.Context, sid string) error {
+	_, err := call(c, "revoke_login_session", func() (struct{}, *http.Response, error) {
+		resp, err := c.oauth2.RevokeOAuth2LoginSessions(ctx).Sid(sid).Execute()
+		return struct{}{}, resp, err
+	})
+	return err
+}
+
 // Ready checks Hydra's readiness (database reachable), for /ready. It stays
 // out of the in-flight cap: a full cap is load, not Hydra down, and must not
 // take the instance out of the load balancer. /ready is outside every

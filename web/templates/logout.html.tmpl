@@ -1,0 +1,21 @@
+{{define "title"}}{{.T "logout.title"}}{{end}}
+{{define "content"}}
+<h1>{{.T "logout.title"}}</h1>
+{{if eq .Logout.State "confirm"}}
+<p class="lead">{{.T "logout.intro"}}</p>
+{{if .Logout.OtherSession}}<p role="alert">{{.T "logout.other_session"}}</p>{{end}}
+<form method="post" action="{{.Form.Action}}">
+{{template "csrf" .}}
+<input type="hidden" name="logout_challenge" value="{{.Form.LogoutChallenge}}">
+<button type="submit" name="action" value="accept">{{.T "logout.accept"}}</button>
+<button type="submit" name="action" value="reject" class="secondary">{{.T "logout.reject"}}</button>
+</form>
+{{else if eq .Logout.State "in_progress"}}
+<p>{{.T "logout.in_progress"}}</p>
+<p><a href="{{.Logout.Next}}">{{.T "logout.continue"}}</a></p>
+{{else if eq .Logout.State "already_out"}}
+<p>{{.T "logout.already_out"}}</p>
+{{else}}
+<p>{{.T "logout.declined"}}</p>
+{{end}}
+{{end}}

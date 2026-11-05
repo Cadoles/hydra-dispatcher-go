@@ -23,8 +23,11 @@ type Env struct {
 	// ttl.login_consent_request.
 	LoginConsentTTL time.Duration
 	Keys            Keys
-	Now             time.Time
-	Draw            Draw
+	// PropagateWithoutRecord is logout.propagate_without_record: "none" tells no
+	// app without a cookie of the session, anything else all of them (LST).
+	PropagateWithoutRecord string
+	Now                    time.Time
+	Draw                   Draw
 }
 
 // Draw are the random values a request may use, drawn by the orchestrator:
@@ -67,12 +70,20 @@ func Decide(in Input) Outcome {
 		out = r.loop(ev)
 	case Consent:
 		out = r.consent(ev)
+	case Logout:
+		out = r.logout(ev)
+	case LogoutNext:
+		out = r.logoutNext(ev)
 	case AppCall:
-		out = r.appCall(ev)
+		if ev.Op.logout() {
+			out = r.appLogout(ev)
+		} else {
+			out = r.appCall(ev)
+		}
 	default:
 		out = r.page().fail(E1000)
 	}
-	if out.Load == "" && out.Call == nil && !out.Reread {
+	if out.Load == "" && out.LoadLogout == "" && out.Call == nil && !out.Reread {
 		if fact, ok := r.unusedFact(); ok {
 			out = fact
 		}
@@ -87,9 +98,10 @@ type Event interface{ event() }
 type Input struct {
 	Event Event
 	// Loaded tells whether the flow under the event's ref was read; Flow is
-	// then nil for an absent one.
+	// then nil for an absent one. Of a logout, Logout is its record, as absent.
 	Loaded bool
 	Flow   *Flow
+	Logout *LogoutRecord
 	// Reread is set once the flow was read again at the outcome's request.
 	Reread  bool
 	Answers Answers
@@ -99,8 +111,9 @@ type Input struct {
 // Outcome is what a transition asks for, then what it decided. One of Load,
 // Call and Reread is set while it needs more; none once it decided.
 type Outcome struct {
-	// Load is the ref of the flow to read.
-	Load string
+	// Load is the ref of the flow to read; LoadLogout that of a logout's record.
+	Load       string
+	LoadLogout string
 	// Call is a call to make, whose answer comes back in Input.Answers.
 	Call *Call
 	// Reread asks to read the flow again (Hydra 2.1 answered 409).
@@ -109,9 +122,16 @@ type Outcome struct {
 	// Write is the flow to write, conditional on the version read (created
 	// when absent), its TTL running to HydraExpiresAt; nil writes nothing.
 	Write *Flow
+	// WriteLogout is the record to write, conditional on the version read, its
+	// TTL its own (see LogoutRecord.TTL).
+	WriteLogout *LogoutRecord
 	// Guard tells that Write only guards against a return, after an accept
 	// Hydra made (SKP-8, Q35): when the store fails, the answer stands.
-	Guard    bool
+	Guard bool
+	// Failed is the answer when the read asked by LoadLogout or the write fails,
+	// second conflict included, instead of E1000 or E1007: where the logout goes
+	// on without the store (DEP-6, SUI-3).
+	Failed   *Outcome
 	Response Response
 	Reports  []Report
 }
@@ -171,6 +191,8 @@ const (
 	ErrorPage
 	// AppJSON: the emulated API's answer, Response.Status and Response.Body.
 	AppJSON
+	// LogoutPage: 200, the logout page, in the state Response.Logout says.
+	LogoutPage
 )
 
 // Response is the answer the handler gives.
@@ -182,6 +204,7 @@ type Response struct {
 	Link    string
 	Choice  *ChoiceScreen
 	Consent *ConsentScreen
+	Logout  *LogoutScreen
 	// SetCSRF is the dispatcher_flow_csrf value to set, its Max-Age
 	// extended (A4); "" sets nothing.
 	SetCSRF string
@@ -189,7 +212,8 @@ type Response struct {
 	// Retry-After, rather than the code's status.
 	Overloaded bool
 	// Remember is the dispatcher_remember cookie to write, at the consent
-	// accept that finishes a flow (WRT-1); nil writes nothing.
+	// accept that finishes a flow (WRT-1) or, a note, at the start of a logout's
+	// chain (WRT-4); nil writes nothing.
 	Remember *Remembered
 	Status   int
 	Body     any
@@ -234,12 +258,19 @@ type ConsentScreen struct {
 // Report is something to log: an event of the catalogue, also sent to
 // Sentry or to the audit log when told. Detail never holds personal data.
 // Kind and Reason are those of skip.accepted and skip.ignored (login or
-// consent, and the check of the cookie that failed).
+// consent, and the check of the cookie that failed); App and Result those of
+// logout.propagated; RP, Apps and Again those of logout.started, RP that of
+// logout.verifier_sent.
 type Report struct {
 	Event  string
 	Detail string
 	Kind   string
 	Reason string
+	App    string
+	Result string
+	RP     *bool
+	Apps   int
+	Again  bool
 	Sentry bool
 	Audit  bool
 }
@@ -256,6 +287,10 @@ const (
 	RejectConsent
 	LoginHook
 	ConsentHook
+	GetLogout
+	AcceptLogout
+	RejectLogout
+	RevokeSession
 )
 
 // Reason is why a login or a consent is rejected.
@@ -288,9 +323,13 @@ const (
 	// ReasonPromptNone: Hydra's skip ignored for a request with prompt=none
 	// (SKP-11): no page may be shown.
 	ReasonPromptNone
+	// ReasonSessionGone: a consent request whose login_session_id Hydra 2.1
+	// emptied, its session deleted since by a logout finished in another tab
+	// (CST-24, SKC-15, Q55): no accept of someone else's.
+	ReasonSessionGone
 )
 
-var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", "skip_subject", "no_ref", "not_ours", "user", "app", "subject", "memory", "prompt_none"}
+var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", "skip_subject", "no_ref", "not_ours", "user", "app", "subject", "memory", "prompt_none", "session_gone"}
 
 func (r Reason) String() string { return reasonNames[r] }
 
@@ -330,7 +369,8 @@ func expiredIf(out Outcome, err error) Outcome {
 // Call is a call to Hydra or to a webhook.
 type Call struct {
 	Op Op
-	// Challenge is L for the login calls, C for the consent ones.
+	// Challenge is L for the login calls, C for the consent ones, U for the
+	// logout's; RevokeSession's is the session.
 	Challenge string
 	Reason    Reason
 	// Check is the check of A3 a not_ours reject failed (checkFlow to
@@ -358,6 +398,10 @@ type Answers struct {
 	ConsentReject *Done
 	LoginHook     *LoginHookAnswer
 	ConsentHook   *ConsentHookAnswer
+	Logout        *LogoutRead
+	LogoutAccept  *Done
+	LogoutReject  *Done
+	Revoke        *Done
 }
 
 // LoginRead is the answer to GetLogin, from the Source (P3d, P7):
@@ -387,7 +431,15 @@ type ConsentRead struct {
 	Reports   []Report
 }
 
-// Done is the answer to an accept or a reject: Hydra's redirect_to.
+// LogoutRead is the answer to GetLogout: always the admin API, a logout challenge
+// being encrypted in no version.
+type LogoutRead struct {
+	Request *ory.OAuth2LogoutRequest
+	Err     error
+}
+
+// Done is the answer to an accept or a reject: Hydra's redirect_to. A logout's
+// reject and a session's delete have none (HLO-5, HLO-11): read their Err.
 type Done struct {
 	Call       Call
 	RedirectTo string

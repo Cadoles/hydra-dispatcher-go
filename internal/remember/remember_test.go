@@ -1,11 +1,13 @@
 package remember
 
 import (
+	"bytes"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -195,5 +197,22 @@ func TestNewKeys(t *testing.T) {
 		if _, err := New(keys[0], keys[1:]...); err == nil {
 			t.Errorf("keys of %d bytes accepted", len(keys[len(keys)-1]))
 		}
+	}
+}
+
+// WRT-4, MEM-11: a note of logout is read back as what it is, without the members
+// of a memory.
+func TestNote(t *testing.T) {
+	c, err := New(bytes.Repeat([]byte{1}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := c.Seal(&flow.Remembered{V: flow.RememberedFormat, SID: "s", Sub: "alice", Lo: true, AP: []string{"sql"}, IAT: 5, Exp: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.Open(sealed).Content
+	if got == nil || !got.Lo || got.SID != "s" || got.Sub != "alice" || !slices.Equal(got.AP, []string{"sql"}) || got.Exp != 10 || got.IDT != nil || got.Flow != "" {
+		t.Errorf("note %+v", got)
 	}
 }

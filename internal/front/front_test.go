@@ -59,8 +59,10 @@ type fakeHydra struct {
 	consent     *ory.AcceptOAuth2ConsentRequest
 	// client replaces the client of the login and consent requests.
 	client *ory.OAuth2Client
-	// noLogoutRedirect accepts the logout without a redirect_to.
+	// noLogoutRedirect accepts the logout without a redirect_to; rpInitiated
+	// serves a logout request of a client.
 	noLogoutRedirect bool
+	rpInitiated      bool
 	// login is the last login challenge read, which the consent request
 	// names, as Hydra 2.1 does (Q34).
 	login string
@@ -158,7 +160,11 @@ func (h *fakeHydra) LogoutRequest(_ context.Context, challenge string) (*ory.OAu
 	if err := h.called("get_logout"); err != nil {
 		return nil, err
 	}
-	return &ory.OAuth2LogoutRequest{Challenge: ory.PtrString(challenge)}, nil
+	r := &ory.OAuth2LogoutRequest{Challenge: ory.PtrString(challenge), Subject: ory.PtrString("alice"), Sid: ory.PtrString(sessionID), RequestUrl: ory.PtrString("/oauth2/sessions/logout"), RpInitiated: ory.PtrBool(h.rpInitiated)}
+	if h.rpInitiated {
+		r.Client = &ory.OAuth2Client{ClientId: ory.PtrString("c1"), ClientName: ory.PtrString("Test Client")}
+	}
+	return r, nil
 }
 
 func (h *fakeHydra) AcceptLogout(context.Context, string) (string, error) {
@@ -166,6 +172,12 @@ func (h *fakeHydra) AcceptLogout(context.Context, string) (string, error) {
 		return "", h.called("accept_logout")
 	}
 	return loggedOut, h.called("accept_logout")
+}
+
+func (h *fakeHydra) RejectLogout(context.Context, string) error { return h.called("reject_logout") }
+
+func (h *fakeHydra) RevokeLoginSession(context.Context, string) error {
+	return h.called("revoke_session")
 }
 
 type snapshots struct{ s *store.Snapshot }
@@ -236,7 +248,7 @@ func newWorld(t *testing.T, opts ...worldOptions) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := New(Options{Engine: w.o, Hydra: w.hydra, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger})
+	h, err := New(Options{Engine: w.o, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +597,110 @@ func TestConsentScreen(t *testing.T) {
 	}
 }
 
-func TestLogout(t *testing.T) {
+// The note of logout the browser holds, opened.
+func (w *world) note(t *testing.T) *flow.Remembered {
+	t.Helper()
+	return w.front.o.Remember.Open(w.cookies["dispatcher_remember"]).Content
+}
+
+const logoutPath = "/logout?logout_challenge=" + logoutU
+
+func TestLogoutConfirmation(t *testing.T) {
+	w := newWorld(t)
+	w.cookies["dispatcher_remember"] = "1.memory.of-another-session"
+	resp := w.do(http.MethodGet, logoutPath, nil)
+	body := text(t, resp)
+	// LGO-6: a page, its form on the URL of the page, nothing cleared.
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `action="/logout?logout_challenge=`+logoutU+`"`) ||
+		!strings.Contains(body, `name="logout_challenge" value="`+logoutU+`"`) || !strings.Contains(body, `name="csrf_token" value="`+w.csrf()+`"`) ||
+		w.csrf() == "" || !strings.Contains(body, `value="accept"`) {
+		t.Fatalf("LGO-6: %d\n%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, `name="return" value="/logout?logout_challenge=`+logoutU+`"`) {
+		t.Errorf("the page goes back to itself from the change of language:\n%s", body)
+	}
+	if c := setCookie(resp, "dispatcher_remember"); c != nil {
+		t.Errorf("WRT-4, at the confirmation: %+v", c)
+	}
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control %q", resp.Header.Get("Cache-Control"))
+	}
+
+	// LGO-9, LGO-10: from another site, without the token: nothing reaches Hydra.
+	calls := len(w.hydra.calls)
+	for _, tc := range []struct {
+		name   string
+		form   url.Values
+		header []string
+	}{
+		{"another site", url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"accept"}}, []string{"Sec-Fetch-Site", "cross-site"}},
+		{"another origin", url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"accept"}}, []string{"Origin", "http://evil.example"}},
+		{"neither", url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"accept"}}, nil},
+		{"no token", url.Values{"logout_challenge": {logoutU}, "action": {"accept"}}, sameOrigin},
+		{"another token", url.Values{"logout_challenge": {logoutU}, "csrf_token": {strings.Repeat("0", 64)}, "action": {"accept"}}, sameOrigin},
+	} {
+		resp := w.do(http.MethodPost, logoutPath, tc.form, tc.header...)
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(text(t, resp), "E1008") || len(w.hydra.calls) != calls {
+			t.Errorf("%s: %d, calls %v", tc.name, resp.StatusCode, w.hydra.calls)
+		}
+	}
+	// LGO-9: a form beyond 64 KiB.
+	if resp := w.do(http.MethodPost, logoutPath, url.Values{"x": {strings.Repeat("a", 64<<10)}}, sameOrigin...); resp.StatusCode != http.StatusBadRequest || !strings.Contains(text(t, resp), "E1001") {
+		t.Errorf("a large form: %d", resp.StatusCode)
+	}
+
+	// LGO-11, DEP-1 here, no app having a logout_url: the note, the verifier.
+	resp = w.do(http.MethodPost, logoutPath, url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"accept"}}, sameOrigin...)
+	if u := location(t, resp, http.StatusSeeOther); u.String() != loggedOut {
+		t.Errorf("LGO-11: %s", u)
+	}
+	c := setCookie(resp, "dispatcher_remember")
+	if c == nil || c.MaxAge <= 0 || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("WRT-4: %+v", c)
+	}
+	if n := w.note(t); n == nil || !n.Lo || n.SID != sessionID || n.Sub != "alice" || n.IDT != nil {
+		t.Errorf("WRT-4, the note: %+v", n)
+	}
+	if want := []string{"get_logout", "get_logout", "accept_logout"}; !slices.Equal(w.hydra.calls, want) {
+		t.Errorf("calls %v, want %v", w.hydra.calls, want)
+	}
+}
+
+func TestLogoutRefused(t *testing.T) {
+	w := newWorld(t)
+	w.do(http.MethodGet, logoutPath, nil)
+	w.cookies["dispatcher_remember"] = "1.memory.of-this-session"
+	form := url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"reject"}}
+	resp := w.do(http.MethodPost, logoutPath, form, sameOrigin...)
+	body := text(t, resp)
+	// LGO-12: the same template, no form, no switcher: it has no URL to go back to.
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "Vous restez connecté") || strings.Contains(body, "<form") {
+		t.Errorf("LGO-12: %d\n%s", resp.StatusCode, body)
+	}
+	if setCookie(resp, "dispatcher_remember") != nil || !slices.Contains(w.hydra.calls, "reject_logout") {
+		t.Errorf("cookie written, or no reject: %v", w.hydra.calls)
+	}
+	// LGO-15, LGO-16, on any other button; LGO-14 is the engine's.
+	for _, tc := range []struct {
+		name string
+		err  error
+		text string
+	}{
+		{"LGO-15", &hydra.RequestError{Status: 404}, "Vous restez connecté"},
+		{"LGO-16", &hydra.RequestError{Status: 410}, "Vous êtes déjà déconnecté"},
+	} {
+		w := newWorld(t)
+		w.do(http.MethodGet, logoutPath, nil)
+		w.hydra.errs["get_logout"] = tc.err
+		resp := w.do(http.MethodPost, logoutPath, url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"other"}}, sameOrigin...)
+		if body := text(t, resp); resp.StatusCode != http.StatusOK || !strings.Contains(body, tc.text) || strings.Contains(body, "<form") {
+			t.Errorf("%s: %d\n%s", tc.name, resp.StatusCode, body)
+		}
+	}
+}
+
+// LGO-1 to LGO-4 on the pages, HEAD (LGO-17), and a client's demand (LGO-8).
+func TestLogoutPages(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		target string
@@ -593,33 +708,81 @@ func TestLogout(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"accepted at once", "/logout?logout_challenge=" + logoutU, nil, http.StatusSeeOther, ""},
-		{"no challenge", "/logout", nil, http.StatusBadRequest, "E1001"},
-		{"illegible", "/logout?logout_challenge=a%2Fb", nil, http.StatusBadRequest, "E1001"},
-		{"unknown", "/logout?logout_challenge=" + logoutU, &hydra.RequestError{Status: 404}, http.StatusBadRequest, "E1001"},
-		{"gone", "/logout?logout_challenge=" + logoutU, &hydra.RequestError{Status: 410}, http.StatusBadRequest, "E1002"},
-		{"refused", "/logout?logout_challenge=" + logoutU, &hydra.RequestError{Status: 400}, http.StatusInternalServerError, "E1007"},
-		{"down", "/logout?logout_challenge=" + logoutU, errors.New("connection refused"), http.StatusBadGateway, "E1004"},
+		{"LGO-1 no challenge", "/logout", nil, http.StatusBadRequest, "E1001"},
+		{"LGO-1 illegible", "/logout?logout_challenge=a%2Fb", nil, http.StatusBadRequest, "E1001"},
+		{"LGO-2 unknown", logoutPath, &hydra.RequestError{Status: 404}, http.StatusBadRequest, "E1001"},
+		{"LGO-3 gone", logoutPath, &hydra.RequestError{Status: 410}, http.StatusBadRequest, "E1002"},
+		{"LGO-4 refused", logoutPath, &hydra.RequestError{Status: 400}, http.StatusInternalServerError, "E1007"},
+		{"LGO-4 down", logoutPath, errors.New("connection refused"), http.StatusBadGateway, "E1004"},
 	} {
 		w := newWorld(t)
 		w.hydra.errs["get_logout"] = tc.err
 		w.cookies["dispatcher_remember"] = "1.memory.of-another-session"
 		resp := w.do(http.MethodGet, tc.target, nil)
-		body := text(t, resp)
-		if resp.StatusCode != tc.status || tc.code != "" && !strings.Contains(body, tc.code) ||
-			tc.code == "" && resp.Header.Get("Location") != loggedOut {
-			t.Errorf("%s: %d %s\n%s", tc.name, resp.StatusCode, resp.Header.Get("Location"), body)
-		}
-		// WRT-4 (Q41): a logout accepted clears the memory of the skip,
-		// whatever its sid; a logout that fails, nothing.
-		if c := setCookie(resp, "dispatcher_remember"); (c != nil && c.MaxAge < 0) != (tc.code == "") {
-			t.Errorf("%s: WRT-4: %+v", tc.name, c)
+		if body := text(t, resp); resp.StatusCode != tc.status || !strings.Contains(body, tc.code) || setCookie(resp, "dispatcher_remember") != nil {
+			t.Errorf("%s: %d\n%s", tc.name, resp.StatusCode, body)
 		}
 	}
+	// LGO-8: no page, the accept at once; the note and the verifier.
 	w := newWorld(t)
+	w.hydra.rpInitiated = true
+	resp := w.do(http.MethodGet, logoutPath, nil)
+	if u := location(t, resp, http.StatusSeeOther); u.String() != loggedOut || w.note(t) == nil || !w.note(t).Lo {
+		t.Errorf("LGO-8: %s, note %+v", u, w.note(t))
+	}
+	// LGO-13: the accept down: an error page, no note.
+	w = newWorld(t)
+	w.hydra.rpInitiated = true
 	w.hydra.errs["accept_logout"] = errors.New("connection refused")
-	if resp := w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil); resp.StatusCode != http.StatusBadGateway {
+	resp = w.do(http.MethodGet, logoutPath, nil)
+	if resp.StatusCode != http.StatusBadGateway || setCookie(resp, "dispatcher_remember") != nil {
 		t.Errorf("accept down: %d", resp.StatusCode)
+	}
+	// LGO-17: a HEAD, which the GET pattern covers: no call, no write, no cookie.
+	w = newWorld(t)
+	w.hydra.rpInitiated = true
+	for _, target := range []string{logoutPath, "/logout", "/logout/next?ref=" + strings.Repeat("a", 20), "/logout/next"} {
+		resp := w.do(http.MethodHead, target, nil)
+		if resp.StatusCode != http.StatusOK || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
+			t.Errorf("HEAD %s: %d, cookies %v, calls %v", target, resp.StatusCode, resp.Cookies(), w.hydra.calls)
+		}
+	}
+	// SUI-1, SUI-2.
+	w = newWorld(t)
+	if resp := w.do(http.MethodGet, "/logout/next?ref=nope", nil); resp.StatusCode != http.StatusBadRequest || !strings.Contains(text(t, resp), "E1001") {
+		t.Errorf("SUI-1: %d", resp.StatusCode)
+	}
+	if resp := w.do(http.MethodGet, "/logout/next?ref="+strings.Repeat("a", 20), nil); resp.StatusCode != http.StatusBadRequest || !strings.Contains(text(t, resp), "E1002") {
+		t.Errorf("SUI-2: %d", resp.StatusCode)
+	}
+}
+
+// DEP-2, SUI-3, SUI-5, through the pages: the note, each logout_url, the verifier.
+func TestLogoutChain(t *testing.T) {
+	snap := testSnapshot()
+	apps := slices.Clone(snap.Apps)
+	for i := range apps {
+		apps[i].LogoutURL = "http://" + apps[i].ID + ".hydra.test/logout"
+	}
+	w := newWorld(t, worldOptions{base: base, snapshot: store.NewSnapshot(apps, snap.Flows, snap.Settings)})
+	w.hydra.rpInitiated = true
+	resp := w.do(http.MethodGet, logoutPath, nil)
+	u := location(t, resp, http.StatusSeeOther)
+	if u.Host != "2fa.hydra.test" || u.Query().Get("logout_challenge") == "" || !w.note(t).Lo {
+		t.Fatalf("DEP-2: %s, note %+v", u, w.note(t))
+	}
+	ref := w.o.Keys.LogoutRef(sessionID)
+	for _, id := range []string{"2fa", "sql"} {
+		c := w.o.Keys.LogoutChallenge(ref, map[string]int{"2fa": 0, "sql": 1}[id], id)
+		if r := w.o.Handle(context.Background(), flow.AppCall{Op: flow.AppAcceptLogout, Challenge: c, Caller: func(a store.App) bool { return a.ID == id }}); r.Response.Status != http.StatusOK {
+			t.Fatalf("LEM-7 %s: %+v", id, r.Response)
+		}
+		resp = w.do(http.MethodGet, "/logout/next?ref="+ref, nil)
+		next := location(t, resp, http.StatusSeeOther)
+		want := map[string]string{"2fa": "sql.hydra.test", "sql": "public.hydra.test"}[id]
+		if next.Host != want {
+			t.Errorf("after %s: %s", id, next)
+		}
 	}
 }
 
@@ -711,7 +874,8 @@ func TestHeaders(t *testing.T) {
 		{"redirection", w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, sameOrigin...), http.StatusSeeOther, true},
 		{"error page", w.do(http.MethodGet, "/consent", nil), http.StatusBadRequest, true},
 		{"change of language", w.do(http.MethodPost, "/locale/en", url.Values{}, sameOrigin...), http.StatusSeeOther, true},
-		{"logout", w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil), http.StatusSeeOther, true},
+		{"logout", w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil), http.StatusOK, true},
+		{"logout at the HEAD", w.do(http.MethodHead, "/logout?logout_challenge="+logoutU, nil), http.StatusOK, true},
 		{"static file", w.do(http.MethodGet, "/static/base.css", nil), http.StatusOK, false},
 		{"unknown path", w.do(http.MethodGet, "/nope", nil), http.StatusNotFound, false},
 	} {
@@ -825,7 +989,7 @@ func TestLocaleBack(t *testing.T) {
 	for _, bad := range []string{
 		"//evil.example/", "/\\evil.example/", "https://evil.example/", "javascript:alert(1)", "evil.example/",
 		base + "@evil.example/", "http://user@dispatcher.hydra.test/", "https://dispatcher.hydra.test/",
-		"/logout?logout_challenge=" + logoutU, "/static/base.css", "/locale/en", "/consent/../logout", "/%2F%2Fevil.example/",
+		"/logout/next?ref=" + strings.Repeat("a", 20), "/static/base.css", "/locale/en", "/consent/../static", "/%2F%2Fevil.example/",
 		"/?a=%0d%0aSet-Cookie:x=y", "/\x00",
 	} {
 		for _, how := range []struct {
@@ -900,10 +1064,11 @@ func TestLogoutHydra(t *testing.T) {
 		t.Errorf("saturated: %d %v", resp.StatusCode, resp.Header)
 	}
 	w = newWorld(t)
+	w.hydra.rpInitiated = true
 	w.hydra.noLogoutRedirect = true
 	resp = w.do(http.MethodGet, "/logout?logout_challenge="+logoutU, nil)
-	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(text(t, resp), "E1004") || !strings.Contains(w.logs.String(), "logout accepted without redirect_to") {
-		t.Errorf("without redirect_to: %d\n%s", resp.StatusCode, w.logs.String())
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(text(t, resp), "E1004") || setCookie(resp, "dispatcher_remember") != nil {
+		t.Errorf("without redirect_to: %d", resp.StatusCode)
 	}
 }
 
@@ -1043,8 +1208,8 @@ func TestGoldenPages(t *testing.T) {
 			n++
 		}
 	}
-	if n != 14 {
-		t.Errorf("%d golden pages, want 14", n)
+	if n != 24 {
+		t.Errorf("%d golden pages, want 24", n)
 	}
 }
 

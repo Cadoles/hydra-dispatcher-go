@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	ory "github.com/ory/hydra-client-go/v26"
+
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
@@ -706,4 +708,157 @@ func TestNumbersAsWritten(t *testing.T) {
 	if sent := string(p.hydra.sent["PUT /admin/oauth2/auth/requests/consent/accept"]); !strings.Contains(sent, `"id_token":{"big":98765432109876543211,`) {
 		t.Errorf("consent accept sent %s", sent)
 	}
+}
+
+// logoutFixture is the emulated API of a chain, over HTTP, as the three apps call
+// it: the SDK of hydra-sql and hydra-oidc, on the v2 paths, the plain client of
+// hydra-passwordless on the v1 aliases.
+type logoutFixture struct {
+	o      *flow.Orchestrator
+	url    string
+	sql    ory.OAuth2API
+	keys   flow.Keys
+	ref    string
+	stored state.StateStore
+}
+
+func newLogoutFixture(t *testing.T, rec *flow.LogoutRecord) *logoutFixture {
+	t.Helper()
+	apps := hydraDevSnapshot().Apps
+	for i := range apps {
+		apps[i].LogoutURL = "http://" + apps[i].ID + ".hydra.test/logout"
+		if apps[i].ID == "hydra-2fa" {
+			apps[i].ReceiveClaims = []string{"email"}
+		}
+	}
+	mem := state.NewMemory()
+	t.Cleanup(func() { _ = mem.Close() })
+	f := &logoutFixture{keys: flow.Keys{[]byte("0123456789abcdef0123456789abcdef")}, stored: mem}
+	f.ref = f.keys.LogoutRef(rec.SID)
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Put(context.Background(), flow.LogoutKey(f.ref), data, time.Hour, 0); err != nil {
+		t.Fatal(err)
+	}
+	f.o = &flow.Orchestrator{Store: mem, Config: snapshots{store.NewSnapshot(apps, hydraDevSnapshot().Flows, store.DefaultSettings())},
+		BaseURL: "http://dispatcher.hydra.test", LoginConsentTTL: 30 * time.Minute, Keys: f.keys}
+	mux := http.NewServeMux()
+	Register(mux, Options{Engine: f.o, AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, LegacyV1Paths: true, Logger: slog.New(slog.DiscardHandler)})
+	srv := httptest.NewServer(httpx.Chain(httpx.Routes(mux), httpx.RealIP(nil), httpx.Trace(nil)))
+	t.Cleanup(srv.Close)
+	f.url = srv.URL
+	cfg := ory.NewConfiguration()
+	cfg.Servers = ory.ServerConfigurations{{URL: srv.URL}}
+	f.sql = ory.NewAPIClient(cfg).OAuth2API
+	return f
+}
+
+// The contract of the three apps (Vérification de P9): the SDK of hydra-sql and
+// hydra-oidc reads a client null and reduced, a subject and a sid empty; accepts
+// without a GET; takes the reject's 200; the challenge it was served is the one it
+// sends back. hydra-passwordless sends null on the v1 aliases, and decodes a body
+// where Hydra's reject gives 204, which it could not read.
+func TestLogoutContract(t *testing.T) {
+	ctx := context.Background()
+	const sid = "e1ab6d8c-1c0b-4a39-a3c5-7c3bd1c1ab0f"
+	chain := func(mod func(r *flow.LogoutRecord)) *flow.LogoutRecord {
+		r := &flow.LogoutRecord{V: flow.LogoutFormat, U: "hydra-u", RT: "http://hydra/verifier", Subject: "alice", SID: sid, URL: "/oauth2/sessions/logout",
+			Apps: []string{"hydra-sql", "hydra-2fa", "hydra-oidc"}, Sent: 0, SentAt: 1}
+		if mod != nil {
+			mod(r)
+		}
+		return r
+	}
+	next := "http://dispatcher.hydra.test/logout/next?ref="
+
+	t.Run("hydra-sql, the client null", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(nil))
+		c := f.keys.LogoutChallenge(f.ref, 0, "hydra-sql")
+		r, resp, err := f.sql.GetOAuth2LogoutRequest(ctx).LogoutChallenge(c).Execute()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET: %v", err)
+		}
+		if r.Client != nil || r.GetSubject() != "alice" || r.GetSid() != sid || r.GetRpInitiated() || r.GetRequestUrl() != "/oauth2/sessions/logout" || r.GetChallenge() != c {
+			t.Errorf("request %+v", r)
+		}
+		to, _, err := f.sql.AcceptOAuth2LogoutRequest(ctx).LogoutChallenge(r.GetChallenge()).Execute()
+		if err != nil || to.GetRedirectTo() != next+f.ref {
+			t.Errorf("accept: %+v, %v", to, err)
+		}
+	})
+	t.Run("hydra-sql, the client reduced", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(func(r *flow.LogoutRecord) {
+			r.RP, r.Client = true, &flow.LogoutClient{ID: "c1", Name: "Client", LogoURI: "http://c/logo"}
+		}))
+		r, _, err := f.sql.GetOAuth2LogoutRequest(ctx).LogoutChallenge(f.keys.LogoutChallenge(f.ref, 0, "hydra-sql")).Execute()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.GetRpInitiated() || r.Client == nil || r.Client.GetClientId() != "c1" || r.Client.GetClientName() != "Client" {
+			t.Errorf("request %+v", r)
+		}
+	})
+	t.Run("an app with a list, LST-2: subject and sid empty", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(func(r *flow.LogoutRecord) { r.Listed, r.Cur, r.Sent = true, 1, 1 }))
+		r, _, err := f.sql.GetOAuth2LogoutRequest(ctx).LogoutChallenge(f.keys.LogoutChallenge(f.ref, 1, "hydra-2fa")).Execute()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.GetSubject() != "" || r.GetSid() != "" {
+			t.Errorf("request %+v", r)
+		}
+	})
+	t.Run("hydra-oidc, an accept without a GET", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(nil))
+		to, resp, err := f.sql.AcceptOAuth2LogoutRequest(ctx).LogoutChallenge(f.keys.LogoutChallenge(f.ref, 0, "hydra-sql")).Execute()
+		if err != nil || resp.StatusCode != http.StatusOK || to.GetRedirectTo() != next+f.ref {
+			t.Errorf("accept: %+v, %v", to, err)
+		}
+	})
+	t.Run("the SDK, a reject in 200", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(nil))
+		resp, err := f.sql.RejectOAuth2LogoutRequest(ctx).LogoutChallenge(f.keys.LogoutChallenge(f.ref, 0, "hydra-sql")).Execute()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Errorf("reject: %v", err)
+		}
+	})
+	t.Run("hydra-passwordless, the aliases", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(nil))
+		for _, op := range []string{"accept", "reject"} {
+			c := f.keys.LogoutChallenge(f.ref, 0, "hydra-sql")
+			req, err := http.NewRequestWithContext(ctx, http.MethodPut, f.url+"/oauth2/auth/requests/logout/"+op+"?logout_challenge="+c, strings.NewReader("null"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var answer struct {
+				RedirectTo string `json:"redirect_to"`
+			}
+			err = json.NewDecoder(resp.Body).Decode(&answer)
+			_ = resp.Body.Close()
+			if err != nil || resp.StatusCode != http.StatusOK || answer.RedirectTo != next+f.ref || resp.Header.Get("Deprecation") == "" {
+				t.Errorf("%s: %d %q, %v", op, resp.StatusCode, answer.RedirectTo, err)
+			}
+		}
+	})
+	t.Run("what Hydra's challenge and verifier are never served", func(t *testing.T) {
+		f := newLogoutFixture(t, chain(nil))
+		for _, path := range []string{"/admin/oauth2/auth/requests/logout", "/oauth2/auth/requests/logout"} {
+			resp, err := http.Get(f.url + path + "?logout_challenge=" + f.keys.LogoutChallenge(f.ref, 0, "hydra-sql"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if strings.Contains(string(body), "hydra-u") || strings.Contains(string(body), "verifier") {
+				t.Errorf("I7: %s", body)
+			}
+		}
+	})
 }

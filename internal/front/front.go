@@ -1,7 +1,7 @@
 // Package front serves the browser (lot P5): the choice of the flow (GET and
 // POST /), the return of the login apps (/oauth2/auth), Hydra's consent
-// (/consent) and logout (/logout), and the pages' static files. The flow
-// engine decides; the handlers read the request, render its answer, and set
+// (/consent) and logout (/logout, /logout/next, P9), and the pages' static files.
+// The flow engine decides; the handlers read the request, render its answer, and set
 // the dispatcher_flow_csrf cookie and the dispatcher_remember one, the
 // memory of the skip (P8), which they open and seal.
 package front
@@ -16,11 +16,8 @@ import (
 	"strings"
 	"time"
 
-	ory "github.com/ory/hydra-client-go/v26"
-
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -28,13 +25,6 @@ import (
 // Engine runs the transition of an event to its end: flow.Orchestrator.
 type Engine interface {
 	Handle(ctx context.Context, ev flow.Event) flow.Result
-}
-
-// Logout is Hydra's admin API for a logout, which the engine does not handle
-// yet (P9): read, then accept at once.
-type Logout interface {
-	LogoutRequest(ctx context.Context, challenge string) (*ory.OAuth2LogoutRequest, error)
-	AcceptLogout(ctx context.Context, challenge string) (string, error)
 }
 
 // Memories seals and opens the dispatcher_remember cookie: remember.Codec.
@@ -52,7 +42,6 @@ type Snapshots interface {
 // Options configure the handlers.
 type Options struct {
 	Engine Engine
-	Hydra  Logout
 	Config Snapshots
 	// Remember seals the memory of the skip, by secrets.cookie_key.
 	Remember Memories
@@ -124,7 +113,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oauth2/auth", h.loop)
 	mux.HandleFunc("GET /consent", h.consentGet)
 	mux.HandleFunc("POST /consent", h.consentPost)
-	mux.HandleFunc("GET /logout", h.logout)
+	mux.HandleFunc("GET /logout", h.logoutGet)
+	mux.HandleFunc("POST /logout", h.logoutPost)
+	mux.HandleFunc("GET /logout/next", h.logoutNext)
 	mux.HandleFunc("POST /locale/{code}", h.locale)
 	mux.HandleFunc("GET /static/{name...}", h.static)
 }
@@ -229,8 +220,9 @@ func (h *Handler) memory(r *http.Request) flow.Memory {
 	return h.o.Remember.Open(h.cookie(r, rememberCookie))
 }
 
-// remember writes the memory of the skip the engine gives (WRT-1): one
-// cookie, living until its exp, of the browser's session for exp 0. Beyond
+// remember writes the memory of the skip the engine gives (WRT-1), or the note
+// of logout that replaces it (WRT-4): one cookie, living until its exp, of the
+// browser's session for exp 0. Beyond
 // 3.8 KB, none is written and the former one is cleared, which would serve
 // the next skip with former claims (WRT-2); never a second cookie, the
 // Cookie header staying under a reverse proxy's 8 KB (revue R20).
@@ -248,7 +240,7 @@ func (h *Handler) remember(w http.ResponseWriter, r *http.Request, m *flow.Remem
 	h.setCookie(w, rememberCookie, value, maxAge, true)
 }
 
-// forget clears the dispatcher_remember cookie (WRT-2, WRT-4).
+// forget clears the dispatcher_remember cookie (WRT-2).
 func (h *Handler) forget(w http.ResponseWriter) {
 	h.setCookie(w, rememberCookie, "", -1, true)
 }
@@ -293,6 +285,8 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, res flow.Resul
 		h.render(w, r, http.StatusOK, "select", h.choicePage(r, cfg, resp.Choice))
 	case flow.ConsentPage:
 		h.render(w, r, http.StatusOK, "consent", h.consentPage(r, cfg, resp.Consent))
+	case flow.LogoutPage:
+		h.render(w, r, http.StatusOK, "logout", h.logoutPage(r, cfg, resp.Logout))
 	case flow.ErrorPage:
 		h.fail(w, r, resp, cfg)
 	default:
@@ -331,65 +325,56 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Respons
 	h.render(w, r, status, "error", p)
 }
 
-// logout accepts Hydra's logout request at once (P5; the confirmation and
-// the propagation to the apps come with P9), clears the memory of the skip,
-// whatever its sid (WRT-4, Q41), then follows Hydra.
-func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	cfg := h.o.Config.Snapshot()
-	challenge := r.URL.Query().Get("logout_challenge")
-	if !hydraChallenge(challenge) {
-		h.fail(w, r, flow.Response{Kind: flow.ErrorPage, Code: flow.E1001}, cfg)
+// logoutGet is GET /logout (LGO): the confirmation, or the accept at once of a
+// client's demand. A HEAD, which the pattern covers, neither calls nor writes
+// nothing, a logout otherwise leaving on a HEAD (LGO-17, Q57).
+func (h *Handler) logoutGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodHead {
+		w.Header().Set("Cache-Control", "no-store")
 		return
 	}
-	if _, err := h.o.Hydra.LogoutRequest(r.Context(), challenge); err != nil {
-		h.fail(w, r, h.hydraError(r, "logout_request", err), cfg)
-		return
-	}
-	to, err := h.o.Hydra.AcceptLogout(r.Context(), challenge)
-	switch {
-	case err == nil && to == "":
-		err = errors.New("hydra: logout accepted without redirect_to")
-		fallthrough
-	case err != nil:
-		h.fail(w, r, h.hydraError(r, "accept_logout", err), cfg)
-		return
-	}
-	h.forget(w)
-	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, to, http.StatusSeeOther)
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Logout{
+		Challenge: r.URL.Query().Get("logout_challenge"),
+		Cookie:    h.cookie(r, csrfCookie),
+		Memory:    h.memory(r),
+	}))
 }
 
-// hydraError is the page of a Hydra error on the logout, in the classes of
-// the engine (B1, Q11): an unknown challenge E1001, one gone E1002, a
-// refusal E1007, Hydra unavailable E1004.
-func (h *Handler) hydraError(r *http.Request, op string, err error) flow.Response {
-	var re *hydra.RequestError
-	resp := flow.Response{Kind: flow.ErrorPage, Code: flow.E1004}
-	switch {
-	case errors.As(err, &re) && re.Status == http.StatusNotFound:
-		resp.Code = flow.E1001
-	case errors.As(err, &re) && (re.Status == http.StatusUnauthorized || re.Status == http.StatusGone):
-		resp.Code = flow.E1002
-	case errors.As(err, &re):
-		resp.Code = flow.E1007
-	default:
-		resp.Overloaded = errors.Is(err, hydra.ErrOverloaded)
+// logoutPost is POST /logout, the confirmation's answer: accept, or any other
+// button refuses.
+func (h *Handler) logoutPost(w http.ResponseWriter, r *http.Request) {
+	if !h.form(w, r) {
+		return
 	}
-	if resp.Code == flow.E1004 || resp.Code == flow.E1007 {
-		h.o.Logger.ErrorContext(r.Context(), "flow.error", "detail", string(resp.Code), "op", op, "err", err)
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Logout{
+		Challenge:  r.PostForm.Get("logout_challenge"),
+		Cookie:     h.cookie(r, csrfCookie),
+		Memory:     h.memory(r),
+		Post:       true,
+		Accept:     r.PostForm.Get("action") == "accept",
+		Token:      r.PostForm.Get("csrf_token"),
+		SameOrigin: h.sameOrigin(r),
+	}))
+}
+
+// logoutNext is GET /logout/next (SUI), where the apps send the browser back.
+func (h *Handler) logoutNext(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodHead {
+		w.Header().Set("Cache-Control", "no-store")
+		return // LGO-17
 	}
-	return resp
+	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.LogoutNext{Ref: r.URL.Query().Get("ref")}))
 }
 
 // pagePaths are the paths of the pages, below the base path: the change of
 // language goes back to them only.
-var pagePaths = []string{"/", "/oauth2/auth", "/consent"}
+var pagePaths = []string{"/", "/oauth2/auth", "/consent", "/logout"}
 
 // back returns the page raw names, as a path below the base path with its
 // query, without the _locale that would win over the cookie. raw is a path
 // (the return field of the language form, which the page writes) or an
 // absolute URL of the dispatcher's origin (the Referer). Anything else gives
-// false: a URL of another origin, a path that is not a page's (/logout,
+// false: a URL of another origin, a path that is not a page's (/logout/next,
 // /static), a scheme-relative //host, a backslash that some browsers read as
 // a slash, a user. The way back is then built on the dispatcher's own origin:
 // the input never chooses the host (Sécurité, Redirections).
@@ -418,20 +403,6 @@ func (h *Handler) back(raw string) (string, bool) {
 		return h.path + p, true
 	}
 	return h.path + p + "?" + q.Encode(), true
-}
-
-// hydraChallenge tells whether c may be a Hydra challenge (Q10): not empty,
-// at most 64 KiB, in the base64url alphabet with its = padding.
-func hydraChallenge(c string) bool {
-	if c == "" || len(c) > 64<<10 {
-		return false
-	}
-	for _, b := range []byte(c) {
-		if !('0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' || b == '-' || b == '_' || b == '=') {
-			return false
-		}
-	}
-	return true
 }
 
 // locale is POST /locale/{code}: the dispatcher_locale cookie, for a year,

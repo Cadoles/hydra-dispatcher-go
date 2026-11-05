@@ -23,6 +23,10 @@ type Hydra interface {
 	RejectLogin(ctx context.Context, challenge string, body ory.RejectOAuth2Request) (string, error)
 	AcceptConsent(ctx context.Context, challenge string, body ory.AcceptOAuth2ConsentRequest) (string, error)
 	RejectConsent(ctx context.Context, challenge string, body ory.RejectOAuth2Request) (string, error)
+	LogoutRequest(ctx context.Context, challenge string) (*ory.OAuth2LogoutRequest, error)
+	AcceptLogout(ctx context.Context, challenge string) (string, error)
+	RejectLogout(ctx context.Context, challenge string) error
+	RevokeLoginSession(ctx context.Context, sid string) error
 }
 
 // Webhooks call the accept webhooks, with what the call would send to Hydra.
@@ -57,6 +61,8 @@ type Orchestrator struct {
 	BaseURL         string
 	LoginConsentTTL time.Duration
 	Keys            Keys
+	// PropagateWithoutRecord is logout.propagate_without_record.
+	PropagateWithoutRecord string
 	// Log gets the reports of each request, nil drops them.
 	Log *slog.Logger
 	// Now is the clock, time.Now when nil.
@@ -81,11 +87,14 @@ const maxRounds = 16
 // before deciding (ECR-5); a store that fails gives E1000 (ECR-7). A write
 // that only guards against a return, after the accept of a skip, keeps its
 // answer when it stays of unknown outcome or the store fails (SKP-8): E1000
-// would make the browser reload, and Hydra accept L again.
+// would make the browser reload, and Hydra accept L again. Where the logout goes
+// on without the store, the outcome gives the answer of a failure, second
+// conflict included (DEP-6, SUI-3).
 func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 	in := Input{Event: ev, Env: o.env()}
 	var (
 		key     string
+		logout  bool
 		version uint64
 		read    []byte // as read: a write of unknown outcome compares to it
 		replay  = true
@@ -95,10 +104,18 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		data, v, err := o.Store.Get(ctx, key)
 		switch {
 		case errors.Is(err, state.ErrNotFound):
-			in.Flow, version, read = nil, 0, nil
+			in.Flow, in.Logout, version, read = nil, nil, 0, nil
 			return nil
 		case err != nil:
 			return err
+		}
+		if logout {
+			r, err := DecodeLogout(data)
+			if err != nil {
+				return err
+			}
+			in.Logout, version, read = r, v, data
+			return nil
 		}
 		f, err := Decode(data)
 		if err != nil {
@@ -111,11 +128,15 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		out := (&run{Input: in}).surface().fail(E1000)
 		return o.result(ctx, in, out, append(reports, Report{Event: "state.error", Detail: err.Error(), Sentry: true}))
 	}
-	// failWrite is fail for the write of out: its own answer when the write
-	// only guards (SKP-8).
+	// failWrite is fail for the read or the write of out: its own answer when
+	// the write only guards (SKP-8), the one it gives for a failure (DEP-6, SUI-3).
 	failWrite := func(out Outcome, err error) Result {
-		if out.Guard {
-			return o.result(ctx, in, out, append(reports, Report{Event: "state.error", Detail: err.Error(), Sentry: true}))
+		failed := Report{Event: "state.error", Detail: err.Error(), Sentry: true}
+		switch {
+		case out.Failed != nil:
+			return o.result(ctx, in, *out.Failed, append(reports, failed))
+		case out.Guard:
+			return o.result(ctx, in, out, append(reports, failed))
 		}
 		return fail(err)
 	}
@@ -128,6 +149,12 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 				return fail(err)
 			}
 			continue
+		case out.LoadLogout != "":
+			key, logout, in.Loaded = LogoutKey(out.LoadLogout), true, true
+			if err := load(); err != nil {
+				return failWrite(out, err)
+			}
+			continue
 		case out.Reread:
 			in.Reread = true
 			if err := load(); err != nil {
@@ -137,18 +164,19 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		case out.Call != nil:
 			reports = append(reports, o.call(ctx, *out.Call, &in.Answers)...)
 			continue
-		case out.Write == nil:
+		case out.Write == nil && out.WriteLogout == nil:
 			return o.result(ctx, in, out, reports)
 		}
 
-		data, err := Encode(out.Write)
+		data, ttlAt, err := out.written()
 		if err != nil {
 			return fail(err)
 		}
-		ttl := time.UnixMilli(out.Write.HydraExpiresAt).Sub(o.now())
+		ttl := ttlAt(o.now())
 		if ttl <= 0 {
 			// ECR-8: L ended at Hydra during the calls; decided again at this
-			// time, the flow is absent.
+			// time, the flow is absent. Of a record, the transition answers for
+			// a TTL gone (DEP-7, LEM-11, SUI-4).
 			in.Env.Now = o.now()
 			continue
 		}
@@ -173,7 +201,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 				// left now (ECR-8 when hx passed meanwhile).
 				replay = false
 				reports = append(reports, Report{Event: "state.conflict", Detail: "write of unknown outcome, written again"})
-				if ttl = time.UnixMilli(out.Write.HydraExpiresAt).Sub(o.now()); ttl <= 0 {
+				if ttl = ttlAt(o.now()); ttl <= 0 {
 					in.Env.Now = o.now()
 					continue
 				}
@@ -190,10 +218,10 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 					if bytes.Equal(read, data) {
 						return o.result(ctx, in, out, reports)
 					}
-					if out.Guard {
+					if out.Guard || out.Failed != nil {
 						return failWrite(out, errors.New("write of unknown outcome, twice"))
 					}
-				case out.Guard:
+				case out.Guard || out.Failed != nil:
 					// A concurrent load wrote since the read: the accept of a
 					// skip was made, its answer stands (SKP-8, revue R21).
 					return failWrite(out, err)
@@ -204,6 +232,9 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		// A conflict (ECR-1, ECR-6), or another value read after an unknown
 		// outcome: the transition is replayed once on the flow read again.
 		if !replay {
+			if out.Failed != nil {
+				return failWrite(out, errors.New("write failed twice")) // DEP-6, SUI-3
+			}
 			return o.result(ctx, in, in.surface(E1007), append(reports, Report{Event: "state.conflict", Detail: "replayed", Sentry: true}))
 		}
 		replay = false
@@ -215,6 +246,16 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 		}
 	}
 	return o.result(ctx, in, in.surface(E1000), append(reports, Report{Event: "flow.error", Detail: "no outcome", Sentry: true}))
+}
+
+// written returns what an outcome writes, and its TTL at a given time.
+func (o Outcome) written() ([]byte, func(time.Time) time.Duration, error) {
+	if r := o.WriteLogout; r != nil {
+		data, err := r.encode()
+		return data, r.TTL, err
+	}
+	data, err := Encode(o.Write)
+	return data, func(now time.Time) time.Duration { return time.UnixMilli(o.Write.HydraExpiresAt).Sub(now) }, err
 }
 
 // surface answers code in the forms of the event.
@@ -235,6 +276,8 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 		for _, r := range reports {
 			level := slog.LevelInfo
 			switch {
+			case r.Event == "logout.started", r.Event == "logout.session_revoked":
+				// Info, as the catalogue has them, in the audit log too.
 			case r.Sentry:
 				level = slog.LevelError
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
@@ -246,6 +289,15 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			}
 			if r.Reason != "" {
 				args = append(args, "reason", r.Reason)
+			}
+			if r.App != "" {
+				args = append(args, "app", r.App, "result", r.Result)
+			}
+			if r.RP != nil {
+				args = append(args, "rp_initiated", *r.RP)
+			}
+			if r.Event == "logout.started" {
+				args = append(args, "apps", r.Apps, "again", r.Again)
 			}
 			o.Log.Log(ctx, level, r.Event, args...)
 		}
@@ -280,6 +332,15 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 	case ConsentHook:
 		h := o.Webhooks.Consent(ctx, c)
 		a.ConsentHook = &h
+	case GetLogout:
+		r, err := o.Hydra.LogoutRequest(ctx, c.Challenge)
+		a.Logout = &LogoutRead{Request: r, Err: err}
+	case AcceptLogout:
+		a.LogoutAccept = done(o.Hydra.AcceptLogout(ctx, c.Challenge))
+	case RejectLogout:
+		a.LogoutReject = done("", o.Hydra.RejectLogout(ctx, c.Challenge))
+	case RevokeSession:
+		a.Revoke = done("", o.Hydra.RevokeLoginSession(ctx, c.Challenge))
 	}
 	return nil
 }
@@ -297,11 +358,12 @@ func (o *Orchestrator) env() Env {
 	var b [4 + 32]byte
 	_, _ = rand.Read(b[:]) // crypto/rand never fails
 	return Env{
-		Config:          o.Config.Snapshot(),
-		BaseURL:         o.BaseURL,
-		LoginConsentTTL: o.LoginConsentTTL,
-		Keys:            o.Keys,
-		Now:             o.now(),
-		Draw:            Draw{Gen0: int64(binary.BigEndian.Uint32(b[:4])), CSRF: hex.EncodeToString(b[4:])},
+		Config:                 o.Config.Snapshot(),
+		BaseURL:                o.BaseURL,
+		LoginConsentTTL:        o.LoginConsentTTL,
+		Keys:                   o.Keys,
+		PropagateWithoutRecord: o.PropagateWithoutRecord,
+		Now:                    o.now(),
+		Draw:                   Draw{Gen0: int64(binary.BigEndian.Uint32(b[:4])), CSRF: hex.EncodeToString(b[4:])},
 	}
 }

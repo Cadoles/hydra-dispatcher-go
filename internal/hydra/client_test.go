@@ -76,6 +76,7 @@ func TestLoginFlowCalls(t *testing.T) {
 		"GET /admin/oauth2/auth/requests/logout":         reply(200, string(body(t, symfony21+"13-logout/0029-hydra-GET-admin_oauth2_auth_requests_logout.json"))),
 		"PUT /admin/oauth2/auth/requests/logout/accept":  reply(200, `{"redirect_to":"http://public.hydra.test/oauth2/sessions/logout?logout_verifier=v"}`),
 		"PUT /admin/oauth2/auth/requests/logout/reject":  reply(204, ""),
+		"DELETE /admin/oauth2/auth/sessions/login":       reply(204, ""),
 		"GET /health/ready":                              reply(200, `{"status":"ok"}`),
 	}}
 	srv := httptest.NewServer(fake)
@@ -110,6 +111,12 @@ func TestLoginFlowCalls(t *testing.T) {
 	}
 	if err := c.RejectLogout(ctx, "U"); err != nil {
 		t.Errorf("RejectLogout = %v", err)
+	}
+	if err := c.RevokeLoginSession(ctx, "the-session"); err != nil {
+		t.Errorf("RevokeLoginSession = %v", err)
+	}
+	if got := fake.got[len(fake.got)-1].URL.Query().Get("sid"); got != "the-session" {
+		t.Errorf("sid sent as %q", got)
 	}
 	if err := c.Ready(ctx); err != nil {
 		t.Errorf("Ready = %v", err)

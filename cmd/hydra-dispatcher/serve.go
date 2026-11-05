@@ -248,19 +248,19 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		return nil, err
 	}
 	engine := &flow.Orchestrator{
-		Store:           s.states,
-		Config:          s.config,
-		Source:          source,
-		Hydra:           hydraClient,
-		Webhooks:        flow.StubWebhooks{},
-		BaseURL:         cfg.Server.BaseURL,
-		LoginConsentTTL: cfg.Hydra.LoginConsentTTL.Std(),
-		Keys:            keys,
-		Log:             logger,
+		Store:                  s.states,
+		Config:                 s.config,
+		Source:                 source,
+		Hydra:                  hydraClient,
+		Webhooks:               flow.StubWebhooks{},
+		BaseURL:                cfg.Server.BaseURL,
+		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),
+		Keys:                   keys,
+		PropagateWithoutRecord: cfg.Logout.PropagateWithoutRecord,
+		Log:                    logger,
 	}
 	pages, err := front.New(front.Options{
 		Engine:     engine,
-		Hydra:      hydraClient,
 		Config:     s.config,
 		Remember:   memories,
 		BaseURL:    cfg.Server.BaseURL,

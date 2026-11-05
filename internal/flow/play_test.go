@@ -69,6 +69,11 @@ func play(t *testing.T, env Env, ev Event, stored, reread *Flow, says hydraSays)
 				t.Fatalf("flow loaded twice")
 			}
 			in.Loaded, in.Flow = true, copyFlow(t, stored)
+		case out.LoadLogout != "":
+			if in.Loaded {
+				t.Fatalf("record loaded twice")
+			}
+			in.Loaded = true
 		case out.Reread:
 			if in.Reread {
 				t.Fatalf("flow read again twice")
@@ -122,6 +127,8 @@ func answer(a *Answers, c Call, s said) {
 		if s.consentHook != nil {
 			a.ConsentHook = s.consentHook
 		}
+	case RevokeSession:
+		a.Revoke = &Done{Call: c, Err: s.err}
 	}
 }
 
