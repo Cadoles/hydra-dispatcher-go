@@ -65,6 +65,7 @@ var scenarios = []scenario{
 	{name: "first-login-hydra-sql-2fa", run: firstLogin("hydra-sql-2fa")},
 	{name: "second-login", run: (*driver).secondLogin},
 	{name: "second-login-without-memory", run: (*driver).secondLoginWithoutMemory},
+	{name: "second-login-fewer-scopes", run: (*driver).secondLoginFewerScopes},
 	{name: "second-login-other-subject", run: (*driver).secondLoginOtherSubject},
 	{name: "second-login-prompt-consent-reject", run: (*driver).secondLoginPromptConsentReject},
 	{name: "second-login-reload", run: (*driver).secondLoginReload},
@@ -601,7 +602,7 @@ func (d *driver) secondLoginWithoutMemory() error {
 	if err := d.remembered(); err != nil {
 		return err
 	}
-	d.b.forget(d.dispatcher, rememberCookie, rememberCookie+"_2")
+	d.b.forget(d.dispatcher, rememberCookie)
 	o, err := d.skippedLogin(l)
 	if err != nil {
 		return err
@@ -610,6 +611,39 @@ func (d *driver) secondLoginWithoutMemory() error {
 		return fmt.Errorf("skip not ignored: pages %v", o.seen)
 	}
 	return d.granted(o, identities["hydra-sql"])
+}
+
+// secondLoginFewerScopes signs in with hydra-sql, then in the same browser,
+// cookie kept, for fewer scopes, openid alone: the cookie's claims were
+// filtered by hydra-sql for openid, profile and email, so the dispatcher
+// ignores Hydra's skip (MEM-8, revue R20) and plays the flow again, whose
+// id_token holds no email, as without the cookie.
+func (d *driver) secondLoginFewerScopes() error {
+	if err := d.remembered(); err != nil {
+		return err
+	}
+	d.client.scope = "openid"
+	defer func() { d.client.scope = "" }()
+	o, err := d.skippedLogin(login{flow: "hydra-sql", user: isabelle, consent: "accept"})
+	if err != nil {
+		return fmt.Errorf("MEM-8, skip not ignored: %w", err)
+	}
+	if o.end.URL == nil || d.kind(o.end) != "callback" {
+		return fmt.Errorf("%w: pages %v, ended on %s %s", errNoCallback, o.seen, o.code, endURL(o))
+	}
+	claims, err := d.client.redeem(d.ctx, o.end.URL)
+	if err != nil {
+		return err
+	}
+	if err := (identity{Sub: isabelle, ACR: "1", AMR: []string{"pwd"}}).check(claims); err != nil {
+		return err
+	}
+	for _, c := range []string{"email", "firstname", "lastname"} {
+		if _, ok := claims[c]; ok {
+			return fmt.Errorf("claim %s for scope openid alone", c)
+		}
+	}
+	return nil
 }
 
 // secondLoginOtherSubject signs in with hydra-sql, then in the same browser,
@@ -626,7 +660,7 @@ func (d *driver) secondLoginOtherSubject() error {
 	if err := d.remembered(); err != nil {
 		return err
 	}
-	d.b.forget(d.dispatcher, rememberCookie, rememberCookie+"_2")
+	d.b.forget(d.dispatcher, rememberCookie)
 	o, err := d.skippedLogin(login{flow: "hydra-sql", user: henri, consent: "accept"})
 	if err != nil {
 		return err

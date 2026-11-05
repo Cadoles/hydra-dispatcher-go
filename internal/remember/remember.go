@@ -2,10 +2,9 @@
 // cookie (Stockage de l'état, Mémoire du skip): AES-256-GCM by
 // secrets.cookie_key, the key's id first so that the previous keys of
 // secrets.cookie_keys_previous still open what they sealed; deflated beyond
-// 1.5 KB, in two cookies beyond 3.8 KB, not written beyond 7.5 KB. The flow
-// engine judges what it holds (MEM-3 to MEM-9) and says what to write
-// (WRT-1); this package only opens and seals, out of the engine, which draws
-// no nonce.
+// 1.5 KB, not written beyond 3.8 KB. The flow engine judges what it holds
+// (MEM-3 to MEM-9) and says what to write (WRT-1); this package only opens
+// and seals, out of the engine, which draws no nonce.
 package remember
 
 import (
@@ -26,13 +25,14 @@ import (
 )
 
 // The bounds of the doc, in bytes: the JSON is deflated beyond deflateAbove,
-// the sealed value split in two cookies beyond splitAbove, and refused
-// beyond maxSealed, which two cookies of a browser's 4096 bytes, names
-// included, still hold.
+// and the sealed value refused beyond maxSealed. One cookie, never two: it
+// travels with every request to the dispatcher, and a Cookie header beyond
+// the 8 KB of a reverse proxy's line (nginx, Apache) would answer 400 to
+// every page, the logout that clears it included, until it expires (revue
+// R20). maxSealed and the __Host- name stay under a browser's 4096 bytes.
 const (
 	deflateAbove = 1500
-	splitAbove   = 3800
-	maxSealed    = 7500
+	maxSealed    = 3800
 )
 
 // maxPlain bounds what an inflated cookie may give: a sealed one came from
@@ -40,19 +40,17 @@ const (
 const maxPlain = 64 << 10
 
 // The sealed value: format "1", the key's id, then the nonce and the sealed
-// data in base64url, dot-separated. A value split in two starts with "2." in
-// its first cookie, the rest being in the second.
+// data in base64url, dot-separated.
 const (
 	format     = "1"
-	splitMark  = "2."
 	plainJSON  = 0
 	plainFlate = 1
 )
 
-// ErrTooLarge is the answer of Seal beyond 7.5 KB: no cookie is written, and
+// ErrTooLarge is the answer of Seal beyond 3.8 KB: no cookie is written, and
 // the former one is cleared, which would serve the next skip with former
 // claims (WRT-2).
-var ErrTooLarge = errors.New("remember: the memory of the skip is beyond 7.5 KB")
+var ErrTooLarge = errors.New("remember: the memory of the skip is beyond 3.8 KB")
 
 // Codec seals with the first key and opens with any of them.
 type Codec struct {
@@ -93,12 +91,11 @@ func keyID(k []byte) string {
 // seals dispatcher_admin too.
 func aad(id string) []byte { return []byte("dispatcher_remember." + format + "." + id) }
 
-// Seal returns the cookie values of r: one, or two beyond 3.8 KB, the first
-// marked as such; ErrTooLarge beyond 7.5 KB.
-func (c *Codec) Seal(r *flow.Remembered) ([]string, error) {
+// Seal returns the cookie value of r; ErrTooLarge beyond 3.8 KB.
+func (c *Codec) Seal(r *flow.Remembered) (string, error) {
 	data, err := json.Marshal(r)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	plain := append([]byte{plainJSON}, data...)
 	if len(data) > deflateAbove {
@@ -113,29 +110,18 @@ func (c *Codec) Seal(r *flow.Remembered) ([]string, error) {
 	nonce := make([]byte, k.aead.NonceSize())
 	_, _ = rand.Read(nonce) // crypto/rand never fails
 	sealed := format + "." + k.id + "." + base64.RawURLEncoding.EncodeToString(k.aead.Seal(nonce, nonce, plain, aad(k.id)))
-	switch {
-	case len(sealed) > maxSealed:
-		return nil, ErrTooLarge
-	case len(sealed) > splitAbove:
-		half := (len(sealed) + 1) / 2
-		return []string{splitMark + sealed[:half], sealed[half:]}, nil
+	if len(sealed) > maxSealed {
+		return "", ErrTooLarge
 	}
-	return []string{sealed}, nil
+	return sealed, nil
 }
 
-// Open reads the cookie values the browser sent, the first and the second
-// part ("" for none): absent without the first, or without the second when
-// the first says it is split (MEM-1); unreadable when no key opens it, or
-// for a version unknown (MEM-2).
-func (c *Codec) Open(first, second string) flow.Memory {
-	sealed := first
-	switch {
-	case first == "":
+// Open reads the cookie value the browser sent ("" for none): absent without
+// it (MEM-1); unreadable when no key opens it, or for a version unknown
+// (MEM-2).
+func (c *Codec) Open(sealed string) flow.Memory {
+	if sealed == "" {
 		return flow.Memory{Reason: flow.SkipAbsent}
-	case strings.HasPrefix(first, splitMark) && second == "":
-		return flow.Memory{Reason: flow.SkipAbsent}
-	case strings.HasPrefix(first, splitMark):
-		sealed = first[len(splitMark):] + second
 	}
 	r, err := c.open(sealed)
 	if err != nil {

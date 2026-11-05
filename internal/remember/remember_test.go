@@ -50,51 +50,36 @@ func jsonOf(v any) string {
 	return string(data)
 }
 
-func open(c *Codec, values []string) flow.Memory {
-	second := ""
-	if len(values) > 1 {
-		second = values[1]
-	}
-	return c.Open(values[0], second)
-}
-
 // WRT-1, MEM-1, MEM-2: what is sealed opens as it was, in one cookie,
-// deflated beyond 1.5 KB, in two beyond 3.8 KB.
+// deflated beyond 1.5 KB.
 func TestSealOpen(t *testing.T) {
 	c := codec(t, activeKey)
 	for _, tc := range []struct {
-		name         string
-		r            *flow.Remembered
-		parts        int
-		smallerThan  int // the JSON, when deflated
-		compressible bool
+		name        string
+		r           *flow.Remembered
+		smallerThan int // the JSON, when deflated
 	}{
-		{"WRT-1, a small memory, one cookie", remembered(64, false), 1, 0, false},
-		{"WRT-1, beyond 1.5 KB, deflated", remembered(3000, true), 1, 3000, true},
-		{"WRT-1, beyond 3.8 KB, two cookies", remembered(4000, false), 2, 0, false},
-		{"WRT-1, a session cookie, exp 0", func() *flow.Remembered { r := remembered(64, false); r.Exp = 0; return r }(), 1, 0, false},
+		{"WRT-1, a small memory", remembered(64, false), 0},
+		{"WRT-1, beyond 1.5 KB, deflated", remembered(3000, true), 3000},
+		{"WRT-1, beyond 1.5 KB of claims deflate barely shrinks, under 3.8 KB sealed", remembered(2000, false), 0},
+		{"WRT-1, a session cookie, exp 0", func() *flow.Remembered { r := remembered(64, false); r.Exp = 0; return r }(), 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			values, err := c.Seal(tc.r)
+			v, err := c.Seal(tc.r)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(values) != tc.parts {
-				t.Fatalf("%d cookies, want %d", len(values), tc.parts)
+			if len(v) > maxSealed {
+				t.Errorf("a cookie of %d bytes", len(v))
 			}
-			for i, v := range values {
-				if len(v) > splitAbove+len(splitMark) {
-					t.Errorf("cookie %d of %d bytes", i+1, len(v))
-				}
-				// A cookie value as browsers keep it, without quotes.
-				if strings.ContainsAny(v, " \",;\\") {
-					t.Errorf("cookie %d holds a separator: %q", i+1, v)
-				}
+			// A cookie value as browsers keep it, without quotes.
+			if strings.ContainsAny(v, " \",;\\") {
+				t.Errorf("the cookie holds a separator: %q", v)
 			}
-			if tc.smallerThan > 0 && len(values[0]) >= tc.smallerThan {
-				t.Errorf("deflated: %d bytes, not under %d", len(values[0]), tc.smallerThan)
+			if tc.smallerThan > 0 && len(v) >= tc.smallerThan {
+				t.Errorf("deflated: %d bytes, not under %d", len(v), tc.smallerThan)
 			}
-			got := open(c, values)
+			got := c.Open(v)
 			if got.Reason != "" || got.Content == nil {
 				t.Fatalf("opened %+v", got)
 			}
@@ -106,10 +91,21 @@ func TestSealOpen(t *testing.T) {
 	}
 }
 
-// WRT-2: beyond 7.5 KB, nothing to write; the page clears the former one.
+// WRT-2 (revue R20): beyond 3.8 KB, nothing to write, never a second cookie;
+// the page clears the former one.
 func TestSealTooLarge(t *testing.T) {
-	if _, err := codec(t, activeKey).Seal(remembered(8000, false)); !errors.Is(err, ErrTooLarge) {
-		t.Errorf("Seal = %v, want ErrTooLarge", err)
+	for _, n := range []int{4000, 8000} {
+		if v, err := codec(t, activeKey).Seal(remembered(n, false)); !errors.Is(err, ErrTooLarge) || v != "" {
+			t.Errorf("Seal of %d bytes of claims = %d bytes, %v; want ErrTooLarge", n, len(v), err)
+		}
+	}
+}
+
+// The largest cookie, under its HTTPS name, stays within a browser's 4096
+// bytes for name and value (revue R20: one cookie only).
+func TestBrowserBound(t *testing.T) {
+	if n := len("__Host-dispatcher_remember") + len("=") + maxSealed; n > 4096 {
+		t.Errorf("%d bytes", n)
 	}
 }
 
@@ -117,14 +113,6 @@ func TestSealTooLarge(t *testing.T) {
 func TestOpenFails(t *testing.T) {
 	c := codec(t, activeKey, oldKey)
 	one, err := c.Seal(remembered(64, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	two, err := c.Seal(remembered(4000, false))
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := c.Seal(remembered(4000, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,32 +124,31 @@ func TestOpenFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := []byte(one[0])
+	tampered := []byte(one)
 	tampered[len(tampered)-5] ^= 1
 	for _, tc := range []struct {
-		name          string
-		first, second string
-		want          string
+		name  string
+		value string
+		want  string
 	}{
-		{"MEM-1, no cookie", "", "", flow.SkipAbsent},
-		{"MEM-1, the second part missing", two[0], "", flow.SkipAbsent},
-		{"MEM-1, the second part alone", "", two[1], flow.SkipAbsent},
-		{"MEM-2, the second part of another cookie", two[0], other[1], flow.SkipUnreadable},
-		{"MEM-2, tampered", string(tampered), "", flow.SkipUnreadable},
-		{"MEM-2, a version unknown", unknown[0], "", flow.SkipUnreadable},
-		{"MEM-2, a format unknown", "3" + one[0][1:], "", flow.SkipUnreadable},
-		{"MEM-2, a key unknown", strings.Replace(one[0], keyID(activeKey), "00000000", 1), "", flow.SkipUnreadable},
-		{"MEM-2, not base64url", "1." + keyID(activeKey) + ".!!!", "", flow.SkipUnreadable},
-		{"MEM-2, shorter than a nonce", "1." + keyID(activeKey) + ".AAAA", "", flow.SkipUnreadable},
-		{"MEM-2, garbage", "garbage", "", flow.SkipUnreadable},
-		{"MEM-2, sealed by a key the dispatcher no longer has", onlyOld[0], "", flow.SkipUnreadable},
+		{"MEM-1, no cookie", "", flow.SkipAbsent},
+		{"MEM-2, tampered", string(tampered), flow.SkipUnreadable},
+		{"MEM-2, a version unknown", unknown, flow.SkipUnreadable},
+		{"MEM-2, a format unknown", "3" + one[1:], flow.SkipUnreadable},
+		// The first half of a value split in two, before revue R20.
+		{"MEM-2, a first part of former times", "2." + one[:len(one)/2], flow.SkipUnreadable},
+		{"MEM-2, a key unknown", strings.Replace(one, keyID(activeKey), "00000000", 1), flow.SkipUnreadable},
+		{"MEM-2, not base64url", "1." + keyID(activeKey) + ".!!!", flow.SkipUnreadable},
+		{"MEM-2, shorter than a nonce", "1." + keyID(activeKey) + ".AAAA", flow.SkipUnreadable},
+		{"MEM-2, garbage", "garbage", flow.SkipUnreadable},
+		{"MEM-2, sealed by a key the dispatcher no longer has", onlyOld, flow.SkipUnreadable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dec := c
 			if strings.Contains(tc.name, "no longer") {
 				dec = codec(t, activeKey)
 			}
-			if got := dec.Open(tc.first, tc.second); got.Content != nil || got.Reason != tc.want {
+			if got := dec.Open(tc.value); got.Content != nil || got.Reason != tc.want {
 				t.Errorf("Open = %+v, want reason %s", got, tc.want)
 			}
 		})
@@ -172,17 +159,17 @@ func TestOpenFails(t *testing.T) {
 // the next cookie is sealed by the active one.
 func TestRotation(t *testing.T) {
 	before := codec(t, oldKey)
-	values, err := before.Seal(remembered(64, false))
+	v, err := before.Seal(remembered(64, false))
 	if err != nil {
 		t.Fatal(err)
 	}
 	after := codec(t, activeKey, oldKey)
-	if got := open(after, values); got.Content == nil {
+	if got := after.Open(v); got.Content == nil {
 		t.Fatalf("a cookie of the previous key: %+v", got)
 	}
 	again, _ := after.Seal(remembered(64, false))
-	if !strings.HasPrefix(again[0], "1."+keyID(activeKey)+".") {
-		t.Errorf("sealed by %s", again[0][:11])
+	if !strings.HasPrefix(again, "1."+keyID(activeKey)+".") {
+		t.Errorf("sealed by %s", again[:11])
 	}
 }
 
@@ -194,7 +181,7 @@ func TestOtherUse(t *testing.T) {
 	nonce := make([]byte, k.aead.NonceSize())
 	data, _ := json.Marshal(remembered(64, false))
 	sealed := sealWith(k.aead, nonce, append([]byte{plainJSON}, data...), []byte("dispatcher_admin"))
-	if got := c.Open("1."+k.id+"."+sealed, ""); got.Reason != flow.SkipUnreadable {
+	if got := c.Open("1." + k.id + "." + sealed); got.Reason != flow.SkipUnreadable {
 		t.Errorf("Open = %+v, want unreadable", got)
 	}
 }

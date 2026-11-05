@@ -96,11 +96,16 @@ func (s *Redis) Get(ctx context.Context, key string) ([]byte, uint64, error) {
 }
 
 func (s *Redis) Put(ctx context.Context, key string, val []byte, ttl time.Duration, ifVersion uint64) error {
-	if err := s.usable(ctx); err != nil {
+	// Its own arguments fail first, a closed store then, as the contract
+	// says and the memory store does (revue R20).
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if ttl <= 0 {
 		return ErrNoTTL
+	}
+	if err := s.usable(ctx); err != nil {
+		return err
 	}
 	return s.put(ctx, key, val, ttl, ifVersion, newVersion())
 }

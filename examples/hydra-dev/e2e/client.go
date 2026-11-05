@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -25,6 +26,9 @@ type client struct {
 	redirect      string
 	http          *http.Client
 	state, nonce  string // of the last authorization request
+	// scope is that of the next authorization requests, "openid profile
+	// email" when empty.
+	scope string
 }
 
 // findClient returns the id of the one client named name. hydra-dev imports
@@ -61,7 +65,7 @@ func (c *client) authURL(prompt string) string {
 	q := url.Values{
 		"client_id":     {c.id},
 		"response_type": {"code"},
-		"scope":         {"openid profile email"},
+		"scope":         {cmp.Or(c.scope, "openid profile email")},
 		"redirect_uri":  {c.redirect},
 		"state":         {c.state},
 		"nonce":         {c.nonce},

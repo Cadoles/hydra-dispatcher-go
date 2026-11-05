@@ -310,6 +310,15 @@ func testStore(t *testing.T, open func(t *testing.T) (s StateStore, ttl time.Dur
 		if err := s.Ping(ctx); !errors.Is(err, ErrClosed) {
 			t.Errorf("Ping = %v, want ErrClosed", err)
 		}
+		// Its own arguments fail first (revue R20).
+		if err := s.Put(ctx, "flow:b", []byte("v"), 0, 0); !errors.Is(err, ErrNoTTL) {
+			t.Errorf("Put without TTL = %v, want ErrNoTTL", err)
+		}
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		if err := s.Put(canceled, "flow:b", []byte("v"), ttl, 0); !errors.Is(err, context.Canceled) {
+			t.Errorf("Put with a context ended = %v, want context.Canceled", err)
+		}
 	})
 
 	// Close may come while calls run, and twice at once: each call then

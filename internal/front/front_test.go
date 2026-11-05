@@ -603,19 +603,17 @@ func TestLogout(t *testing.T) {
 	} {
 		w := newWorld(t)
 		w.hydra.errs["get_logout"] = tc.err
-		w.cookies["dispatcher_remember"], w.cookies["dispatcher_remember_2"] = "2.memory", "of another session"
+		w.cookies["dispatcher_remember"] = "1.memory.of-another-session"
 		resp := w.do(http.MethodGet, tc.target, nil)
 		body := text(t, resp)
 		if resp.StatusCode != tc.status || tc.code != "" && !strings.Contains(body, tc.code) ||
 			tc.code == "" && resp.Header.Get("Location") != loggedOut {
 			t.Errorf("%s: %d %s\n%s", tc.name, resp.StatusCode, resp.Header.Get("Location"), body)
 		}
-		// WRT-4 (Q41): a logout accepted clears the memory of the skip, both
-		// parts, whatever its sid; a logout that fails, nothing.
-		for _, name := range []string{"dispatcher_remember", "dispatcher_remember_2"} {
-			if c := setCookie(resp, name); (c != nil && c.MaxAge < 0) != (tc.code == "") {
-				t.Errorf("%s: WRT-4, %s: %+v", tc.name, name, c)
-			}
+		// WRT-4 (Q41): a logout accepted clears the memory of the skip,
+		// whatever its sid; a logout that fails, nothing.
+		if c := setCookie(resp, "dispatcher_remember"); (c != nil && c.MaxAge < 0) != (tc.code == "") {
+			t.Errorf("%s: WRT-4: %+v", tc.name, c)
 		}
 	}
 	w := newWorld(t)
@@ -1102,9 +1100,6 @@ func TestRememberCookie(t *testing.T) {
 			if c == nil || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/" || c.MaxAge != 86400 || c.Secure {
 				t.Fatalf("WRT-1, Set-Cookie %+v", c)
 			}
-			if setCookie(resp, "dispatcher_remember_2") != nil {
-				t.Error("a second part for a small memory")
-			}
 
 			w.hydra.skip, w.hydra.consentSkip, w.hydra.calls = true, !tc.screen, nil
 			if u := location(t, w.do(http.MethodGet, "/?login_challenge="+hydraL2, nil), http.StatusSeeOther); u.String() != verifierURL {
@@ -1136,9 +1131,9 @@ func TestRememberCookie(t *testing.T) {
 	}
 }
 
-// WRT-1, WRT-2, MEM-1: deflated, then in two cookies beyond 3.8 KB, both
-// read back; a former second part cleared; beyond 7.5 KB, none, and the
-// former one cleared.
+// WRT-1, WRT-2: deflated beyond 1.5 KB, one cookie up to 3.8 KB, read back;
+// beyond 3.8 KB, none, the former one cleared, and never a second cookie
+// (revue R20: the Cookie header under a reverse proxy's 8 KB).
 func TestRememberSizes(t *testing.T) {
 	random := func(n int) string { // which deflate barely shrinks
 		b := make([]byte, n*3/4)
@@ -1146,37 +1141,27 @@ func TestRememberSizes(t *testing.T) {
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
 	w := newWorld(t)
-	resp := w.remembered(`{"email":"alice@example.org","blob":"` + random(5000) + `"}`)
-	first, second := setCookie(resp, "dispatcher_remember"), setCookie(resp, "dispatcher_remember_2")
-	if first == nil || second == nil || second.MaxAge != 86400 || !second.HttpOnly {
-		t.Fatalf("WRT-1, two cookies: %+v %+v", first, second)
+	resp := w.remembered(`{"email":"alice@example.org","blob":"` + random(2000) + `"}`)
+	c := setCookie(resp, "dispatcher_remember")
+	if c == nil || len(c.Value) < 1500 || len(c.Value) > 3800 || c.MaxAge != 86400 {
+		t.Fatalf("WRT-1, one cookie under 3.8 KB: %+v", c)
 	}
-	// Both parts read back: the next login is skipped.
+	// Read back: the next login is skipped.
 	w.hydra.skip = true
 	if u := location(t, w.do(http.MethodGet, "/?login_challenge="+hydraL2, nil), http.StatusSeeOther); u.String() != verifierURL {
-		t.Fatalf("SKP-1 from two cookies: %s", u)
-	}
-	// MEM-1: without its second part, the skip is ignored.
-	delete(w.cookies, "dispatcher_remember_2")
-	if resp := w.do(http.MethodGet, "/?login_challenge=2e56ccaa288360cfe1473246a1bb1dd6", nil); resp.StatusCode != http.StatusOK {
-		t.Errorf("MEM-1, the second part missing: %d, not the choice page", resp.StatusCode)
+		t.Fatalf("SKP-1 from a large cookie: %s", u)
 	}
 
-	// A small memory written over two cookies clears the second.
-	w = newWorld(t)
-	w.cookies["dispatcher_remember_2"] = "former"
-	resp = w.remembered(`{"email":"alice@example.org"}`)
-	if c := setCookie(resp, "dispatcher_remember_2"); c == nil || c.MaxAge >= 0 {
-		t.Errorf("the former second part kept: %+v", c)
-	}
-
-	// WRT-2: beyond 7.5 KB, the cookie and its second part cleared.
+	// WRT-2: beyond 3.8 KB, the former cookie cleared, nothing else set.
 	w = newWorld(t)
 	w.cookies["dispatcher_remember"] = "former"
-	resp = w.remembered(`{"blob":"` + random(9000) + `"}`)
-	for _, name := range []string{"dispatcher_remember", "dispatcher_remember_2"} {
-		if c := setCookie(resp, name); c == nil || c.MaxAge >= 0 {
-			t.Errorf("WRT-2, %s: %+v", name, c)
+	resp = w.remembered(`{"blob":"` + random(4000) + `"}`)
+	if c := setCookie(resp, "dispatcher_remember"); c == nil || c.MaxAge >= 0 {
+		t.Errorf("WRT-2: %+v", c)
+	}
+	for _, c := range resp.Cookies() {
+		if strings.HasPrefix(c.Name, "dispatcher_remember") && c.Name != "dispatcher_remember" {
+			t.Errorf("WRT-2, a second cookie: %+v", c)
 		}
 	}
 	if !strings.Contains(w.logs.String(), `"msg":"skip.unavailable"`) {

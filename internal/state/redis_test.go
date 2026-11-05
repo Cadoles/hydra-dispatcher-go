@@ -67,6 +67,13 @@ func TestRedisWithoutServer(t *testing.T) {
 			t.Errorf("%s once closed = %v, want ErrClosed", name, err)
 		}
 	}
+	// Its own arguments first, closed or not (contract; revue R20).
+	if err := s.Put(ctx, "flow:a", nil, 0, 0); !errors.Is(err, ErrNoTTL) {
+		t.Errorf("Put without TTL once closed = %v, want ErrNoTTL", err)
+	}
+	if err := s.Put(canceled, "flow:a", nil, time.Minute, 0); !errors.Is(err, context.Canceled) {
+		t.Errorf("Put with a context ended once closed = %v, want context.Canceled", err)
+	}
 }
 
 func TestVersions(t *testing.T) {

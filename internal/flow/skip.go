@@ -52,8 +52,13 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes []strin
 	switch {
 	case c.FH != Composition(apps):
 		return SkipComposition, o.reports // MEM-7
-	case slices.ContainsFunc(scopes, func(s string) bool { return !slices.Contains(c.Scp, s) }):
-		return SkipScopes, o.reports // MEM-8
+	case !sameScopes(scopes, c.Scp):
+		// MEM-8 (revue R20): the same scopes, not only covered. The cookie's
+		// claims were filtered by the login apps for the scopes of the
+		// consent that wrote it (hydra-sql's FILTER_CLAIMS_BY_SCOPE); fewer
+		// scopes would get claims of scopes neither requested nor granted,
+		// another client's included, until the catalogue filters them.
+		return SkipScopes, o.reports
 	case len(acr) > 0 && !slices.Contains(acr, c.ACR):
 		// MEM-9 (Q36): fh does not cover the acr the flow declares, which
 		// may have changed since the cookie was written; the accept sends
@@ -61,6 +66,15 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes []strin
 		return SkipACR, o.reports
 	}
 	return "", o.reports
+}
+
+// sameScopes tells whether the scopes requested are those of the cookie,
+// order and repeats aside (MEM-8).
+func sameScopes(requested, remembered []string) bool {
+	within := func(a, b []string) bool {
+		return !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
+	}
+	return within(requested, remembered) && within(remembered, requested)
 }
 
 // ignored is the report of a skip ignored, of kind login or consent.
@@ -287,17 +301,25 @@ func withoutDispatcher(ctx Object) Object {
 }
 
 // skipMarkerOf returns the x_dispatcher_skip of a consent request's
-// context, a string; a context that is not an object has none (SKC-7).
+// context, and whether it has one; a context that is not an object has none
+// (SKC-7). A member that is no string, null included, is a marker the
+// dispatcher never wrote: "", which no key gives (SKC-8, revue R20).
 func skipMarkerOf(context any) (string, bool) {
 	data, err := json.Marshal(context)
 	if err != nil {
 		return "", false
 	}
-	var c struct {
-		Marker *string `json:"x_dispatcher_skip"`
-	}
-	if json.Unmarshal(data, &c) != nil || c.Marker == nil {
+	var c map[string]json.RawMessage
+	if json.Unmarshal(data, &c) != nil {
 		return "", false
 	}
-	return *c.Marker, true
+	raw, ok := c["x_dispatcher_skip"]
+	if !ok {
+		return "", false
+	}
+	var marker string
+	if json.Unmarshal(raw, &marker) != nil {
+		return "", true
+	}
+	return marker, true
 }

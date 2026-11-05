@@ -45,9 +45,9 @@ type Remembered struct {
 // or why there is none. The zero value is a cookie absent.
 type Memory struct {
 	Content *Remembered
-	// Reason is why Content is nil (MEM-1, MEM-2): SkipAbsent, the cookie or
-	// its second part missing, or SkipUnreadable, no key opening it, or of a
-	// version unknown. "" counts as absent.
+	// Reason is why Content is nil (MEM-1, MEM-2): SkipAbsent, the cookie
+	// missing, or SkipUnreadable, no key opening it, or of a version unknown.
+	// "" counts as absent.
 	Reason string
 }
 

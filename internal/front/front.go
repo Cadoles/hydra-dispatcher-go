@@ -39,8 +39,8 @@ type Logout interface {
 
 // Memories seals and opens the dispatcher_remember cookie: remember.Codec.
 type Memories interface {
-	Seal(r *flow.Remembered) ([]string, error)
-	Open(first, second string) flow.Memory
+	Seal(r *flow.Remembered) (string, error)
+	Open(value string) flow.Memory
 }
 
 // Snapshots gives the configuration of the moment, as store.Live does, for
@@ -83,13 +83,11 @@ type Handler struct {
 // maxForm bounds the body of a form: a Hydra 2.2 challenge is about 1.5 KiB.
 const maxForm = 64 << 10
 
-// Cookie names, without the __Host- prefix of HTTPS. The memory of the skip
-// takes two cookies beyond 3.8 KB, the second named rememberPart.
+// Cookie names, without the __Host- prefix of HTTPS.
 const (
 	csrfCookie     = "dispatcher_flow_csrf"
 	localeCookie   = "dispatcher_locale"
 	rememberCookie = "dispatcher_remember"
-	rememberPart   = "dispatcher_remember_2"
 )
 
 // New parses the templates and the catalogs, and renders each page in each
@@ -226,19 +224,18 @@ func (h *Handler) cookie(r *http.Request, name string) string {
 	return c.Value
 }
 
-// memory opens the dispatcher_remember cookie of r, and its second part
-// (MEM-1, MEM-2).
+// memory opens the dispatcher_remember cookie of r (MEM-1, MEM-2).
 func (h *Handler) memory(r *http.Request) flow.Memory {
-	return h.o.Remember.Open(h.cookie(r, rememberCookie), h.cookie(r, rememberPart))
+	return h.o.Remember.Open(h.cookie(r, rememberCookie))
 }
 
 // remember writes the memory of the skip the engine gives (WRT-1): one
-// cookie, or two beyond 3.8 KB, living until its exp, of the browser's
-// session for exp 0; a former second part is cleared. Beyond 7.5 KB, none
-// is written and the former one is cleared, which would serve the next skip
-// with former claims (WRT-2).
+// cookie, living until its exp, of the browser's session for exp 0. Beyond
+// 3.8 KB, none is written and the former one is cleared, which would serve
+// the next skip with former claims (WRT-2); never a second cookie, the
+// Cookie header staying under a reverse proxy's 8 KB (revue R20).
 func (h *Handler) remember(w http.ResponseWriter, r *http.Request, m *flow.Remembered) {
-	values, err := h.o.Remember.Seal(m)
+	value, err := h.o.Remember.Seal(m)
 	if err != nil {
 		h.forget(w)
 		h.o.Logger.InfoContext(r.Context(), "skip.unavailable", "detail", err.Error())
@@ -248,20 +245,12 @@ func (h *Handler) remember(w http.ResponseWriter, r *http.Request, m *flow.Remem
 	if m.Exp > 0 {
 		maxAge = time.Duration(m.Exp-m.IAT) * time.Second
 	}
-	h.setCookie(w, rememberCookie, values[0], maxAge, true)
-	switch {
-	case len(values) > 1:
-		h.setCookie(w, rememberPart, values[1], maxAge, true)
-	case h.cookie(r, rememberPart) != "":
-		h.setCookie(w, rememberPart, "", -1, true)
-	}
+	h.setCookie(w, rememberCookie, value, maxAge, true)
 }
 
-// forget clears the dispatcher_remember cookie, both its parts (WRT-2,
-// WRT-4).
+// forget clears the dispatcher_remember cookie (WRT-2, WRT-4).
 func (h *Handler) forget(w http.ResponseWriter) {
 	h.setCookie(w, rememberCookie, "", -1, true)
-	h.setCookie(w, rememberPart, "", -1, true)
 }
 
 // setCookie sets the dispatcher's cookie name for maxAge, rounded down to the
