@@ -37,7 +37,7 @@ type Webhooks interface {
 	Consent(ctx context.Context, call Call) ConsentHookAnswer
 }
 
-// StubWebhooks change nothing: the webhooks come with P10.
+// StubWebhooks change nothing, for a test without webhooks to call.
 type StubWebhooks struct{}
 
 func (StubWebhooks) Login(context.Context, Call) LoginHookAnswer     { return LoginHookAnswer{} }
@@ -80,8 +80,8 @@ type Result struct {
 }
 
 // slowAbandon is how long a call must have waited for its abandon to say something of
-// Hydra: a browser closed at once stays at the info level, a proxy's timeout during a
-// Hydra that hangs does not (Q67).
+// Hydra or a webhook: a browser closed at once stays at the info level, a proxy's timeout
+// during a call that hangs does not (Q67, Q72).
 const slowAbandon = time.Second
 
 // maxRounds bounds the rounds of one request: a read, the calls (two to
@@ -289,7 +289,7 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			case r.Sentry, r.Event == "hydra.request_failed", r.Event == "webhook.failed":
 				// The last two without Sentry: flow.error, of the same request, goes.
 				level = slog.LevelError
-			case r.Event == "hydra.request_abandoned" && r.Elapsed >= slowAbandon,
+			case (r.Event == "hydra.request_abandoned" || r.Event == "webhook.abandoned") && r.Elapsed >= slowAbandon,
 				r.Event == "flow.rejected" && r.Detail == ReasonSkipSubject.String()+":"+checkWebhook:
 				level = slog.LevelWarn
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
@@ -316,6 +316,12 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			}
 			if r.Event == "hydra.request_abandoned" {
 				args = append(args, "operation", r.Operation, "duration_ms", r.Elapsed.Milliseconds())
+			}
+			if r.Event == "webhook.failed" {
+				args = append(args, "host", r.Host, "status", r.Status, "duration_ms", r.Elapsed.Milliseconds())
+			}
+			if r.Event == "webhook.abandoned" {
+				args = append(args, "host", r.Host, "duration_ms", r.Elapsed.Milliseconds())
 			}
 			o.Log.Log(ctx, level, r.Event, args...)
 		}

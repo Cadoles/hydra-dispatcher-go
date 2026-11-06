@@ -25,6 +25,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/webhook"
 )
 
 // configEnv names the configuration file when -config is not given: the
@@ -142,20 +143,26 @@ func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs l
 	}
 	readCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	return store.NewLive(readCtx, identified{db, hosts}, logs.app, logs.warnings)
+	return store.NewLive(readCtx, identified{Source: db, hosts: hosts, allowHTTP: cfg.TLS.AllowHTTP, signed: cfg.Secrets.WebhookSigningKey != nil}, logs.app, logs.warnings)
 }
 
-// identified adds to each snapshot the warnings of the apps'
+// identified refuses a snapshot whose webhooks cannot be called (webhook.Check), and
+// adds to each one the warnings of the apps'
 // identification against security.emulated_api_authorized_hosts, which the
 // store does not know (emulated.Warnings).
 type identified struct {
 	store.Source
-	hosts []netip.Prefix
+	hosts     []netip.Prefix
+	allowHTTP bool
+	signed    bool
 }
 
 func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	s, err := i.Source.Snapshot(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := webhook.Check(s.Settings, i.allowHTTP, i.signed); err != nil {
 		return nil, err
 	}
 	// A copy: a source may give the same snapshot twice.
@@ -247,12 +254,16 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	if err != nil {
 		return nil, err
 	}
+	webhooks, err := webhook.New(cfg.Webhooks, cfg.TLS.MinVersion, cfg.Secrets.WebhookSigningKey)
+	if err != nil {
+		return nil, err
+	}
 	engine := &flow.Orchestrator{
 		Store:                  s.states,
 		Config:                 s.config,
 		Source:                 source,
 		Hydra:                  hydraClient,
-		Webhooks:               flow.StubWebhooks{},
+		Webhooks:               webhooks,
 		BaseURL:                cfg.Server.BaseURL,
 		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),
 		Keys:                   keys,

@@ -1,7 +1,9 @@
 package flow
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"strings"
 	"time"
@@ -160,24 +162,26 @@ func signOutURL(requestURL string) string {
 // object nor null (A9), stops the authentication: page E1006, nothing
 // written nor rejected. stop is the outcome to return, nil once done.
 func (r *run) loginHook(f *Flow, body *ory.AcceptOAuth2LoginRequest, ctx Object) (_ Object, stop *Outcome) {
-	if r.Env.Config.Settings.LoginAcceptWebhookURL == "" {
+	location := r.Env.Config.Settings.LoginAcceptWebhookURL
+	if location == "" {
 		return ctx, nil
 	}
 	h := r.Answers.LoginHook
 	if h == nil {
 		call := *body
 		call.Context = ctx
-		return nil, &Outcome{Call: &Call{Op: LoginHook, Challenge: f.LoginChallenge, Gen: f.Gen, AcceptLogin: call}}
+		return nil, &Outcome{Call: &Call{Op: LoginHook, Challenge: f.LoginChallenge, Gen: f.Gen, AcceptLogin: call,
+			Hook: &HookCall{Location: location, Client: f.Hydra.Client}}}
 	}
 	r.use(LoginHook)
 	if h.Err != nil {
-		out := r.page().fail(E1006)
+		out := r.hookFailed(hookLogin, h.Err)
 		return nil, &out
 	}
 	if h.Context != nil {
 		o, ok := ObjectOf(h.Context)
 		if !ok {
-			out := r.page().fail(E1006).report(Report{Event: "webhook.failed", Detail: "context is neither an object nor null"})
+			out := r.page().fail(E1006).report(Report{Event: "webhook.failed", Kind: hookLogin, Detail: "context is neither an object nor null"})
 			return nil, &out
 		}
 		ctx = o
@@ -185,19 +189,44 @@ func (r *run) loginHook(f *Flow, body *ory.AcceptOAuth2LoginRequest, ctx Object)
 	if h.Subject != nil {
 		body.Subject = *h.Subject
 	}
-	if h.ACR != nil {
+	if h.ACR != nil || h.NullACR {
 		body.Acr = h.ACR
 	}
 	if h.AMR != nil {
 		body.Amr = h.AMR
 	}
-	if h.Remember != nil {
+	if h.Remember != nil || h.NullRemember {
 		body.Remember = h.Remember
 	}
-	if h.RememberFor != nil {
+	if h.RememberFor != nil || h.NullRememberFor {
 		body.RememberFor = h.RememberFor
 	}
 	return ctx, nil
+}
+
+// The kinds of webhook, as the logs give them.
+const (
+	hookLogin   = "login"
+	hookConsent = "consent"
+)
+
+// hookFailed answers a webhook call that failed: page E1006, nothing written nor
+// rejected, a reload replaying it (Q23); webhook.failed tells why, flow.error going to
+// Sentry. A connection the client closed cancels the call: nothing says the webhook
+// failed, so neither of them; webhook.abandoned tells it, as hydra.request_abandoned
+// does for Hydra (Q64, Q67, Q72).
+func (r *run) hookFailed(kind string, err error) Outcome {
+	out := r.page().fail(E1006)
+	failed := Report{Event: "webhook.failed", Kind: kind, Detail: err.Error()}
+	var e *HookError
+	if errors.As(err, &e) {
+		failed.Host, failed.Status, failed.Detail, failed.Elapsed = e.Host, e.Status, e.Cause, e.Elapsed
+	}
+	if errors.Is(err, context.Canceled) {
+		out.Reports = nil
+		failed.Event, failed.Detail = "webhook.abandoned", ""
+	}
+	return out.report(failed)
 }
 
 // accepted carries a final accept Hydra made over to f: its redirect_to,
@@ -245,7 +274,11 @@ func (r *run) consentBody(f *Flow, req *ory.OAuth2ConsentRequest) ory.AcceptOAut
 // redirect_to for a double submission (Q13).
 func (r *run) acceptConsent(f *Flow, c string, req *ory.OAuth2ConsentRequest) Outcome {
 	body := r.consentBody(f, req)
-	if stop := r.consentHook(c, f.Gen, &body); stop != nil {
+	var ctx Object
+	if f.Sent != nil {
+		ctx = f.Sent.Context
+	}
+	if stop := r.consentHook(c, f.Gen, &body, req, ctx); stop != nil {
 		return *stop
 	}
 	d := r.Answers.ConsentAccept
@@ -262,33 +295,44 @@ func (r *run) acceptConsent(f *Flow, c string, req *ory.OAuth2ConsentRequest) Ou
 	return r.consentDone(f, d).report(Report{Event: "hydra.consent_accepted"})
 }
 
-// consentHook calls the consent webhook with body, before a consent accept
-// with a flow or without (CST-12, CST-14, SKC-1, SKC-3): the claims it
-// returns replace those sent. A webhook that fails, or claims that are not
+// consentHook calls the consent webhook with body, what the request req holds of the
+// login, and ctx, the login's context (Q38), before a consent accept with a flow or
+// without (CST-12, CST-14, SKC-1, SKC-3): what it returns replaces the scopes, the
+// audiences and the claims to send. A webhook that fails, or claims that are not
 // objects, stop the authentication: page E1006, nothing written nor rejected
 // (SKC-13). stop is the outcome to return, nil once done.
-func (r *run) consentHook(c string, gen int64, body *ory.AcceptOAuth2ConsentRequest) (stop *Outcome) {
-	if r.Env.Config.Settings.ConsentAcceptWebhookURL == "" {
+func (r *run) consentHook(c string, gen int64, body *ory.AcceptOAuth2ConsentRequest, req *ory.OAuth2ConsentRequest, ctx Object) (stop *Outcome) {
+	location := r.Env.Config.Settings.ConsentAcceptWebhookURL
+	if location == "" {
 		return nil
 	}
 	h := r.Answers.ConsentHook
 	if h == nil {
-		return &Outcome{Call: &Call{Op: ConsentHook, Challenge: c, Gen: gen, AcceptConsent: *body}}
+		client, _ := json.Marshal(req.Client) // a model of the SDK always marshals
+		return &Outcome{Call: &Call{Op: ConsentHook, Challenge: c, Gen: gen, AcceptConsent: *body, Hook: &HookCall{
+			Location: location, Client: client, Subject: req.GetSubject(), ACR: req.GetAcr(), AMR: nonNil(req.Amr), Context: ctx,
+		}}}
 	}
 	r.use(ConsentHook)
 	if h.Err != nil {
-		out := r.page().fail(E1006)
+		out := r.hookFailed(hookConsent, h.Err)
 		return &out
 	}
 	for raw, member := range map[*json.RawMessage]*any{&h.IDToken: &body.Session.IdToken, &h.AccessToken: &body.Session.AccessToken} {
 		if *raw != nil {
 			o, ok := ObjectOf(*raw)
 			if !ok {
-				out := r.page().fail(E1006).report(Report{Event: "webhook.failed", Detail: "claims are not an object"})
+				out := r.page().fail(E1006).report(Report{Event: "webhook.failed", Kind: hookConsent, Detail: "claims are not an object"})
 				return &out
 			}
 			*member = o
 		}
+	}
+	if h.GrantScope != nil {
+		body.GrantScope = h.GrantScope
+	}
+	if h.GrantAudience != nil {
+		body.GrantAccessTokenAudience = h.GrantAudience
 	}
 	return nil
 }

@@ -92,10 +92,16 @@ type Secrets struct {
 }
 
 type TLS struct {
-	MinVersion            string `yaml:"min_version"`
-	CAFile                string `yaml:"ca_file"`
-	PinnedSPKISHA256      List   `yaml:"pinned_spki_sha256"`
-	HSTSIncludeSubdomains bool   `yaml:"hsts_include_subdomains"`
+	MinVersion string `yaml:"min_version"`
+	// CAFile replaces the system's authorities towards Hydra; the webhooks have
+	// their own, Webhooks.CAFile.
+	CAFile string `yaml:"ca_file"`
+	// AllowHTTP accepts targets in http:// without a word: a webhook in http://
+	// is refused without it, Hydra's admin warned about, its TLS coming after the
+	// cutover (Q70).
+	AllowHTTP             bool `yaml:"allow_http"`
+	PinnedSPKISHA256      List `yaml:"pinned_spki_sha256"`
+	HSTSIncludeSubdomains bool `yaml:"hsts_include_subdomains"`
 }
 
 type State struct {
@@ -205,6 +211,9 @@ type Observability struct {
 type Webhooks struct {
 	ProcessTimeout Duration `yaml:"process_timeout"`
 	MaxProcesses   int      `yaml:"max_processes"`
+	// CAFile replaces the system's authorities towards the webhooks; empty keeps
+	// them, whatever tls.ca_file says of Hydra (Q71).
+	CAFile string `yaml:"ca_file"`
 }
 
 type Logout struct {

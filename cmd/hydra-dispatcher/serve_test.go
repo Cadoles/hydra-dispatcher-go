@@ -478,15 +478,32 @@ func (s snapshotSource) Snapshot(context.Context) (*store.Snapshot, error) { ret
 func TestIdentifiedWarnings(t *testing.T) {
 	snap := store.NewSnapshot([]store.App{{ID: "open", AuthMode: "network"}}, nil, store.DefaultSettings())
 	snap.Warnings = []string{"a setting"}
-	src := identified{snapshotSource{snap}, []netip.Prefix{netip.MustParsePrefix("10.0.1.0/24")}}
+	src := identified{Source: snapshotSource{snap}, hosts: []netip.Prefix{netip.MustParsePrefix("10.0.1.0/24")}}
 	for range 2 {
 		s, err := src.Snapshot(context.Background())
 		if err != nil || len(s.Warnings) != 2 || s.Warnings[0] != "a setting" || !strings.HasPrefix(s.Warnings[1], "app open has no allowed_sources") || len(snap.Warnings) != 1 {
 			t.Fatalf("warnings %q, the source's %q, err %v", s.Warnings, snap.Warnings, err)
 		}
 	}
-	if _, err := (identified{&fakeStore{snapshotErr: errors.New("down")}, nil}).Snapshot(context.Background()); err == nil {
+	if _, err := (identified{Source: &fakeStore{snapshotErr: errors.New("down")}}).Snapshot(context.Background()); err == nil {
 		t.Error("the source's error lost")
+	}
+}
+
+// A webhook that could not be called refuses the snapshot, at startup as later on
+// (webhook.Check, Q70).
+func TestIdentifiedWebhooks(t *testing.T) {
+	settings := store.DefaultSettings()
+	settings.LoginAcceptWebhookURL = "http://hooks/login"
+	src := snapshotSource{store.NewSnapshot(nil, nil, settings)}
+	if _, err := (identified{Source: src, signed: true}).Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "tls.allow_http") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := (identified{Source: src, allowHTTP: true}).Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "secrets.webhook_signing_key") {
+		t.Errorf("err = %v", err)
+	}
+	if _, err := (identified{Source: src, allowHTTP: true, signed: true}).Snapshot(context.Background()); err != nil {
+		t.Error(err)
 	}
 }
 

@@ -65,6 +65,8 @@ func load(t *testing.T, content string, env map[string]string) (*Config, []strin
 	return Load(writeFile(t, content), envOf(required(env)))
 }
 
+const adminHTTPWarning = "hydra.admin_url is in http://"
+
 func hasWarning(warnings []string, substr string) bool {
 	return slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, substr) })
 }
@@ -84,9 +86,10 @@ func TestDesignDocExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// REDIS_DSN is unset: the in-memory store, with its warning. The
-	// DISPATCHER_*_KEY references are no overrides, and draw no warning.
-	if len(warnings) != 1 || !hasWarning(warnings, memoryWarning) {
+	// REDIS_DSN is unset: the in-memory store, with its warning; Hydra's admin in
+	// http://, with its own. The DISPATCHER_*_KEY references are no overrides, and draw
+	// no warning.
+	if len(warnings) != 2 || !hasWarning(warnings, memoryWarning) || !hasWarning(warnings, adminHTTPWarning) {
 		t.Errorf("warnings = %q", warnings)
 	}
 	for _, check := range []struct {
@@ -114,6 +117,30 @@ func TestDesignDocExample(t *testing.T) {
 		if !reflect.DeepEqual(check.got, check.want) {
 			t.Errorf("%s = %#v, want %#v", check.name, check.got, check.want)
 		}
+	}
+}
+
+// Hydra's admin in http:// is told of, outside development (Q70).
+func TestAdminInHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{"http://", map[string]string{"DISPATCHER_HYDRA_ADMIN_URL": "http://hydra:4445"}, true},
+		{"in capitals", map[string]string{"DISPATCHER_HYDRA_ADMIN_URL": "HTTP://hydra:4445"}, true},
+		{"https://", map[string]string{"DISPATCHER_HYDRA_ADMIN_URL": "https://hydra:4445"}, false},
+		{"tls.allow_http", map[string]string{"DISPATCHER_HYDRA_ADMIN_URL": "http://hydra:4445", "DISPATCHER_TLS_ALLOW_HTTP": "true"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, warnings, err := Load("testdata/design-doc.yaml", envOf(required(tc.env)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := hasWarning(warnings, adminHTTPWarning); got != tc.want {
+				t.Errorf("warnings = %q", warnings)
+			}
+		})
 	}
 }
 
@@ -524,6 +551,7 @@ func TestEnvKeys(t *testing.T) {
 		"DISPATCHER_SECRETS_WEBHOOK_SIGNING_KEY",
 		"DISPATCHER_TLS_MIN_VERSION",
 		"DISPATCHER_TLS_CA_FILE",
+		"DISPATCHER_TLS_ALLOW_HTTP",
 		"DISPATCHER_TLS_PINNED_SPKI_SHA256",
 		"DISPATCHER_TLS_HSTS_INCLUDE_SUBDOMAINS",
 		"DISPATCHER_STATE_REDIS_DSN",
@@ -571,6 +599,7 @@ func TestEnvKeys(t *testing.T) {
 		"DISPATCHER_OBSERVABILITY_TRACING_SAMPLER_RATIO",
 		"DISPATCHER_WEBHOOKS_PROCESS_TIMEOUT",
 		"DISPATCHER_WEBHOOKS_MAX_PROCESSES",
+		"DISPATCHER_WEBHOOKS_CA_FILE",
 		"DISPATCHER_LOGOUT_PROPAGATE_WITHOUT_RECORD",
 		"DISPATCHER_SERVE_MIGRATE",
 		"DISPATCHER_SERVE_BOOTSTRAP",
@@ -962,6 +991,7 @@ func TestValidation(t *testing.T) {
 		{"remember backend postgres", map[string]string{"DISPATCHER_REMEMBER_BACKEND": "postgres"}, "remember.backend: postgres is not available yet"},
 		{"logout propagation", map[string]string{"DISPATCHER_LOGOUT_PROPAGATE_WITHOUT_RECORD": "some"}, "logout.propagate_without_record"},
 		{"missing CA file", map[string]string{"DISPATCHER_TLS_CA_FILE": "/nonexistent/ca.pem"}, "tls.ca_file"},
+		{"missing webhooks CA file", map[string]string{"DISPATCHER_WEBHOOKS_CA_FILE": "/nonexistent/ca.pem"}, "webhooks.ca_file"},
 		{"overflowing duration", map[string]string{"DISPATCHER_ADMIN_CLIENT_SECRET_MAX_AGE": "10000000000"}, "too long"},
 		{"NaN ratio", map[string]string{"DISPATCHER_OBSERVABILITY_TRACING_SAMPLER_RATIO": ".nan"}, "observability.tracing.sampler_ratio"},
 		{"no block", map[string]string{"DISPATCHER_SECURITY_FAILURE_RATE_LIMIT_BLOCK": "0"}, "security.failure_rate_limit.block"},

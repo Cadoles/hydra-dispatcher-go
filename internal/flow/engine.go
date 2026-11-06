@@ -270,6 +270,7 @@ type Report struct {
 	Event     string
 	Detail    string
 	Kind      string
+	Host      string
 	Reason    string
 	App       string
 	Result    string
@@ -392,7 +393,9 @@ type Call struct {
 	// the same skip, its own redirect_to (SKP-6, ECR-3); carried over to a
 	// flow in progress as a final accept's (ECR-4), its write stays a guard
 	// (SKP-8).
-	Skip          bool
+	Skip bool
+	// Hook is what a webhook is called with, besides the accept's body.
+	Hook          *HookCall
 	AcceptLogin   ory.AcceptOAuth2LoginRequest
 	AcceptConsent ory.AcceptOAuth2ConsentRequest
 	Reject        ory.RejectOAuth2Request
@@ -469,25 +472,60 @@ func (d *Done) err() error {
 	return d.Err
 }
 
-// LoginHookAnswer is the login accept webhook's answer (P10): the members it
-// returned replace those sent, a member nil is unchanged. Context must be an
-// object or null (A9).
-type LoginHookAnswer struct {
-	Subject     *string
-	ACR         *string
-	AMR         []string
-	Context     json.RawMessage
-	Remember    *bool
-	RememberFor *int64
-	Err         error
+// HookCall is what a webhook needs besides the body of the accept: its location, from
+// the snapshot the transition decided on, and the client as Hydra served it. The consent
+// webhook gets what Hydra holds of the login too, and the context of the login: the one
+// sent at the final accept, or the remember cookie's, never the consent request's (Q38).
+type HookCall struct {
+	Location string
+	Client   json.RawMessage
+	Subject  string
+	ACR      string
+	AMR      []string
+	Context  Object
 }
 
-// ConsentHookAnswer is the consent accept webhook's answer (P10): claims
-// that replace those sent, nil unchanged.
+// HookError is a webhook call that failed, as webhook.failed tells it: the host of its
+// URL or the name of its program, the status of its answer or the code it exited with,
+// 0 when neither came, and a cause that quotes no value. Err stays wrapped:
+// context.Canceled when the client left (Q72).
+type HookError struct {
+	Host    string
+	Status  int
+	Cause   string
+	Elapsed time.Duration
+	Err     error
+}
+
+func (e *HookError) Error() string { return "webhook " + e.Host + ": " + e.Cause }
+
+func (e *HookError) Unwrap() error { return e.Err }
+
+// LoginHookAnswer is the login accept webhook's answer (P10): the members it
+// returned replace those sent, a member nil is unchanged. Context must be an
+// object or null (A9). The Null members are a null returned, which drops the
+// member from the accept, as Symfony's setters did.
+type LoginHookAnswer struct {
+	Subject         *string
+	ACR             *string
+	NullACR         bool
+	AMR             []string
+	Context         json.RawMessage
+	Remember        *bool
+	NullRemember    bool
+	RememberFor     *int64
+	NullRememberFor bool
+	Err             error
+}
+
+// ConsentHookAnswer is the consent accept webhook's answer (P10): what it returned
+// replaces what was to be sent, nil unchanged.
 type ConsentHookAnswer struct {
-	IDToken     json.RawMessage
-	AccessToken json.RawMessage
-	Err         error
+	GrantScope    []string
+	GrantAudience []string
+	IDToken       json.RawMessage
+	AccessToken   json.RawMessage
+	Err           error
 }
 
 // failure is the class of a Hydra error (B1, Q11).

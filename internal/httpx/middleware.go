@@ -37,7 +37,7 @@ func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 func RealIP(trusted []netip.Prefix) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			inf := &requestInfo{clientIP: clientIP(r, trusted)}
+			inf := &requestInfo{clientIP: clientIP(r, trusted), userAgent: r.UserAgent()}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), infoKey{}, inf)))
 		})
 	}

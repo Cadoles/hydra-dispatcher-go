@@ -5,8 +5,6 @@ package hydra
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -49,24 +45,12 @@ const (
 	// weighs a few KiB.
 	maxBody = 1 << 20
 	// maxCause bounds the part of a 5xx error document kept in the error.
-	maxCause = 200
+	maxCause = httpx.MaxCause
 	// readyTTL is how long Ready reuses Hydra's answer.
 	readyTTL = time.Second
 	// userAgent is the dispatcher's, on every call.
 	userAgent = "hydra-dispatcher-go"
 )
-
-// tls12Suites are the TLS 1.2 suites the ANSSI TLS guide recommends: ECDHE
-// with an AEAD. Go still enables ECDHE with AES-CBC-SHA by default. TLS 1.3
-// suites are all AEAD and not configurable.
-var tls12Suites = []uint16{
-	tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-	tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-	tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
-	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-	tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-	tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-}
 
 // UnavailableError is the ErrUnavailable of one call, with what the logs and
 // the metrics need (hydra_requests_total's status_class,
@@ -91,7 +75,7 @@ func (e *UnavailableError) Error() string {
 		msg += fmt.Sprintf(": status %d", e.Status)
 	}
 	msg += e.detail + e.server
-	if text := bounded(e.cause()); text != "" {
+	if text := httpx.BoundedCause(e.cause()); text != "" {
 		msg += ": " + text
 	}
 	return msg
@@ -118,25 +102,12 @@ func Failure(err error) (op string, status int, cause string) {
 			}
 			cause += text
 		}
-		return unavailable.Op, unavailable.Status, bounded(cause)
+		return unavailable.Op, unavailable.Status, httpx.BoundedCause(cause)
 	case errors.As(err, &request):
 		return request.Op, request.Status, ""
 	}
 	return "", 0, ""
 }
-
-// bounded cuts a cause to maxCause, on a character boundary.
-func bounded(cause string) string {
-	if len(cause) > maxCause {
-		return strings.ToValidUTF8(cause[:maxCause], "") + "…"
-	}
-	return cause
-}
-
-// cited finds where a library starts citing what it could not read: a double quote, or
-// the name of an XML element, as the SDK's decoder gives it; not the '<' of
-// encoding/json, a single character.
-var cited = regexp.MustCompile(`"|<[^']`)
 
 // cause is what Failure and Error keep of the error of a call. An answer of 300 and up,
 // read whole, is named by its status alone: the text of its status line, which read and
@@ -150,11 +121,7 @@ func (e *UnavailableError) cause() string {
 	if _, answered := errorBody(e.err); answered && e.Status >= 300 {
 		return strings.TrimSpace(fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status)))
 	}
-	text := e.err.Error()
-	if at := cited.FindStringIndex(text); at != nil {
-		text = text[:at[0]]
-	}
-	return strings.TrimRight(text, " :")
+	return httpx.Uncited(e.err.Error())
 }
 
 // Elapsed is how long a failed call ran (hydra.request_abandoned), 0 when it was not
@@ -254,9 +221,9 @@ func New(h config.Hydra, t config.TLS) (*Client, error) {
 // the environment: the admin API, without authentication, carries subjects
 // and claims.
 func newTransport(h config.Hydra, t config.TLS) (*http.Transport, error) {
-	tlsConfig, err := clientTLS(t)
+	tlsConfig, err := httpx.ClientTLS(t.MinVersion, t.CAFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("tls.ca_file: %w", err)
 	}
 	return &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -268,24 +235,6 @@ func newTransport(h config.Hydra, t config.TLS) (*http.Transport, error) {
 		MaxIdleConnsPerHost: h.MaxInFlight,
 		IdleConnTimeout:     90 * time.Second,
 	}, nil
-}
-
-func clientTLS(t config.TLS) (*tls.Config, error) {
-	c := &tls.Config{MinVersion: tls.VersionTLS12, CipherSuites: tls12Suites}
-	if t.MinVersion == "1.3" {
-		c.MinVersion = tls.VersionTLS13
-	}
-	if t.CAFile != "" {
-		pem, err := os.ReadFile(t.CAFile)
-		if err != nil {
-			return nil, err
-		}
-		c.RootCAs = x509.NewCertPool()
-		if !c.RootCAs.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("tls.ca_file: no certificate in %s", t.CAFile)
-		}
-	}
-	return c, nil
 }
 
 // hydraTransport sends the request's trace id along, so Hydra's logs (which

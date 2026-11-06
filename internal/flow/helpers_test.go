@@ -3,6 +3,7 @@ package flow
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,5 +133,15 @@ func twoSteps(t *testing.T) *Flow {
 		},
 		ExpiresAt:      testNow.Add(10 * time.Minute).UnixMilli(),
 		HydraExpiresAt: testNow.Add(30 * time.Minute).UnixMilli(),
+	}
+}
+
+// hookReport checks that the outcome reports event for the webhook of kind.
+func hookReport(event, kind string) func(*testing.T, played) {
+	return func(t *testing.T, p played) {
+		t.Helper()
+		if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == event && r.Kind == kind }) {
+			t.Errorf("no %s of kind %s: %+v", event, kind, p.Reports)
+		}
 	}
 }

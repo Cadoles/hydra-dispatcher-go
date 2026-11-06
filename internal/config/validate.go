@@ -93,6 +93,9 @@ func (c *Config) validate() (warnings []string, err error) {
 		// Hydra itself refuses a first secret under 16 characters.
 		fail("hydra.system_secrets", "the first secret is shorter than 16 characters, Hydra refuses it")
 	}
+	if strings.HasPrefix(strings.ToLower(c.Hydra.AdminURL), "http://") && !c.TLS.AllowHTTP {
+		warnings = append(warnings, "hydra.admin_url is in http://: subjects and claims travel in clear; tls.allow_http accepts it in development")
+	}
 
 	// No default: the private networks were one, and let any host in them,
 	// or any address translation into them (a Kubernetes node, docker-proxy),
@@ -165,6 +168,11 @@ func (c *Config) validate() (warnings []string, err error) {
 	if c.TLS.CAFile != "" {
 		if _, err := os.Stat(c.TLS.CAFile); err != nil {
 			fail("tls.ca_file", "%v", err)
+		}
+	}
+	if c.Webhooks.CAFile != "" {
+		if _, err := os.Stat(c.Webhooks.CAFile); err != nil {
+			fail("webhooks.ca_file", "%v", err)
 		}
 	}
 	if len(c.TLS.PinnedSPKISHA256) > 0 {

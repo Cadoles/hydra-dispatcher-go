@@ -29,6 +29,7 @@ secrets:
 tls:
   min_version: "1.3"
   ca_file: testdata/system-secrets   # Load only checks that it exists
+  allow_http: true
   # pinned_spki_sha256 is refused until pinning is implemented.
   hsts_include_subdomains: true
 state:
@@ -85,6 +86,7 @@ observability:
 webhooks:
   process_timeout: 10s
   max_processes: 8
+  ca_file: testdata/system-secrets
 logout:
   propagate_without_record: none
 serve:

@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"strings"
@@ -526,6 +527,30 @@ func TestConsentWithoutFlow(t *testing.T) {
 					t.Errorf("id_token %s", got)
 				}
 			}},
+		{name: "SKC-1 Q38, the webhook gets the cookie's context, never the request's", env: consentHook, ev: get,
+			says: hydraSays{GetConsent: read(nil), ConsentHook: {}, AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, ConsentHook, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				h := p.calls[1].Hook
+				if h == nil || h.Location != "http://hook.test/consent" || h.Subject != "alice" || h.ACR != "1" {
+					t.Fatalf("hook %+v", h)
+				}
+				if got := rawJSON(h.Context); got != `{"app":"sql"}` {
+					t.Errorf("context %s, want the cookie's, without its x_dispatcher_* members", got)
+				}
+				if !strings.Contains(string(h.Client), `"client_id"`) {
+					t.Errorf("client %s", h.Client)
+				}
+			}},
+		{name: "SKC-1, the webhook replaces the scopes and the audiences", env: consentHook, ev: get,
+			says: hydraSays{GetConsent: read(nil), ConsentHook: {consentHook: &ConsentHookAnswer{GrantScope: []string{"openid", "extra"}, GrantAudience: []string{}}}, AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, ConsentHook, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				b := p.calls[2].AcceptConsent
+				if !slices.Equal(b.GrantScope, []string{"openid", "extra"}) || len(b.GrantAccessTokenAudience) != 0 || b.GrantAccessTokenAudience == nil {
+					t.Errorf("accept %+v", b)
+				}
+			}},
 		{name: "SKC-2, no skip: the screen, from the cookie", ev: get, says: hydraSays{GetConsent: read(noSkip)},
 			kind: ConsentPage, calls: []Op{GetConsent}, check: screen(cookie)},
 		{name: "SKC-2, no CSRF cookie: a new one set", ev: Consent{Challenge: hydraC, Memory: memory(nil)}, says: hydraSays{GetConsent: read(noSkip)},
@@ -683,7 +708,9 @@ func TestConsentWithoutFlow(t *testing.T) {
 			}), AcceptConsent: {redirectTo: callbackURL}},
 			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent}},
 		{name: "SKC-13, the consent webhook fails", env: consentHook, ev: get, says: hydraSays{GetConsent: read(nil), ConsentHook: {hookErr: errDown}},
-			kind: ErrorPage, code: E1006, calls: []Op{GetConsent, ConsentHook}},
+			kind: ErrorPage, code: E1006, calls: []Op{GetConsent, ConsentHook}, check: hookReport("webhook.failed", "consent")},
+		{name: "SKC-13 Q72, a client gone", env: consentHook, ev: get, says: hydraSays{GetConsent: read(nil), ConsentHook: {hookErr: context.Canceled}},
+			kind: ErrorPage, code: E1006, calls: []Op{GetConsent, ConsentHook}, check: hookReport("webhook.abandoned", "consent")},
 		{name: "SKC-13, claims that are no object", env: consentHook, ev: post(true, nil),
 			says: hydraSays{GetConsent: read(noSkip), ConsentHook: {consentHook: &ConsentHookAnswer{AccessToken: json.RawMessage(`"x"`)}}},
 			kind: ErrorPage, code: E1006, calls: []Op{GetConsent, ConsentHook}},

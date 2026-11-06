@@ -2035,6 +2035,8 @@ func TestReportLevels(t *testing.T) {
 		level  string
 	}{
 		{Report{Event: "webhook.failed"}, "ERROR"},
+		{Report{Event: "webhook.abandoned"}, "INFO"},
+		{Report{Event: "webhook.abandoned", Elapsed: slowAbandon}, "WARN"},
 		{Report{Event: "hydra.request_failed"}, "ERROR"},
 		{Report{Event: "hydra.request_abandoned"}, "INFO"},
 		{Report{Event: "hydra.request_abandoned", Elapsed: slowAbandon - time.Millisecond}, "INFO"},

@@ -297,11 +297,17 @@ func (s Settings) Validate() error {
 // uriScheme is the scheme of a URL (RFC 3986), colon included.
 var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 
+// WebhookScheme is the scheme of a webhook location, in lowercase; "" for a
+// command line.
+func WebhookScheme(location string) string {
+	return strings.ToLower(strings.TrimSuffix(uriScheme.FindString(location), ":"))
+}
+
 // checkWebhook checks a webhook location as Symfony reads it: an http(s) URL;
 // a file:// URL, the program to run without arguments; or, without a scheme,
 // a command line, split on spaces and run without a shell.
 func checkWebhook(location string) error {
-	scheme := strings.TrimSuffix(uriScheme.FindString(location), ":")
+	scheme := WebhookScheme(location)
 	if scheme == "" {
 		if strings.TrimSpace(location) == "" {
 			return errors.New("is a blank command")
@@ -309,7 +315,7 @@ func checkWebhook(location string) error {
 		return nil
 	}
 	u, err := url.Parse(location)
-	switch strings.ToLower(scheme) {
+	switch scheme {
 	case "http", "https":
 		if err != nil || u.Host == "" {
 			return errors.New("is not an absolute http(s) URL")

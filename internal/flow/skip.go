@@ -210,7 +210,7 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 		RememberFor:              ory.PtrInt64(int64(settings.ConsentRememberFor / time.Second)),
 		Session:                  &ory.AcceptOAuth2ConsentRequestSession{IdToken: idt, AccessToken: act},
 	}
-	if stop := r.consentHook(ev.Challenge, 0, &body); stop != nil {
+	if stop := r.consentHook(ev.Challenge, 0, &body, req, withoutDispatcher(c.Ctx)); stop != nil {
 		return *stop // SKC-13
 	}
 	d := r.Answers.ConsentAccept

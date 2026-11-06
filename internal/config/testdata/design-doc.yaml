@@ -28,7 +28,8 @@ secrets:
   webhook_signing_key: "${DISPATCHER_WEBHOOK_KEY}" # HMAC des requêtes webhook
 tls:
   min_version: "1.2"             # suites conformes au guide TLS de l'ANSSI
-  ca_file: ""                    # CA dédiée pour Hydra, IdP admin et webhooks
+  ca_file: ""                    # CA dédiée pour Hydra et l'IdP admin ; les webhooks ont webhooks.ca_file
+  allow_http: false              # cibles en http:// : webhook refusé, admin Hydra signalé, sans cette clé (développement)
   pinned_spki_sha256: []         # épinglage optionnel
   hsts_include_subdomains: false
 state:
@@ -89,6 +90,7 @@ observability:
 webhooks:
   process_timeout: 5s            # sous-processus
   max_processes: 32              # sous-processus simultanés
+  ca_file: ""                    # CA dédiée aux webhooks HTTP ; vide : autorités du système
 serve:
   migrate: false                 # migrations au démarrage de serve
   bootstrap: "off"               # off | missing | force : force en développement, job explicite en production

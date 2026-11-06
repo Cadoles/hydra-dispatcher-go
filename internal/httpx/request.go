@@ -15,9 +15,10 @@ type infoKey struct{}
 // the context, so values set deeper (the matched route) reach the outer ones.
 // Each field is written once, before the handlers that read it run.
 type requestInfo struct {
-	traceID  string
-	clientIP netip.Addr
-	route    string
+	traceID   string
+	clientIP  netip.Addr
+	userAgent string
+	route     string
 }
 
 func infoFrom(ctx context.Context) *requestInfo {
@@ -45,4 +46,12 @@ func ClientIP(ctx context.Context) netip.Addr {
 		return inf.clientIP
 	}
 	return netip.Addr{}
+}
+
+// UserAgent returns the User-Agent of the request ctx belongs to, or "".
+func UserAgent(ctx context.Context) string {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.userAgent
+	}
+	return ""
 }

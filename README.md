@@ -78,6 +78,54 @@ environment are used.
   reverse proxy removes before the dispatcher; the pages put it back before
   their URLs, and `server.cookie_path` must cover it.
 
+## Webhooks
+
+The settings `login_accept_webhook_url` and `consent_accept_webhook_url` name a
+webhook called before the login accept (the final one, or a skip's) and before
+the consent accept. Empty, none. Three forms, those of the Symfony dispatcher:
+an `http(s)://` URL; a `file://` URL, the program run without arguments; or,
+without a scheme, a command line split on spaces (double quotes hold spaces),
+run without a shell.
+
+**They must be idempotent.** A skip calls them again on what the remember cookie
+keeps, which already went through them: a webhook that adds a group or a prefix
+would add it at each skip. A reload after a failure calls them again too.
+
+Over HTTP, a `POST` of JSON, in 5 s at most, with no proxy from the environment
+and no redirect followed; `webhooks.ca_file` replaces the system's authorities.
+`secrets.webhook_signing_key` is required with a URL, and `tls.allow_http` with
+an `http://` one. Each call is signed, and a receiver must refuse a signature
+that does not verify, or a timestamp over 5 minutes old:
+
+```
+X-Dispatcher-Timestamp: <Unix seconds>
+X-Dispatcher-Signature: hex(HMAC-SHA256(key, timestamp + "." + body))
+```
+
+A program gets the payload and a newline on stdin, answers on stdout and exits 0,
+within `webhooks.process_timeout`, at most `webhooks.max_processes` at a time. It
+sees `PATH`, `HOME`, `LANG`, `LC_ALL` and `TZ` of the environment, nothing else,
+and what it writes on stderr goes nowhere. Nothing on stdout changes nothing.
+
+The login webhook receives `challenge` (Hydra's, 1.5 KB from Hydra 2.2 on: do not
+check its format), `subject`, `acr`, `amr`, `context`, `remember`, `remember_for`,
+`browser` (`ip`, `user-agent`) and `client` (`client_id`, `client_name`, `logo_uri`,
+`tos_uri`, `policy_uri`); it may answer `subject`, `acr`, `amr`, `context`, `remember`
+and `remember_for`. The consent webhook receives `challenge`, `subject`, `acr`, `amr`,
+`context` (the login's), `grant_scope`, `grant_access_token_audience`, `access_token`,
+`id_token`, `browser` and `client`; it may answer `grant_scope`,
+`grant_access_token_audience`, `access_token` and `id_token`. Scopes or audiences it
+widens end the skip of the next login, which needs the same ones.
+
+What an answer leaves out stays as it was; a member the dispatcher does not know is
+ignored; `null` drops `acr`, `remember` or `remember_for`, and empties `context`; `[]`
+stands for an empty `context`, `access_token` or `id_token`, or an empty answer. Over
+HTTP, 200 and `application/json`. Anything else (another status, a wrong type, a
+non-empty list, an empty `subject`) stops the authentication: page E1006, nothing
+rejected at Hydra, a reload calling the webhook again. The log line `webhook.failed`
+names the host or the program, the status or the exit code, and the member at fault,
+never a value.
+
 ## Development
 
 Go 1.26 minimum; the `toolchain` directive in `go.mod` selects the build
@@ -185,6 +233,10 @@ go run ./examples/hydra-dev/e2e            # every default scenario
 go run ./examples/hydra-dev/e2e -h         # flags and scenarios
 go run ./examples/hydra-dev/e2e -v second-login
 ```
+
+`-webhook http://10.0.6.1:<port>`, on a stack started with `HYDRA_DEV_WEBHOOK` at
+the same URL, sends every scenario through a receiver that checks the signature;
+the `webhook-*` scenarios need it, and run when named.
 
 `-back-channel http://10.0.6.1:<port>` adds a check to the scenario of a chain
 stopped: a client registered for the run hears of the session deleted on that

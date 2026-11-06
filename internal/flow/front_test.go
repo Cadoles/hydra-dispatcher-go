@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"slices"
@@ -919,8 +920,48 @@ func TestFinalAccept(t *testing.T) {
 		{name: "FIN-4, webhook failed", ev: loop, stored: lastDone(t), env: hook, says: hydraSays{LoginHook: {hookErr: errDown}},
 			kind: ErrorPage, code: E1006, calls: []Op{LoginHook}},
 		{name: "FIN-4 A9, webhook context a list", ev: loop, stored: lastDone(t), env: hook,
-			says: hydraSays{LoginHook: {loginHook: &LoginHookAnswer{Context: json.RawMessage(`[]`)}}},
-			kind: ErrorPage, code: E1006, calls: []Op{LoginHook}},
+			says: hydraSays{LoginHook: {loginHook: &LoginHookAnswer{Context: json.RawMessage(`["a"]`)}}},
+			kind: ErrorPage, code: E1006, calls: []Op{LoginHook}, check: hookReport("webhook.failed", "login")},
+		{name: "FIN-4, what the log says of a webhook that failed", ev: loop, stored: lastDone(t), env: hook,
+			says: hydraSays{LoginHook: {hookErr: &HookError{Host: "hooks:8443", Status: 503, Cause: "status 503", Elapsed: time.Second, Err: errDown}}},
+			kind: ErrorPage, code: E1006, calls: []Op{LoginHook}, check: func(t *testing.T, p played) {
+				hookReport("webhook.failed", "login")(t, p)
+				i := slices.IndexFunc(p.Reports, func(r Report) bool { return r.Event == "webhook.failed" })
+				if r := p.Reports[i]; r.Host != "hooks:8443" || r.Status != 503 || r.Detail != "status 503" || r.Sentry {
+					t.Errorf("report %+v", r)
+				}
+				if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "flow.error" && r.Detail == "E1006" && r.Sentry }) {
+					t.Errorf("no flow.error: %+v", p.Reports)
+				}
+			}},
+		{name: "FIN-4 Q72, a client gone: neither webhook.failed nor Sentry", ev: loop, stored: lastDone(t), env: hook,
+			says: hydraSays{LoginHook: {hookErr: &HookError{Host: "hooks", Cause: "the client left", Elapsed: 2 * time.Second, Err: context.Canceled}}},
+			kind: ErrorPage, code: E1006, calls: []Op{LoginHook}, check: func(t *testing.T, p played) {
+				if len(p.Reports) != 1 || p.Reports[0].Event != "webhook.abandoned" || p.Reports[0].Host != "hooks" || p.Reports[0].Sentry || p.Reports[0].Elapsed != 2*time.Second {
+					t.Errorf("reports %+v", p.Reports)
+				}
+			}},
+		{name: "FIN-1, the call: the location of the snapshot, the client, L", ev: loop, stored: lastDone(t), env: hook, says: hydraSays{LoginHook: {}, AcceptLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{LoginHook, AcceptLogin}, write: accepted, check: func(t *testing.T, p played) {
+				c := p.calls[0]
+				if c.Challenge != hydraL || c.Hook == nil || c.Hook.Location != "http://hook.test/" || !strings.Contains(string(c.Hook.Client), `"client_id"`) {
+					t.Errorf("call %+v", c)
+				}
+				if _, ok := c.AcceptLogin.Context.(Object); !ok {
+					t.Errorf("context %T: no x_dispatcher_ref yet, an object", c.AcceptLogin.Context)
+				}
+				if strings.Contains(rawJSON(c.AcceptLogin.Context), memberRef) {
+					t.Errorf("x_dispatcher_ref sent to the webhook: %s", rawJSON(c.AcceptLogin.Context))
+				}
+			}},
+		{name: "FIN-1, a null from the webhook drops the member, as Symfony", ev: loop, stored: lastDone(t), env: hook,
+			says: hydraSays{LoginHook: {loginHook: &LoginHookAnswer{NullACR: true, NullRemember: true, NullRememberFor: true}}, AcceptLogin: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{LoginHook, AcceptLogin}, write: accepted,
+			check: body(func(t *testing.T, b ory.AcceptOAuth2LoginRequest) {
+				if b.Acr != nil || b.Remember != nil || b.RememberFor != nil {
+					t.Errorf("accept %+v", b)
+				}
+			})},
 		{name: "FIN-5, accepted by a concurrent request", ev: loop, stored: lastDone(t), says: hydraSays{AcceptLogin: {err: err409}},
 			reread: func() *Flow { f := acceptedFlow(t); f.HydraRedirect = "http://hydra/theirs"; return f }(),
 			kind:   Redirect, url: "http://hydra/theirs", calls: []Op{AcceptLogin}},
@@ -1028,6 +1069,26 @@ func TestConsent(t *testing.T) {
 		{name: "CST-10 Q30, before the cookie", ev: Consent{Challenge: hydraC}, stored: acceptedFlow(t),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Subject = ory.PtrString("bob") }), RejectConsent: {redirectTo: hydraDone}},
 			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR},
+		{name: "CST-12 Q38, the webhook gets what Hydra holds of the login and the context sent", ev: get,
+			stored: func() *Flow {
+				f := acceptedFlow(t)
+				f.Sent.Context = Object{"from": json.RawMessage(`"login"`)}
+				return f
+			}(),
+			env: func(e *Env) {
+				e.Config.Settings.ConsentAutoAccept, e.Config.Settings.ConsentAcceptWebhookURL = true, "http://hook.test/consent"
+			},
+			says: hydraSays{GetConsent: read(nil), ConsentHook: {}, AcceptConsent: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, ConsentHook, AcceptConsent}, write: finishedWithCR,
+			check: func(t *testing.T, p played) {
+				h := p.calls[1].Hook
+				if h == nil || h.Location != "http://hook.test/consent" || h.Subject != "alice" || !strings.Contains(string(h.Client), `"client_id"`) {
+					t.Fatalf("hook %+v", h)
+				}
+				if got := rawJSON(h.Context); got != `{"from":"login"}` {
+					t.Errorf("context %s, want the one sent, never the consent request's", got)
+				}
+			}},
 		{name: "CST-11", ev: Consent{Challenge: hydraC, Cookie: otherCSRF}, stored: acceptedFlow(t), says: hydraSays{GetConsent: read(nil)},
 			kind: ErrorPage, code: E1008, calls: []Op{GetConsent}},
 		{name: "CST-11, POST token", ev: Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: true, Token: otherCSRF, SameOrigin: true},
