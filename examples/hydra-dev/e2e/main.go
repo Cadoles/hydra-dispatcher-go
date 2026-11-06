@@ -98,6 +98,7 @@ var scenarios = []scenario{
 	{name: "logout-chain-stopped-other-session", run: (*driver).logoutChainStoppedOtherSession},
 	{name: "logout-chain-stopped-preload", run: (*driver).logoutChainStoppedPreload},
 	{name: "logout-apps-answers", run: (*driver).logoutAppsAnswers},
+	{name: "logout-subrequest-of-another-site", run: (*driver).logoutSubrequest},
 	{name: "logout-preload-head-locale", run: (*driver).logoutPreloadHeadLocale},
 	{name: "prompt-consent-accept", run: promptConsent("accept")},
 	{name: "prompt-consent-reject", run: promptConsent("reject")},
@@ -1786,8 +1787,9 @@ func (d *driver) logoutChainStoppedOtherSession() error {
 }
 
 // logoutChainStoppedPreload preloads a client's login link after a chain stopped:
-// the page answers 503, and the session stays, which a new demand could still end
-// through the apps that remain (Q62). The visit then deletes it (SKP-12).
+// the page answers 425, and the session stays, which a new demand could still end
+// through the apps that remain (Q62, Q66); a HEAD of it neither (LGO-17). The visit then
+// deletes it (SKP-12).
 func (d *driver) logoutChainStoppedPreload() error {
 	if err := d.stoppedChain(); err != nil {
 		return err
@@ -1802,15 +1804,21 @@ func (d *driver) logoutChainStoppedPreload() error {
 	if err != nil {
 		return err
 	}
-	if status != http.StatusServiceUnavailable {
-		return fmt.Errorf("Q62: a preload of the entry: %d, want 503", status)
+	if status != http.StatusTooEarly {
+		return fmt.Errorf("Q62: a preload of the entry: %d, want 425", status)
+	}
+	if status, err = d.b.preload(http.MethodHead, first.String()); err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("LGO-17: a HEAD of the entry: %d, want 200", status)
 	}
 	alive, err := d.client.sessionAlive(d.ctx, session)
 	if err != nil {
 		return err
 	}
 	if !alive {
-		return errors.New("Q62: a preload deleted the session")
+		return errors.New("Q62: a preload or a HEAD deleted the session")
 	}
 	if d.b.cookie(d.dispatcher, rememberCookie) != note {
 		return errors.New("Q62: a preload changed the cookie")
@@ -1825,6 +1833,43 @@ func (d *driver) logoutChainStoppedPreload() error {
 		return errors.New("SKP-12: the visit did not delete the session")
 	}
 	return nil
+}
+
+// logoutSubrequest asks for a client's logout as an <img> of another site does, its
+// fetch metadata given by hand: the question, which no one answers there. Nothing leaves,
+// the chain does not start, and the skip stays. The same link followed from another site
+// ends the session (LGO-19, Q65).
+func (d *driver) logoutSubrequest() error {
+	if err := d.signedIn("hydra-sql"); err != nil {
+		return err
+	}
+	memory := d.b.cookie(d.dispatcher, rememberCookie)
+	link := d.client.logoutURL(d.client.idToken, "e2e-subrequest")
+	first, err := d.b.hop(link)
+	if err != nil {
+		return err
+	}
+	status, err := d.b.preload(http.MethodGet, first.String(), "Sec-Fetch-Site", "cross-site", "Sec-Fetch-Dest", "image")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("LGO-19: %d, want the question", status)
+	}
+	if d.b.cookie(d.dispatcher, rememberCookie) != memory {
+		return errors.New("LGO-19: the cookie changed")
+	}
+	if err := d.honoured("after a subrequest"); err != nil {
+		return err
+	}
+	end, err := d.b.get(link)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(end.URL.String(), d.client.postLogout) || end.URL.Query().Get("state") != "e2e-subrequest" {
+		return fmt.Errorf("the link followed: %s", trail(end))
+	}
+	return d.loggedOut("hydra-sql")
 }
 
 // logoutAppsAnswers plays what the real apps do of the emulated API's answers: the
@@ -1929,8 +1974,8 @@ func (d *driver) logoutPreloadHeadLocale() error {
 		if err != nil {
 			return err
 		}
-		if status != http.StatusServiceUnavailable {
-			return fmt.Errorf("LGO-18, %v: %d, want 503", header, status)
+		if status != http.StatusTooEarly {
+			return fmt.Errorf("LGO-18, %v: %d, want 425", header, status)
 		}
 	}
 	if d.b.cookie(d.dispatcher, rememberCookie) != memory {

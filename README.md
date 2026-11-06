@@ -176,7 +176,8 @@ refused) and reloaded during the redirection; the logout, confirmed through the
 and a chain stopped at an app, passed by a new demand, cut by the next login, not cut
 by a preload of the login link, or left by the link of page E1003; what the apps answer
 to a challenge that is not theirs; a preload and a change of language on the logout's
-page; `prompt=consent` accepted and refused; back to the choice. Start `make up-go` in
+page; a subrequest of another site; `prompt=consent` accepted and refused; back to the
+choice. Start `make up-go` in
 `hydra-dev`, whose README sets the `*.hydra.test` names up, then:
 
 ```sh
