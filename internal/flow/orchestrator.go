@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -71,6 +72,8 @@ type Orchestrator struct {
 	PropagateWithoutRecord string
 	// Log gets the reports of each request, nil drops them.
 	Log *slog.Logger
+	// LogSample thins what a client or a clock can make endless: nil keeps every line.
+	LogSample *httpx.Sampler
 	// Observers watch what each request decided, once its lines are logged.
 	Observers []Observer
 	// Now is the clock, time.Now when nil.
@@ -291,6 +294,9 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 	}
 	if o.Log != nil {
 		for _, r := range reports {
+			if !o.sampled(ctx, r.Event) {
+				continue
+			}
 			level := slog.LevelInfo
 			switch {
 			case r.Event == "logout.started", r.Event == "logout.session_revoked":
@@ -350,6 +356,20 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}
+}
+
+// sampled tells whether a line goes: by client for what a client makes endless
+// (challenge.invalid, security.ip_rejected, as the catalogue says), by instance for a
+// clock that drifts, the same for everyone (hydra.clock_skew). The metrics, the audit and
+// the limiter read the reports all the same.
+func (o *Orchestrator) sampled(ctx context.Context, event string) bool {
+	switch event {
+	case "challenge.invalid", "security.ip_rejected":
+		return o.LogSample.AllowClient(ctx, event)
+	case "hydra.clock_skew":
+		return o.LogSample.Allow(event)
+	}
+	return true
 }
 
 // requestFailed reports the calls of this request that Hydra failed

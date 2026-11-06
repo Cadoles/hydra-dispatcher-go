@@ -95,3 +95,50 @@ func (d *driver) metricsOfALogin() error {
 	}
 	return nil
 }
+
+// lastFlowPreselected signs in with a flow from the form, then lands on the choice page
+// again in the same browser, prompt=login making Hydra ask anew: that flow is checked.
+// Nothing goes straight to it.
+func (d *driver) lastFlowPreselected() error {
+	if d.symfony {
+		d.note("the preselection of the Go dispatcher: left out")
+		return nil
+	}
+	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept"}); err != nil {
+		return err
+	}
+	p, err := d.start("login")
+	if err != nil {
+		return err
+	}
+	if d.kind(p) != "choice" {
+		return fmt.Errorf("not on the choice page: %w", errUnexpected(p))
+	}
+	if !regexp.MustCompile(`value="hydra-sql" required checked`).MatchString(p.Body) {
+		return fmt.Errorf("hydra-sql is not checked: %w", errUnexpected(p))
+	}
+	return nil
+}
+
+// limiterStopsForgery forges challenges from this host until the dispatcher answers 429
+// (Durcissements point 4), a real brake on the stack; opt-in, since it blocks this
+// address for security.failure_rate_limit.block, and every scenario with it.
+func (d *driver) limiterStopsForgery() error {
+	for i := range 50 {
+		forged := fmt.Sprintf("%032x", i+1)
+		u := *d.dispatcher
+		u.RawQuery = "login_challenge=" + forged
+		p, err := d.b.get(u.String())
+		if err != nil {
+			return err
+		}
+		if p.Status == http.StatusTooManyRequests {
+			d.note("429 after %d forged challenges", i)
+			return nil
+		}
+		if code := errorCode.FindString(p.Body); code != "E1001" {
+			return fmt.Errorf("forged challenge %d: status %d, code %q", i, p.Status, code)
+		}
+	}
+	return fmt.Errorf("no 429 after 50 forged challenges")
+}

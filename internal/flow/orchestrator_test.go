@@ -17,6 +17,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -1255,3 +1256,40 @@ func TestDraw(t *testing.T) {
 		t.Errorf("Q9 A4, draws %+v and %+v", a, b)
 	}
 }
+
+// Lines a client can make endless go once by client and by minute, as the catalogue
+// says; observers read every report all the same.
+func TestLogSample(t *testing.T) {
+	var buf bytes.Buffer
+	now := testNow
+	sample := httpx.NewSampler(time.Minute)
+	sample.Now = func() time.Time { return now }
+	seen := 0
+	o := &Orchestrator{Log: slog.New(slog.NewJSONHandler(&buf, nil)), LogSample: sample, Observers: []Observer{observerFunc(func(context.Context, Observation) { seen++ })}}
+	play := func() {
+		o.result(context.Background(), Input{}, Outcome{}, []Report{{Event: "challenge.invalid", Detail: "forged"}, {Event: "hydra.clock_skew"}, {Event: "flow.started"}})
+	}
+	play()
+	play()
+	if n := strings.Count(buf.String(), "challenge.invalid"); n != 1 {
+		t.Errorf("%d lines of challenge.invalid", n)
+	}
+	if n := strings.Count(buf.String(), "hydra.clock_skew"); n != 1 {
+		t.Errorf("%d lines of hydra.clock_skew", n)
+	}
+	if n := strings.Count(buf.String(), "flow.started"); n != 2 {
+		t.Errorf("%d lines of flow.started: not sampled", n)
+	}
+	if seen != 2 {
+		t.Errorf("%d observations", seen)
+	}
+	now = now.Add(time.Minute)
+	play()
+	if n := strings.Count(buf.String(), "challenge.invalid"); n != 2 {
+		t.Errorf("%d lines past the minute", n)
+	}
+}
+
+type observerFunc func(context.Context, Observation)
+
+func (f observerFunc) Observe(ctx context.Context, o Observation) { f(ctx, o) }

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,7 +139,7 @@ func TestServeGracefulShutdown(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- Serve(ctx, NewServer(mux, slog.New(slog.DiscardHandler)), ln, time.Second) }()
+	go func() { served <- Serve(ctx, NewServer(mux, slog.New(slog.DiscardHandler), "full"), ln, time.Second) }()
 
 	got := make(chan string, 1)
 	go func() {
@@ -179,7 +181,7 @@ func TestServeListenError(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = ln.Close()
-	if err := Serve(context.Background(), NewServer(http.NewServeMux(), slog.New(slog.DiscardHandler)), ln, time.Second); err == nil {
+	if err := Serve(context.Background(), NewServer(http.NewServeMux(), slog.New(slog.DiscardHandler), "full"), ln, time.Second); err == nil {
 		t.Error("Serve on a closed listener: want an error")
 	}
 }
@@ -198,7 +200,9 @@ func TestServeShutdownTimeout(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
-	go func() { served <- Serve(ctx, NewServer(mux, slog.New(slog.DiscardHandler)), ln, 50*time.Millisecond) }()
+	go func() {
+		served <- Serve(ctx, NewServer(mux, slog.New(slog.DiscardHandler), "full"), ln, 50*time.Millisecond)
+	}()
 
 	got := make(chan error, 1)
 	go func() {
@@ -297,7 +301,7 @@ func TestInFlightAfterShutdownTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() {
-		served <- Serve(ctx, NewServer(f.Track(mux), slog.New(slog.DiscardHandler)), ln, 50*time.Millisecond)
+		served <- Serve(ctx, NewServer(f.Track(mux), slog.New(slog.DiscardHandler), "full"), ln, 50*time.Millisecond)
 	}()
 	go func() {
 		if resp, err := http.Get("http://" + ln.Addr().String() + "/deaf"); err == nil {
@@ -335,7 +339,7 @@ func TestServerErrorLog(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	go func() { served <- Serve(ctx, NewServer(mux, logger), ln, time.Second) }()
+	go func() { served <- Serve(ctx, NewServer(mux, logger, "full"), ln, time.Second) }()
 	resp, err := http.Get("http://" + ln.Addr().String() + "/twice")
 	if err != nil {
 		t.Fatal(err)
@@ -352,5 +356,62 @@ func TestServerErrorLog(t *testing.T) {
 	}
 	if line["level"] != "ERROR" || line["msg"] != "http.server_error" || !strings.Contains(line["detail"].(string), "superfluous response.WriteHeader") {
 		t.Errorf("line = %v", line)
+	}
+}
+
+// http.server_error follows observability.log_ip: net/http cites the full address of a
+// client (a TLS handshake that failed, a panic outside Recover).
+func TestServerLogMasksTheAddress(t *testing.T) {
+	for mode, want := range map[string]string{"truncated": "203.0.113.0/24", "full": "203.0.113.9", "none": "-"} {
+		var buf bytes.Buffer
+		l := serverLog{slog.New(slog.NewJSONHandler(&buf, nil)), mode}
+		_, _ = l.Write([]byte("http: TLS handshake error from 203.0.113.9:4321: EOF\n"))
+		if !strings.Contains(buf.String(), "error from "+want+":") || strings.Contains(buf.String(), ":4321") {
+			t.Errorf("%s: %s", mode, buf.String())
+		}
+		if mode != "full" && strings.Contains(buf.String(), "203.0.113.9") {
+			t.Errorf("%s: the address left: %s", mode, buf.String())
+		}
+	}
+	var buf bytes.Buffer
+	l := serverLog{slog.New(slog.NewJSONHandler(&buf, nil)), "truncated"}
+	_, _ = l.Write([]byte("http: panic serving [2001:db8:1:2::1]:443: boom\n"))
+	if !strings.Contains(buf.String(), "panic serving 2001:db8:1::/48: boom") {
+		t.Errorf("IPv6: %s", buf.String())
+	}
+}
+
+// What a library writes to the package log has a stable name.
+func TestStandardLog(t *testing.T) {
+	defer log.SetOutput(log.Writer())
+	defer log.SetFlags(log.Flags())
+	var buf bytes.Buffer
+	StandardLog(slog.New(slog.NewJSONHandler(&buf, nil)))
+	log.Printf("goose: %s", strings.Repeat("x", 3*MaxCause))
+	if !strings.Contains(buf.String(), `"msg":"log.message"`) || !strings.Contains(buf.String(), `"detail":"goose: x`) || buf.Len() > 2*MaxCause {
+		t.Errorf("line %s", buf.String())
+	}
+}
+
+func TestSampler(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := NewSampler(time.Minute)
+	s.Now = func() time.Time { return now }
+	if !s.Allow("a") || s.Allow("a") || !s.Allow("b") {
+		t.Error("one by key")
+	}
+	now = now.Add(time.Minute)
+	if !s.Allow("a") {
+		t.Error("past the window")
+	}
+	for i := range maxSampled + 5 {
+		s.Allow(strconv.Itoa(i))
+	}
+	if len(s.seen) > maxSampled {
+		t.Errorf("%d keys", len(s.seen))
+	}
+	var none *Sampler
+	if !none.Allow("x") || !none.AllowClient(context.Background(), "x") {
+		t.Error("a nil sampler stops lines")
 	}
 }

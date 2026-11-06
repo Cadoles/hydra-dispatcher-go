@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -18,23 +20,55 @@ import (
 // NewServer returns a server with the timeouts of the design document. The
 // messages of net/http itself (a panic outside Recover, a superfluous
 // WriteHeader, an accept error) go to logger as http.server_error.
-func NewServer(h http.Handler, logger *slog.Logger) *http.Server {
+func NewServer(h http.Handler, logger *slog.Logger, logIP string) *http.Server {
 	return &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    64 << 10,
-		ErrorLog:          log.New(serverLog{logger}, "", 0),
+		ErrorLog:          log.New(serverLog{logger, logIP}, "", 0),
 	}
 }
 
 // serverLog turns each message of net/http into an error record with a
-// stable name, instead of an info record whose message is free text.
-type serverLog struct{ logger *slog.Logger }
+// stable name, instead of an info record whose message is free text; the address of a
+// client it cites follows observability.log_ip.
+type serverLog struct {
+	logger *slog.Logger
+	logIP  string
+}
+
+// remoteAddress finds an address and its port in a message of net/http.
+var remoteAddress = regexp.MustCompile(`\[[0-9a-fA-F:.]+\]:\d+|\b\d{1,3}(?:\.\d{1,3}){3}:\d+`)
 
 func (l serverLog) Write(p []byte) (int, error) {
-	l.logger.Error("http.server_error", "detail", strings.TrimSpace(string(p)))
+	detail := remoteAddress.ReplaceAllStringFunc(strings.TrimSpace(string(p)), func(found string) string {
+		addr, err := netip.ParseAddrPort(found)
+		if err != nil {
+			return "unknown"
+		}
+		if masked := FormatIP(addr.Addr().Unmap(), l.logIP); masked != "" {
+			return masked
+		}
+		return "-"
+	})
+	l.logger.Error("http.server_error", "detail", detail)
+	return len(p), nil
+}
+
+// StandardLog sends the package log, which a library may write to, as an event of a
+// stable name: msg is never a free sentence (Journalisation). Its text stays in detail,
+// bounded.
+func StandardLog(logger *slog.Logger) {
+	log.SetFlags(0)
+	log.SetOutput(standardLog{logger})
+}
+
+type standardLog struct{ logger *slog.Logger }
+
+func (l standardLog) Write(p []byte) (int, error) {
+	l.logger.Info("log.message", "detail", BoundedCause(strings.TrimSpace(string(p))))
 	return len(p), nil
 }
 

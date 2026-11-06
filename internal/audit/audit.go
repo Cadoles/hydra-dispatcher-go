@@ -167,6 +167,13 @@ func (l *Log) Observe(ctx context.Context, o flow.Observation) {
 	}
 }
 
+// Blocked writes the start of a block of the failure limiter: the doc's rejects of the
+// rate limit, by IP; the requests refused meanwhile are counted, a client could make their
+// lines endless.
+func (l *Log) Blocked(ctx context.Context) {
+	l.logger.WarnContext(ctx, "security.rate_limited", "ip", clientIP(ctx))
+}
+
 // Refused writes a refusal of an IP filter on surface: emulated, metrics, or admin.
 func (l *Log) Refused(ctx context.Context, surface string) {
 	l.logger.WarnContext(ctx, "security.ip_rejected", "surface", surface, "ip", clientIP(ctx))

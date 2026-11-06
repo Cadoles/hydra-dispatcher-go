@@ -217,6 +217,9 @@ type worldOptions struct {
 	snapshot *store.Snapshot
 	// path is server.cookie_path, / when "".
 	path string
+	// lastFlow is ui.remember_last_flow, guard the failure limiter.
+	lastFlow bool
+	guard    func(http.Handler) http.Handler
 }
 
 func (o worldOptions) cookiePath() string {
@@ -248,7 +251,7 @@ func newWorld(t *testing.T, opts ...worldOptions) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := New(Options{Engine: w.o, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger})
+	h, err := New(Options{RememberLastFlow: opt.lastFlow, Guard: opt.guard, Engine: w.o, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger})
 	if err != nil {
 		t.Fatal(err)
 	}

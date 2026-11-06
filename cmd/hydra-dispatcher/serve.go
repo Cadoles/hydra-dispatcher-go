@@ -26,6 +26,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/limiter"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
@@ -75,6 +76,7 @@ func serve(ctx context.Context, args []string) error {
 	defer stopTracing()
 	logs.app = slog.New(tracker.Handler(logs.app.Handler()))
 	slog.SetDefault(logs.app)
+	httpx.StandardLog(logs.app)
 	logger := logs.app
 	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
 	// given by -config alone may listen where the probe does not look.
@@ -145,7 +147,7 @@ func serve(ctx context.Context, args []string) error {
 	}
 	defer stopMetrics()
 	logger.Info("server.started", "addr", ln.Addr().String())
-	err = httpx.Serve(ctx, httpx.NewServer(inFlight.Track(handler), logger), ln, shutdownGrace)
+	err = httpx.Serve(ctx, httpx.NewServer(inFlight.Track(handler), logger, cfg.Observability.LogIP), ln, shutdownGrace)
 	if errors.Is(err, context.DeadlineExceeded) {
 		logger.Warn("server.shutdown_timeout", "grace", shutdownGrace.String())
 		err = nil
@@ -186,7 +188,7 @@ func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metric
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if err := httpx.Serve(ctx, httpx.NewServer(handler, logger), ln, shutdownGrace); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		if err := httpx.Serve(ctx, httpx.NewServer(handler, logger, cfg.Observability.LogIP), ln, shutdownGrace); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			logger.Error("metrics.stopped", "err", err)
 		}
 	}()
@@ -394,7 +396,16 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		stateBackend = "redis"
 	}
 	watch.SetBuild(version, stateBackend, hydraMode(source))
-	observers := []flow.Observer{watch, s.audit, tracing.Observer{HydraMode: hydraMode(source)}}
+	failures := cfg.Security.FailureRateLimit
+	limit := limiter.New(failures.Max, failures.Per.Std(), failures.Block.Std())
+	limit.OnBlock = func(c context.Context) {
+		logger.WarnContext(c, "security.rate_limited", "ip", httpx.FormatIP(httpx.ClientIP(c), cfg.Observability.LogIP))
+		s.audit.Blocked(c)
+	}
+	limit.OnRefused = func(_ context.Context, surface string) { watch.RateLimited(surface) }
+	logSample := httpx.NewSampler(time.Minute)
+	watch.LogSample = logSample
+	observers := []flow.Observer{watch, s.audit, tracing.Observer{HydraMode: hydraMode(source)}, limit}
 	if s.sentry != nil {
 		observers = append(observers, s.sentry)
 	}
@@ -410,6 +421,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Keys:                   keys,
 		PropagateWithoutRecord: cfg.Logout.PropagateWithoutRecord,
 		Log:                    logger,
+		LogSample:              logSample,
 	}
 	pages, err := front.New(front.Options{
 		Engine:     engine,
@@ -421,6 +433,9 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Logger:     logger,
 
 		SkipUnavailable: watch.SkipUnavailable,
+
+		RememberLastFlow: cfg.UI.RememberLastFlow,
+		Guard:            limit.Guard("front"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
@@ -443,6 +458,8 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 			watch.Refused("emulated")
 			s.audit.Refused(c, "emulated")
 		},
+		LogSample: logSample,
+		Guard:     limit.Guard("emulated"),
 	})
 	pages.Register(mux)
 	if cfg.Observability.Metrics.Listen == "" {

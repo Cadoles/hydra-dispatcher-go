@@ -65,6 +65,12 @@ created its flow. The `traceparent` of a proxy or a login app continues its trac
 other client's is only a link. Off by default, at almost no cost. With
 `observability.sentry.traces_sample_rate` above 0, the spans go to Sentry too.
 
+An address that forges (a challenge no one issued, an invalid CSRF token, an app
+outside its sources) gets 429 past `security.failure_rate_limit`, 20 a minute by default,
+for 5 minutes, in the memory of each instance; IPv6 by /64. An expired challenge is
+authentic, and does not count. The choice page checks the last flow started from its
+form, by the cookie `dispatcher_last_flow`, unless `ui.remember_last_flow: false`.
+
 `serve` exposes `/metrics` (Prometheus, OpenMetrics when asked for), in the memory
 of the instance, a scrape touching neither Redis nor the database, behind
 `security.metrics_authorized_hosts`; or on a port of its own with

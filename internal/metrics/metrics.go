@@ -73,7 +73,12 @@ type Metrics struct {
 	buildInfo                     *prometheus.GaugeVec
 	propagations                  *prometheus.CounterVec
 
+	rateLimited *prometheus.CounterVec
+
 	flows, apps, routes bounded
+
+	// LogSample thins the log lines of the refusals of /metrics, nil keeps them all.
+	LogSample *httpx.Sampler
 }
 
 // New registers the catalogue and the Go and process collectors, and at most
@@ -127,6 +132,7 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 		configLastRefresh:   gauge("config_last_refresh_timestamp_seconds", "Last successful refresh of the configuration."),
 		configRefreshErrors: single("config_refresh_errors_total", "Refreshes of the configuration that failed."),
 		propagations:        counter("logout_propagations_total", "Propagation of the logout to the login apps.", "app", "result"),
+		rateLimited:         counter("failure_rate_limited_total", "Requests refused by the failure limiter.", "surface"),
 		buildInfo: func() *prometheus.GaugeVec {
 			g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "build_info", Help: "The instance deployed."}, []string{"version", "go_version", "state_backend", "hydra_mode"})
 			reg.MustRegister(g)
@@ -193,7 +199,7 @@ func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string, refused func(cont
 		ip := httpx.ClientIP(r.Context())
 		if !httpx.Within(hosts, ip) {
 			m.Refused("metrics")
-			if m.log != nil {
+			if m.log != nil && m.LogSample.AllowClient(r.Context(), "security.ip_rejected") {
 				m.log.WarnContext(r.Context(), "security.ip_rejected", "surface", "metrics", "ip", httpx.FormatIP(ip, logIP))
 			}
 			if refused != nil {
@@ -208,6 +214,9 @@ func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string, refused func(cont
 
 // Refused counts a refusal of an IP filter on surface: admin, emulated or metrics.
 func (m *Metrics) Refused(surface string) { m.ipRejections.WithLabelValues(surface).Inc() }
+
+// RateLimited counts a request the failure limiter refused on surface, front or emulated.
+func (m *Metrics) RateLimited(surface string) { m.rateLimited.WithLabelValues(surface).Inc() }
 
 // SkipUnavailable counts a memory of the skip too big to write (WRT-2).
 func (m *Metrics) SkipUnavailable() { m.skips.WithLabelValues("login", "unavailable").Inc() }

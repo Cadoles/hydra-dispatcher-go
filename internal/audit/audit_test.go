@@ -140,3 +140,12 @@ func TestPseudonym(t *testing.T) {
 		t.Errorf("clear: %s", text)
 	}
 }
+
+func TestBlocked(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(slog.New(httpx.LogHandler(slog.NewJSONHandler(&buf, nil))), []byte("k"), false)
+	l.Blocked(requestContext(t))
+	if !strings.Contains(buf.String(), `"msg":"security.rate_limited"`) || !strings.Contains(buf.String(), `"ip":"203.0.113.9"`) {
+		t.Errorf("line %s", buf.String())
+	}
+}

@@ -211,13 +211,19 @@ func (h *Handler) choicePage(r *http.Request, cfg *store.Snapshot, c *flow.Choic
 	if c.Invalid {
 		p.Error = &pageError{MessageKey: "choice.invalid"}
 	}
+	// The flows offered are those allowed for this client and acr_values: a cookie that
+	// names another selects nothing.
+	last := ""
+	if h.o.RememberLastFlow {
+		last = h.cookie(r, lastFlowCookie)
+	}
 	for _, id := range c.Flows {
 		i := slices.IndexFunc(cfg.Flows, func(f store.Flow) bool { return f.ID == id })
 		if i < 0 {
 			continue
 		}
 		f := cfg.Flows[i]
-		p.Flows = append(p.Flows, flowCard{ID: id, Title: localized(f.Title, p.Locale, p.fallback, id),
+		p.Flows = append(p.Flows, flowCard{ID: id, Selected: id == last, Title: localized(f.Title, p.Locale, p.fallback, id),
 			Description: localized(f.Description, p.Locale, p.fallback, ""), IconURL: localized(f.IconURL, p.Locale, p.fallback, "")})
 	}
 	return p

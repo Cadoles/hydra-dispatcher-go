@@ -53,6 +53,11 @@ type Options struct {
 	Logger     *slog.Logger
 	// SkipUnavailable, nil for none, is told of a memory of the skip too big to write.
 	SkipUnavailable func()
+	// RememberLastFlow is ui.remember_last_flow.
+	RememberLastFlow bool
+	// Guard, nil for none, runs first on each page: the failure limiter. Not on the
+	// static files, nor the change of language, which no challenge reaches.
+	Guard func(http.Handler) http.Handler
 }
 
 // Handler serves the pages.
@@ -79,6 +84,10 @@ const (
 	csrfCookie     = "dispatcher_flow_csrf"
 	localeCookie   = "dispatcher_locale"
 	rememberCookie = "dispatcher_remember"
+	// lastFlowCookie holds the id of the last flow started from the form, nothing else;
+	// apart from the memory of the skip, it survives a logout.
+	lastFlowCookie   = "dispatcher_last_flow"
+	lastFlowLifetime = 365 * 24 * time.Hour
 )
 
 // New parses the templates and the catalogs, and renders each page in each
@@ -110,14 +119,20 @@ func New(o Options) (*Handler, error) {
 
 // Register adds the routes to mux.
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /{$}", visit(h.entry))
-	mux.HandleFunc("POST /{$}", h.choose)
-	mux.HandleFunc("GET /oauth2/auth", visit(h.loop))
-	mux.HandleFunc("GET /consent", visit(h.consentGet))
-	mux.HandleFunc("POST /consent", h.consentPost)
-	mux.HandleFunc("GET /logout", visit(h.logoutGet))
-	mux.HandleFunc("POST /logout", h.logoutPost)
-	mux.HandleFunc("GET /logout/next", visit(h.logoutNext))
+	guard := func(page http.HandlerFunc) http.Handler {
+		if h.o.Guard == nil {
+			return page
+		}
+		return h.o.Guard(page)
+	}
+	mux.Handle("GET /{$}", guard(visit(h.entry)))
+	mux.Handle("POST /{$}", guard(h.choose))
+	mux.Handle("GET /oauth2/auth", guard(visit(h.loop)))
+	mux.Handle("GET /consent", guard(visit(h.consentGet)))
+	mux.Handle("POST /consent", guard(h.consentPost))
+	mux.Handle("GET /logout", guard(visit(h.logoutGet)))
+	mux.Handle("POST /logout", guard(h.logoutPost))
+	mux.Handle("GET /logout/next", guard(visit(h.logoutNext)))
 	mux.HandleFunc("POST /locale/{code}", h.locale)
 	mux.HandleFunc("GET /static/{name...}", h.static)
 }
@@ -139,13 +154,17 @@ func (h *Handler) choose(w http.ResponseWriter, r *http.Request) {
 	if !h.form(w, r) {
 		return
 	}
-	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Choose{
+	res := h.o.Engine.Handle(r.Context(), flow.Choose{
 		FlowID:         r.PostForm.Get("flow"),
 		LoginChallenge: r.PostForm.Get("login_challenge"),
 		Token:          r.PostForm.Get("csrf_token"),
 		Cookie:         h.cookie(r, csrfCookie),
 		SameOrigin:     h.sameOrigin(r),
-	}))
+	})
+	if h.o.RememberLastFlow && slices.ContainsFunc(res.Reports, func(rep flow.Report) bool { return rep.Event == "flow.started" && rep.Detail == "choice" }) {
+		h.setCookie(w, lastFlowCookie, r.PostForm.Get("flow"), lastFlowLifetime, true)
+	}
+	h.respond(w, r, res)
 }
 
 // loop is GET /oauth2/auth (BCL), where the step accepts send the browser

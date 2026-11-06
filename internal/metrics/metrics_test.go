@@ -85,6 +85,7 @@ func TestCatalogue(t *testing.T) {
 		"config_refresh_errors_total":           {"counter", nil},
 		"build_info":                            {"gauge", []string{"go_version", "hydra_mode", "state_backend", "version"}},
 		"logout_propagations_total":             {"counter", []string{"app", "result"}},
+		"failure_rate_limited_total":            {"counter", []string{"surface"}},
 	}
 	families, err := m.registry.Gather()
 	if err != nil {
@@ -176,6 +177,8 @@ func exercise(m *Metrics, flows, apps []string) {
 		{Event: "security.ip_rejected"},
 	}})
 	m.Refused("metrics")
+	m.RateLimited("front")
+	m.RateLimited("emulated")
 	for _, v := range [][2]string{{flow.ModeDecrypt, flow.ValidationOK}, {flow.ModeDecrypt, flow.ValidationExpired}, {flow.ModeDecrypt, flow.ValidationDecryptError},
 		{flow.ModeFallback, flow.ValidationOK}, {flow.ModeFallback, flow.ValidationExpired}, {flow.ModeFallback, flow.ValidationInvalid}} {
 		m.Observe(context.Background(), flow.Observation{Validations: []flow.Validation{{Mode: v[0], Result: v[1]}}})
