@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // LogHandler adds the trace id and route of the request to every record
@@ -61,6 +63,9 @@ func (h logHandler) Handle(ctx context.Context, r slog.Record) error {
 		if inf.route != "" && !slices.Contains(keys, "route") {
 			attrs = append(attrs, slog.String("route", inf.route))
 		}
+	}
+	if sc := trace.SpanContextFromContext(ctx); sc.HasSpanID() && !slices.Contains(keys, "span_id") {
+		attrs = append(attrs, slog.String("span_id", sc.SpanID().String()))
 	}
 	out := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
 	out.AddAttrs(attrs...)

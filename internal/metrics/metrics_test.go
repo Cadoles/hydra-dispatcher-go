@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
@@ -186,7 +188,7 @@ func exercise(m *Metrics, flows, apps []string) {
 	}
 	for _, op := range operations {
 		for _, class := range []string{hydra.Class2xx, hydra.Class4xx, hydra.Class5xx, hydra.ClassError, hydra.ClassCanceled} {
-			m.HydraCall(op, class, time.Millisecond)
+			m.HydraCall(context.Background(), op, class, time.Millisecond)
 		}
 	}
 	m.HydraRejected(hydra.RejectedLimit)
@@ -589,5 +591,27 @@ func TestBuildAndConfig(t *testing.T) {
 	m.ConfigRefreshed(nil)
 	if got := series(scrape(t, m), "config_last_refresh_timestamp_seconds"); got == "0" || got == "" {
 		t.Errorf("last refresh = %q", got)
+	}
+}
+
+// A request sampled by OpenTelemetry leaves its trace_id as an exemplar, in OpenMetrics:
+// from a peak of latency to a trace, at no cost in series (Exposition).
+func TestExemplars(t *testing.T) {
+	m := New(200, nil)
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	sampled := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled}))
+	unsampled := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID}))
+	m.HydraCall(sampled, "accept_login", "2xx", 3*time.Millisecond)
+	m.HydraCall(unsampled, "reject_login", "2xx", 3*time.Millisecond)
+	body := scrape(t, m, "application/openmetrics-text; version=1.0.0")
+	if !strings.Contains(body, `# {trace_id="4bf92f3577b34da6a3ce929d0e0e4736"}`) {
+		t.Errorf("no exemplar:\n%s", body)
+	}
+	if n := strings.Count(body, "trace_id="); n != 1 {
+		t.Errorf("%d exemplars: the unsampled one too", n)
+	}
+	if strings.Contains(scrape(t, m), "trace_id") {
+		t.Error("an exemplar in the text format")
 	}
 }

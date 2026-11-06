@@ -160,6 +160,7 @@ func (r *run) create(ref string, ev Entry) Outcome {
 		Gen0:           r.Env.Draw.Gen0,
 		Gen:            r.Env.Draw.Gen0,
 		CSRF:           csrfValue(ev.Cookie, r.Env.Draw),
+		Trace:          r.Env.Trace,
 		ExpiresAt:      exp.UnixMilli(),
 		HydraExpiresAt: end.UnixMilli(),
 	}

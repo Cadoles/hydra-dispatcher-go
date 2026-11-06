@@ -26,6 +26,9 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
@@ -320,6 +323,7 @@ func (c *Client) post(ctx context.Context, location, host string, body []byte) (
 	if id := httpx.TraceID(ctx); id != "" {
 		req.Header.Set("X-Trace-ID", id)
 	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fail(0, transportCause(err), err)

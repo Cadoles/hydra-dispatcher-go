@@ -133,6 +133,7 @@ func TraceFrom(parent func(netip.Addr) bool) Middleware {
 				r = r.WithContext(context.WithValue(r.Context(), infoKey{}, inf))
 			}
 			trusted := inf.clientIP.IsValid() && parent(inf.clientIP)
+			inf.trustedTrace = trusted
 			// W3C: an all-zero trace id or parent id voids the header.
 			if m := traceparent.FindStringSubmatch(r.Header.Get("Traceparent")); trusted && m != nil &&
 				m[1] != strings.Repeat("0", 32) && m[2] != strings.Repeat("0", 16) {

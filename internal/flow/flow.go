@@ -88,6 +88,10 @@ type Flow struct {
 	// auth_duration_seconds: a return to the choice keeps it, and a finished flow
 	// no longer has it. 0 in the flows written before P11, and on a skip.
 	StartedAt int64 `json:"st,omitempty"`
+	// Trace is the span that created the flow, "<trace id>-<span id>": the spans of its
+	// later requests link to it, the browser's redirections carrying no header. "" while
+	// tracing is off.
+	Trace string `json:"tr,omitempty"`
 	// ExpiresAt ends the step challenges (inclusive); HydraExpiresAt is the
 	// end of L at Hydra, and of the key.
 	ExpiresAt      int64 `json:"exp"`

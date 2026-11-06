@@ -12,6 +12,10 @@ import (
 	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
@@ -101,6 +105,9 @@ const maxRounds = 16
 // conflict included (DEP-6, SUI-3).
 func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 	in := Input{Event: ev, Env: o.env()}
+	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+		in.Env.Trace = sc.TraceID().String() + "-" + sc.SpanID().String()
+	}
 	var (
 		key     string
 		logout  bool
@@ -395,11 +402,21 @@ func (a Answers) failures() []error {
 // call makes a call a transition asked for, its answer kept for the request,
 // and returns what a read reports (DEC-5, DEC-6).
 func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
-	done := func(to string, err error) *Done { return &Done{Call: c, RedirectTo: to, Err: err} }
+	ctx, span := otel.Tracer("forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow").Start(ctx, callNames[c.Op], trace.WithSpanKind(trace.SpanKindClient))
+	defer span.End()
+	done := func(to string, err error) *Done {
+		if err != nil {
+			span.SetStatus(codes.Error, "")
+		}
+		return &Done{Call: c, RedirectTo: to, Err: err}
+	}
 	switch c.Op {
 	case GetLogin:
 		read := o.Source.LoginRequest(ctx, c.Challenge)
 		a.Login = &read
+		if read.Decrypted {
+			span.SetName(spanDecrypt)
+		}
 		return read.Reports
 	case AcceptLogin:
 		a.Accept = done(o.Hydra.AcceptLogin(ctx, c.Challenge, c.AcceptLogin))
@@ -408,6 +425,9 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 	case GetConsent:
 		read := o.Source.ConsentRequest(ctx, c.Challenge)
 		a.Consent = &read
+		if read.Decrypted {
+			span.SetName(spanDecrypt)
+		}
 		return read.Reports
 	case AcceptConsent:
 		a.ConsentAccept = done(o.Hydra.AcceptConsent(ctx, c.Challenge, c.AcceptConsent))
@@ -416,9 +436,17 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 	case LoginHook:
 		h := o.Webhooks.Login(ctx, c)
 		a.LoginHook = &h
+		span.SetAttributes(attribute.String("dispatcher.webhook.kind", hookLogin))
+		if h.Err != nil {
+			span.SetStatus(codes.Error, "")
+		}
 	case ConsentHook:
 		h := o.Webhooks.Consent(ctx, c)
 		a.ConsentHook = &h
+		span.SetAttributes(attribute.String("dispatcher.webhook.kind", hookConsent))
+		if h.Err != nil {
+			span.SetStatus(codes.Error, "")
+		}
 	case GetLogout:
 		r, err := o.Hydra.LogoutRequest(ctx, c.Challenge)
 		a.Logout = &LogoutRead{Request: r, Err: err}
@@ -430,6 +458,17 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 		a.Revoke = done("", o.Hydra.RevokeLoginSession(ctx, c.Challenge))
 	}
 	return nil
+}
+
+// spanDecrypt names the read of a challenge that needed no call.
+const spanDecrypt = "hydra.challenge.decrypt"
+
+// callNames are the spans of the calls, by name alone: no challenge nor body.
+var callNames = map[Op]string{
+	GetLogin: "hydra.login_request", AcceptLogin: "hydra.accept_login", RejectLogin: "hydra.reject_login",
+	GetConsent: "hydra.consent_request", AcceptConsent: "hydra.accept_consent", RejectConsent: "hydra.reject_consent",
+	LoginHook: "webhook.call", ConsentHook: "webhook.call",
+	GetLogout: "hydra.logout_request", AcceptLogout: "hydra.accept_logout", RejectLogout: "hydra.reject_logout", RevokeSession: "hydra.revoke_session",
 }
 
 func (o *Orchestrator) now() time.Time {

@@ -19,6 +19,8 @@ type requestInfo struct {
 	clientIP  netip.Addr
 	userAgent string
 	route     string
+	// trustedTrace tells that the client may give the trace: a parent's traceparent.
+	trustedTrace bool
 }
 
 func infoFrom(ctx context.Context) *requestInfo {
@@ -46,6 +48,15 @@ func ClientIP(ctx context.Context) netip.Addr {
 		return inf.clientIP
 	}
 	return netip.Addr{}
+}
+
+// TrustedTrace tells whether the client of the request ctx belongs to may give its trace:
+// a proxy of server.trusted_proxies, or a login app within its sources.
+func TrustedTrace(ctx context.Context) bool {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.trustedTrace
+	}
+	return false
 }
 
 // Route returns the route of the request ctx belongs to, once matched: the pattern of

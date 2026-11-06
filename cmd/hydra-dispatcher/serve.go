@@ -31,6 +31,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/tracing"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/webhook"
 )
 
@@ -64,6 +65,14 @@ func serve(ctx context.Context, args []string) error {
 		return fmt.Errorf("observability.sentry.dsn: %w", err)
 	}
 	defer tracker.Flush()
+	instance, _ := os.Hostname()
+	stopTracing, err := tracing.Setup(ctx, tracing.Options{Enabled: cfg.Observability.Tracing.Enabled, Endpoint: cfg.Observability.Tracing.Endpoint,
+		Protocol: cfg.Observability.Tracing.Protocol, SamplerRatio: cfg.Observability.Tracing.SamplerRatio, Version: version,
+		Environment: sentryOptions.Environment, Instance: instance, SentryDSN: sentryOptions.DSN, SentryRatio: sentryOptions.TracesSampleRate})
+	if err != nil {
+		return err
+	}
+	defer stopTracing()
 	logs.app = slog.New(tracker.Handler(logs.app.Handler()))
 	slog.SetDefault(logs.app)
 	logger := logs.app
@@ -385,12 +394,12 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		stateBackend = "redis"
 	}
 	watch.SetBuild(version, stateBackend, hydraMode(source))
-	observers := []flow.Observer{watch, s.audit}
+	observers := []flow.Observer{watch, s.audit, tracing.Observer{HydraMode: hydraMode(source)}}
 	if s.sentry != nil {
 		observers = append(observers, s.sentry)
 	}
 	engine := &flow.Orchestrator{
-		Store:                  watch.States(s.states),
+		Store:                  tracing.States(watch.States(s.states), stateBackend),
 		Config:                 s.config,
 		Source:                 source,
 		Hydra:                  hydraClient,
@@ -457,6 +466,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		httpx.TraceFrom(func(ip netip.Addr) bool {
 			return httpx.Within(trusted, ip) || httpx.Within(loginApps, ip) && appSource(s.config.Snapshot(), ip)
 		}),
+		tracing.HTTP,
 		httpx.SecurityHeaders(httpx.CSP(csp), strings.HasPrefix(cfg.Server.BaseURL, "https://"), cfg.TLS.HSTSIncludeSubdomains),
 		watch.HTTP,
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP),

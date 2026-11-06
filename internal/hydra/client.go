@@ -18,6 +18,8 @@ import (
 	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
@@ -162,7 +164,7 @@ func (e *RequestError) RedirectTo() string {
 // Observer watches the calls: their operation, the class of their answer and how long
 // they ran, then the calls refused or past their delay. It must not block.
 type Observer interface {
-	HydraCall(op, statusClass string, elapsed time.Duration)
+	HydraCall(ctx context.Context, op, statusClass string, elapsed time.Duration)
 	HydraRejected(reason string)
 }
 
@@ -278,16 +280,16 @@ func newTransport(h config.Hydra, t config.TLS) (*http.Transport, error) {
 }
 
 // hydraTransport sends the request's trace id along, so Hydra's logs (which
-// carry the request headers) join the dispatcher's, and bounds the answers.
-// traceparent waits for OpenTelemetry: without the caller's sampling flag, a
-// made-up one would decide Hydra's sampling.
+// carry the request headers) join the dispatcher's, its traceparent when tracing is on,
+// which Hydra's own traces attach to, and bounds the answers.
 type hydraTransport struct{ base http.RoundTripper }
 
 func (t hydraTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
 	if id := httpx.TraceID(r.Context()); id != "" {
-		r = r.Clone(r.Context())
 		r.Header.Set("X-Trace-ID", id)
 	}
+	otel.GetTextMapPropagator().Inject(r.Context(), propagation.HeaderCarrier(r.Header))
 	resp, err := t.base.RoundTrip(r)
 	if err == nil {
 		resp.Body = http.MaxBytesReader(nil, resp.Body, maxBody)
@@ -297,7 +299,7 @@ func (t hydraTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 
 // call runs one admin API call under the in-flight cap and classifies its
 // error. op is a stable operation name, used in errors, logs and metrics.
-func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T, error) {
+func call[T any](c *Client, ctx context.Context, op string, do func() (T, *http.Response, error)) (T, error) {
 	var zero T
 	select {
 	case c.inFlight <- struct{}{}:
@@ -315,7 +317,7 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 	}
 	if err == nil {
 		if c.Observer != nil {
-			c.Observer.HydraCall(op, Class2xx, time.Since(start))
+			c.Observer.HydraCall(ctx, op, Class2xx, time.Since(start))
 		}
 		return v, nil
 	}
@@ -326,7 +328,7 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 		unavailable.elapsed = elapsed
 	}
 	if c.Observer != nil {
-		c.Observer.HydraCall(op, statusClass(failure), elapsed)
+		c.Observer.HydraCall(ctx, op, statusClass(failure), elapsed)
 		if errors.Is(failure, context.DeadlineExceeded) {
 			c.Observer.HydraRejected(RejectedTimeout)
 		}
@@ -478,7 +480,7 @@ func stringMember(doc map[string]json.RawMessage, name string) string {
 // Content-Type as XML. It goes through the SDK's HTTP client, transport and
 // redirect policy included, as the SDK's own calls.
 func read[T any](c *Client, ctx context.Context, op, path, param, challenge string, decode func([]byte) (*T, error)) (*T, error) {
-	return call(c, op, func() (*T, *http.Response, error) {
+	return call(c, ctx, op, func() (*T, *http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.admin+path+"?"+url.Values{param: {challenge}}.Encode(), nil)
 		if err != nil {
 			return nil, nil, err
@@ -518,13 +520,13 @@ func (c *Client) LoginRequest(ctx context.Context, challenge string) (*ory.OAuth
 
 // AcceptLogin accepts the login request and returns Hydra's redirect_to.
 func (c *Client) AcceptLogin(ctx context.Context, challenge string, body ory.AcceptOAuth2LoginRequest) (string, error) {
-	return call(c, "accept_login", func() (string, *http.Response, error) {
+	return call(c, ctx, "accept_login", func() (string, *http.Response, error) {
 		return redirectTo(c.oauth2.AcceptOAuth2LoginRequest(ctx).LoginChallenge(challenge).AcceptOAuth2LoginRequest(body).Execute())
 	})
 }
 
 func (c *Client) RejectLogin(ctx context.Context, challenge string, body ory.RejectOAuth2Request) (string, error) {
-	return call(c, "reject_login", func() (string, *http.Response, error) {
+	return call(c, ctx, "reject_login", func() (string, *http.Response, error) {
 		return redirectTo(c.oauth2.RejectOAuth2LoginRequest(ctx).LoginChallenge(challenge).RejectOAuth2Request(body).Execute())
 	})
 }
@@ -535,13 +537,13 @@ func (c *Client) ConsentRequest(ctx context.Context, challenge string) (*ory.OAu
 }
 
 func (c *Client) AcceptConsent(ctx context.Context, challenge string, body ory.AcceptOAuth2ConsentRequest) (string, error) {
-	return call(c, "accept_consent", func() (string, *http.Response, error) {
+	return call(c, ctx, "accept_consent", func() (string, *http.Response, error) {
 		return redirectTo(c.oauth2.AcceptOAuth2ConsentRequest(ctx).ConsentChallenge(challenge).AcceptOAuth2ConsentRequest(body).Execute())
 	})
 }
 
 func (c *Client) RejectConsent(ctx context.Context, challenge string, body ory.RejectOAuth2Request) (string, error) {
-	return call(c, "reject_consent", func() (string, *http.Response, error) {
+	return call(c, ctx, "reject_consent", func() (string, *http.Response, error) {
 		return redirectTo(c.oauth2.RejectOAuth2ConsentRequest(ctx).ConsentChallenge(challenge).RejectOAuth2Request(body).Execute())
 	})
 }
@@ -552,13 +554,13 @@ func (c *Client) LogoutRequest(ctx context.Context, challenge string) (*ory.OAut
 }
 
 func (c *Client) AcceptLogout(ctx context.Context, challenge string) (string, error) {
-	return call(c, "accept_logout", func() (string, *http.Response, error) {
+	return call(c, ctx, "accept_logout", func() (string, *http.Response, error) {
 		return redirectTo(c.oauth2.AcceptOAuth2LogoutRequest(ctx).LogoutChallenge(challenge).Execute())
 	})
 }
 
 func (c *Client) RejectLogout(ctx context.Context, challenge string) error {
-	_, err := call(c, "reject_logout", func() (struct{}, *http.Response, error) {
+	_, err := call(c, ctx, "reject_logout", func() (struct{}, *http.Response, error) {
 		resp, err := c.oauth2.RejectOAuth2LogoutRequest(ctx).LogoutChallenge(challenge).Execute()
 		return struct{}{}, resp, err
 	})
@@ -568,7 +570,7 @@ func (c *Client) RejectLogout(ctx context.Context, challenge string) error {
 // RevokeLoginSession deletes a session of login, which sends its back-channel: 204,
 // again if it is gone (HLO-11, HLO-18). For a chain of logout that stopped (SKP-12).
 func (c *Client) RevokeLoginSession(ctx context.Context, sid string) error {
-	_, err := call(c, "revoke_login_session", func() (struct{}, *http.Response, error) {
+	_, err := call(c, ctx, "revoke_login_session", func() (struct{}, *http.Response, error) {
 		resp, err := c.oauth2.RevokeOAuth2LoginSessions(ctx).Sid(sid).Execute()
 		return struct{}{}, resp, err
 	})

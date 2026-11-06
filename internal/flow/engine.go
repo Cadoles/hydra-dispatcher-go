@@ -29,6 +29,8 @@ type Env struct {
 	PropagateWithoutRecord string
 	Now                    time.Time
 	Draw                   Draw
+	// Trace is the request's span, for a flow it creates (Flow.Trace).
+	Trace string
 }
 
 // Draw are the random values a request may use, drawn by the orchestrator:

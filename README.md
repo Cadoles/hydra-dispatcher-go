@@ -58,6 +58,13 @@ E1004 to E1007, a panic, an error line of the log, at most
 a claim, a challenge, a cookie or a query string; the info and warn lines of a request are
 its breadcrumbs, by name.
 
+`observability.tracing` (or the standard `OTEL_*` variables, which win) exports traces
+over OTLP, gRPC or HTTP: a span by request, named by its route, one by call to Hydra or a
+webhook and by operation of the state store, a later request linked to the span that
+created its flow. The `traceparent` of a proxy or a login app continues its trace; any
+other client's is only a link. Off by default, at almost no cost. With
+`observability.sentry.traces_sample_rate` above 0, the spans go to Sentry too.
+
 `serve` exposes `/metrics` (Prometheus, OpenMetrics when asked for), in the memory
 of the instance, a scrape touching neither Redis nor the database, behind
 `security.metrics_authorized_hosts`; or on a port of its own with

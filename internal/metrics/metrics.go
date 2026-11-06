@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/trace"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
@@ -235,10 +236,22 @@ func operation(op string) string {
 }
 
 // HydraCall is hydra.Observer.
-func (m *Metrics) HydraCall(op, statusClass string, elapsed time.Duration) {
+func (m *Metrics) HydraCall(ctx context.Context, op, statusClass string, elapsed time.Duration) {
 	op = operation(op)
 	m.hydraRequests.WithLabelValues(op, statusClass).Inc()
-	m.hydraDuration.WithLabelValues(op).Observe(elapsed.Seconds())
+	observe(ctx, m.hydraDuration.WithLabelValues(op), elapsed.Seconds())
+}
+
+// observe records v, with the trace_id of a request sampled by OpenTelemetry as its
+// exemplar: from a peak of latency to a precise trace, at no cost in series.
+func observe(ctx context.Context, o prometheus.Observer, v float64) {
+	if sc := trace.SpanContextFromContext(ctx); sc.IsSampled() {
+		if e, ok := o.(prometheus.ExemplarObserver); ok {
+			e.ObserveWithExemplar(v, prometheus.Labels{"trace_id": sc.TraceID().String()})
+			return
+		}
+	}
+	o.Observe(v)
 }
 
 // HydraRejected is hydra.Observer.
@@ -255,8 +268,8 @@ type states struct {
 	m *Metrics
 }
 
-func (s *states) done(op string, start time.Time, err error) {
-	s.m.stateDuration.WithLabelValues(op).Observe(time.Since(start).Seconds())
+func (s *states) done(ctx context.Context, op string, start time.Time, err error) {
+	observe(ctx, s.m.stateDuration.WithLabelValues(op), time.Since(start).Seconds())
 	switch {
 	case err == nil, errors.Is(err, state.ErrNotFound), errors.Is(err, context.Canceled):
 	case errors.Is(err, state.ErrConflict):
@@ -269,21 +282,21 @@ func (s *states) done(op string, start time.Time, err error) {
 func (s *states) Get(ctx context.Context, key string) ([]byte, uint64, error) {
 	start := time.Now()
 	val, version, err := s.StateStore.Get(ctx, key)
-	s.done("get", start, err)
+	s.done(ctx, "get", start, err)
 	return val, version, err
 }
 
 func (s *states) Put(ctx context.Context, key string, val []byte, ttl time.Duration, ifVersion uint64) error {
 	start := time.Now()
 	err := s.StateStore.Put(ctx, key, val, ttl, ifVersion)
-	s.done("put", start, err)
+	s.done(ctx, "put", start, err)
 	return err
 }
 
 func (s *states) Delete(ctx context.Context, key string) error {
 	start := time.Now()
 	err := s.StateStore.Delete(ctx, key)
-	s.done("delete", start, err)
+	s.done(ctx, "delete", start, err)
 	return err
 }
 
@@ -296,7 +309,7 @@ type webhooks struct {
 	m    *Metrics
 }
 
-func (w webhooks) done(kind string, start time.Time, err error) {
+func (w webhooks) done(ctx context.Context, kind string, start time.Time, err error) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
@@ -304,20 +317,20 @@ func (w webhooks) done(kind string, start time.Time, err error) {
 	if err != nil {
 		outcome = "error"
 	}
-	w.m.webhookDuration.WithLabelValues(kind, outcome).Observe(time.Since(start).Seconds())
+	observe(ctx, w.m.webhookDuration.WithLabelValues(kind, outcome), time.Since(start).Seconds())
 }
 
 func (w webhooks) Login(ctx context.Context, call flow.Call) flow.LoginHookAnswer {
 	start := time.Now()
 	a := w.next.Login(ctx, call)
-	w.done("login", start, a.Err)
+	w.done(ctx, "login", start, a.Err)
 	return a
 }
 
 func (w webhooks) Consent(ctx context.Context, call flow.Call) flow.ConsentHookAnswer {
 	start := time.Now()
 	a := w.next.Consent(ctx, call)
-	w.done("consent", start, a.Err)
+	w.done(ctx, "consent", start, a.Err)
 	return a
 }
 
@@ -347,7 +360,7 @@ func (m *Metrics) HTTP(next http.Handler) http.Handler {
 				method = LabelOther
 			}
 			m.httpRequests.WithLabelValues(route, method, statusClassOf(rec.status())).Inc()
-			m.httpDuration.WithLabelValues(route).Observe(time.Since(start).Seconds())
+			observe(r.Context(), m.httpDuration.WithLabelValues(route), time.Since(start).Seconds())
 		}()
 		next.ServeHTTP(rec, r)
 	})
@@ -449,7 +462,7 @@ func currentApp(f *flow.Flow) string {
 var knownTriggers = map[string]bool{"choice": true, "auto_select": true, "acr": true}
 
 // Observe is flow.Observer: a request's result, as the catalogue counts it.
-func (m *Metrics) Observe(_ context.Context, o flow.Observation) {
+func (m *Metrics) Observe(ctx context.Context, o flow.Observation) {
 	label := m.flowLabel(o)
 	consent, login := false, false
 	post := false
@@ -485,7 +498,7 @@ func (m *Metrics) Observe(_ context.Context, o flow.Observation) {
 				of = m.flowValue(o, r.Flow) // a skip's, from the cookie
 			}
 			m.logins.WithLabelValues("accepted", of).Inc()
-			m.authEnded(o, "accepted")
+			m.authEnded(ctx, o, "accepted")
 		case "hydra.consent_accepted":
 			outcome := "skip_accepted"
 			if post {
@@ -497,7 +510,7 @@ func (m *Metrics) Observe(_ context.Context, o flow.Observation) {
 			}
 			m.consents.WithLabelValues(outcome, of).Inc()
 		case "flow.rejected":
-			m.rejected(o, r, label, consent)
+			m.rejected(ctx, o, r, label, consent)
 		case "hydra.request_failed":
 			m.hydraErrors.WithLabelValues(operation(r.Operation), label).Inc()
 		case "flow.started":
@@ -526,7 +539,7 @@ func (m *Metrics) Observe(_ context.Context, o flow.Observation) {
 
 // rejected counts a reject made: of a consent, its outcome; of an app on its step, its
 // traffic; of a login not yet accepted, the end of an authentication.
-func (m *Metrics) rejected(o flow.Observation, r flow.Report, label string, consent bool) {
+func (m *Metrics) rejected(ctx context.Context, o flow.Observation, r flow.Report, label string, consent bool) {
 	reason, _, _ := strings.Cut(r.Detail, ":")
 	if consent {
 		outcome := "rejected"
@@ -549,15 +562,15 @@ func (m *Metrics) rejected(o flow.Observation, r flow.Report, label string, cons
 		m.stepRequests.WithLabelValues(m.appLabel(o, currentApp(o.Before)), kind, outcome).Inc()
 	}
 	if expired {
-		m.authEnded(o, "expired")
+		m.authEnded(ctx, o, "expired")
 	} else {
-		m.authEnded(o, "rejected")
+		m.authEnded(ctx, o, "rejected")
 	}
 }
 
 // authEnded observes an authentication that ended, from the start of its flow: not a
 // skip, nor a reject of a login already accepted, the consent's.
-func (m *Metrics) authEnded(o flow.Observation, outcome string) {
+func (m *Metrics) authEnded(ctx context.Context, o flow.Observation, outcome string) {
 	f := o.Before
 	if f == nil || f.StartedAt == 0 {
 		return
@@ -565,5 +578,5 @@ func (m *Metrics) authEnded(o flow.Observation, outcome string) {
 	if outcome != "accepted" && f.HydraRedirect != "" {
 		return
 	}
-	m.authDuration.WithLabelValues(outcome).Observe(o.Now.Sub(time.UnixMilli(f.StartedAt)).Seconds())
+	observe(ctx, m.authDuration.WithLabelValues(outcome), o.Now.Sub(time.UnixMilli(f.StartedAt)).Seconds())
 }

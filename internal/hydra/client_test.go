@@ -23,6 +23,9 @@ import (
 	"unicode/utf8"
 
 	ory "github.com/ory/hydra-client-go/v26"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
@@ -535,7 +538,7 @@ func TestInFlightCap(t *testing.T) {
 
 	func() {
 		defer func() { _ = recover() }()
-		_, _ = call(c, "panics", func() (struct{}, *http.Response, error) { panic("boom") })
+		_, _ = call(c, context.Background(), "panics", func() (struct{}, *http.Response, error) { panic("boom") })
 	}()
 	go func() { <-entered }()
 	if err := c.RejectLogout(context.Background(), "U"); err != nil {
@@ -1026,7 +1029,7 @@ type observed struct {
 	rejected []string
 }
 
-func (o *observed) HydraCall(op, class string, _ time.Duration) {
+func (o *observed) HydraCall(_ context.Context, op, class string, _ time.Duration) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.calls = append(o.calls, op+" "+class)
@@ -1107,4 +1110,34 @@ func TestObserver(t *testing.T) {
 			t.Errorf("calls %v, rejected %v", o.calls, o.rejected)
 		}
 	})
+}
+
+// The traceparent of a span goes to Hydra when tracing is on, its own traces attaching to
+// it; none is made up when it is off.
+func TestTraceparent(t *testing.T) {
+	var got atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.Store(r.Header.Get("Traceparent"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"redirect_to":"http://x"}`)
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, 1, time.Second)
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled}))
+	if _, err := c.AcceptLogin(ctx, "L", ory.AcceptOAuth2LoginRequest{Subject: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Load() != "" {
+		t.Errorf("off: traceparent %q", got.Load())
+	}
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator())
+	if _, err := c.AcceptLogin(ctx, "L", ory.AcceptOAuth2LoginRequest{Subject: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Load() != "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" {
+		t.Errorf("on: traceparent %q", got.Load())
+	}
 }
