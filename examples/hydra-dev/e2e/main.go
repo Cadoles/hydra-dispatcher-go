@@ -96,6 +96,7 @@ var scenarios = []scenario{
 	{name: "logout-chain-stopped-former-login", run: (*driver).logoutChainStoppedFormerLogin},
 	{name: "logout-chain-stopped-prompt-none", run: (*driver).logoutChainStoppedPromptNone},
 	{name: "logout-chain-stopped-other-session", run: (*driver).logoutChainStoppedOtherSession},
+	{name: "logout-chain-stopped-preload", run: (*driver).logoutChainStoppedPreload},
 	{name: "logout-apps-answers", run: (*driver).logoutAppsAnswers},
 	{name: "logout-preload-head-locale", run: (*driver).logoutPreloadHeadLocale},
 	{name: "prompt-consent-accept", run: promptConsent("accept")},
@@ -1108,8 +1109,8 @@ func (d *driver) noted(apps ...string) (*flow.Remembered, error) {
 	if err != nil {
 		return nil, err
 	}
-	if n.SID != claims["sid"] {
-		return nil, fmt.Errorf("WRT-4: the note of session %s, want %v", n.SID, claims["sid"])
+	if n.SID != claims["sid"] || n.Sub != claims["sub"] {
+		return nil, fmt.Errorf("WRT-4: the note of session %s and subject %s, want %v and %v", n.SID, n.Sub, claims["sid"], claims["sub"])
 	}
 	return n, nil
 }
@@ -1784,6 +1785,48 @@ func (d *driver) logoutChainStoppedOtherSession() error {
 	return (identity{Sub: henri}).check(claims)
 }
 
+// logoutChainStoppedPreload preloads a client's login link after a chain stopped:
+// the page answers 503, and the session stays, which a new demand could still end
+// through the apps that remain (Q62). The visit then deletes it (SKP-12).
+func (d *driver) logoutChainStoppedPreload() error {
+	if err := d.stoppedChain(); err != nil {
+		return err
+	}
+	session := d.client.idToken
+	note := d.b.cookie(d.dispatcher, rememberCookie)
+	first, err := d.b.hop(d.client.authURL(""))
+	if err != nil {
+		return err
+	}
+	status, err := d.b.preload(http.MethodGet, first.String(), "Sec-Purpose", "prefetch")
+	if err != nil {
+		return err
+	}
+	if status != http.StatusServiceUnavailable {
+		return fmt.Errorf("Q62: a preload of the entry: %d, want 503", status)
+	}
+	alive, err := d.client.sessionAlive(d.ctx, session)
+	if err != nil {
+		return err
+	}
+	if !alive {
+		return errors.New("Q62: a preload deleted the session")
+	}
+	if d.b.cookie(d.dispatcher, rememberCookie) != note {
+		return errors.New("Q62: a preload changed the cookie")
+	}
+	if _, err := d.b.get(first.String()); err != nil {
+		return err
+	}
+	if alive, err = d.client.sessionAlive(d.ctx, session); err != nil {
+		return err
+	}
+	if alive {
+		return errors.New("SKP-12: the visit did not delete the session")
+	}
+	return nil
+}
+
 // logoutAppsAnswers plays what the real apps do of the emulated API's answers: the
 // logout_url of a step past, reloaded, sends on (LEM-6, hydra-sql); a challenge
 // unknown or another app's never sends the browser to the chain, and the chain goes on
@@ -1862,7 +1905,7 @@ func (d *driver) logoutPreloadHeadLocale() error {
 	if err != nil {
 		return err
 	}
-	status, err := d.b.preload(http.MethodHead, p.URL.String(), "")
+	status, err := d.b.preload(http.MethodHead, p.URL.String())
 	if err != nil {
 		return err
 	}
@@ -1881,13 +1924,13 @@ func (d *driver) logoutPreloadHeadLocale() error {
 	if err != nil {
 		return err
 	}
-	for _, purpose := range []string{"prefetch", "prefetch;prerender"} {
-		status, err := d.b.preload(http.MethodGet, first.String(), purpose)
+	for _, header := range [][]string{{"Sec-Purpose", "prefetch"}, {"Sec-Purpose", "prefetch;prerender"}, {"Purpose", "prefetch"}} {
+		status, err := d.b.preload(http.MethodGet, first.String(), header...)
 		if err != nil {
 			return err
 		}
 		if status != http.StatusServiceUnavailable {
-			return fmt.Errorf("LGO-18, %s: %d, want 503", purpose, status)
+			return fmt.Errorf("LGO-18, %v: %d, want 503", header, status)
 		}
 	}
 	if d.b.cookie(d.dispatcher, rememberCookie) != memory {

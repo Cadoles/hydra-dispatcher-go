@@ -129,6 +129,7 @@ services cannot be given Hydra's command, nor migrate first:
 
 ```sh
 docker run -d --rm --name hydra-pg -e POSTGRES_PASSWORD=hydra postgres:17-alpine
+until docker exec hydra-pg pg_isready -U postgres -h 127.0.0.1; do sleep 1; done
 PG=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' hydra-pg)
 port=56444
 for v in 2.1.2 2.2.0 2.3.0; do
@@ -143,6 +144,9 @@ for v in 2.1.2 2.2.0 2.3.0; do
       -e URLS_POST_LOGOUT_REDIRECT=http://post.test/default -e $ttl oryd/hydra:v$v serve all --dev
     port=$((port+2))
   done
+done
+for admin in 56445 56447 56449 56451 56453 56455; do
+  until curl -sf http://127.0.0.1:$admin/health/ready; do sleep 1; done
 done
 HYDRA_URLS='http://127.0.0.1:56444|http://127.0.0.1:56445,http://127.0.0.1:56448|http://127.0.0.1:56449,http://127.0.0.1:56452|http://127.0.0.1:56453' \
 HYDRA_SHORT_URLS='http://127.0.0.1:56446|http://127.0.0.1:56447,http://127.0.0.1:56450|http://127.0.0.1:56451,http://127.0.0.1:56454|http://127.0.0.1:56455' \
@@ -169,10 +173,10 @@ the `dispatcher_remember` cookie, then without it (the skip ignored, then
 another account refused), with `prompt=consent` (the screen without a flow,
 refused) and reloaded during the redirection; the logout, confirmed through the
 `logout_url` of each app, refused, asked by a client with its `id_token_hint`,
-and a chain stopped at an app, passed by a new demand, cut by the next login or left
-by the link of page E1003; what the apps answer to a challenge that is not theirs; a
-preload and a change of language on the logout's page; `prompt=consent` accepted and
-refused; back to the choice. Start `make up-go` in
+and a chain stopped at an app, passed by a new demand, cut by the next login, not cut
+by a preload of the login link, or left by the link of page E1003; what the apps answer
+to a challenge that is not theirs; a preload and a change of language on the logout's
+page; `prompt=consent` accepted and refused; back to the choice. Start `make up-go` in
 `hydra-dev`, whose README sets the `*.hydra.test` names up, then:
 
 ```sh

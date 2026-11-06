@@ -143,15 +143,15 @@ func (b *browser) do(req *http.Request, body []byte) (response, error) {
 	return response{resp, string(data)}, nil
 }
 
-// preload makes a request as a browser's preload does, Sec-Purpose given unless "",
-// without following it, and returns its status.
-func (b *browser) preload(method, u, purpose string) (int, error) {
+// preload makes a request as a browser's preload does, with the header given as a name
+// and a value, without following it, and returns its status.
+func (b *browser) preload(method, u string, header ...string) (int, error) {
 	req, err := http.NewRequest(method, u, nil)
 	if err != nil {
 		return 0, err
 	}
-	if purpose != "" {
-		req.Header.Set("Sec-Purpose", purpose)
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
 	}
 	resp, err := b.do(req, nil)
 	if err != nil {
