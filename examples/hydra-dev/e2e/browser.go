@@ -51,6 +51,9 @@ type page struct {
 	Trail []*url.URL
 }
 
+// browserAgent is the User-Agent of the browser.
+const browserAgent = "hydra-dispatcher-go/examples/hydra-dev/e2e"
+
 // maxRedirects bounds a walk: hydra-oidc's login crosses the app, the IdP and
 // back, then the dispatcher and Hydra.
 const maxRedirects = 25
@@ -128,7 +131,7 @@ func (b *browser) do(req *http.Request, body []byte) (response, error) {
 		req.Body = io.NopCloser(strings.NewReader(string(body)))
 		req.ContentLength = int64(len(body))
 	}
-	req.Header.Set("User-Agent", "hydra-dispatcher-go/examples/hydra-dev/e2e")
+	req.Header.Set("User-Agent", browserAgent)
 	req.Header.Set("Accept-Language", "fr")
 	resp, err := b.c.Do(req)
 	if err != nil {

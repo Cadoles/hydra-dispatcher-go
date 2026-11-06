@@ -105,6 +105,9 @@ var scenarios = []scenario{
 	{name: "back-to-choice", run: (*driver).backToChoice},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
 	{name: "expired-on-consent", run: (*driver).expiredOnConsent, optIn: true},
+	{name: "webhook-rewrites", run: (*driver).webhookRewrites, optIn: true},
+	{name: "webhook-fails", run: (*driver).webhookFails, optIn: true},
+	{name: "webhook-other-subject-at-skip", run: (*driver).webhookOtherSubjectAtSkip, optIn: true},
 }
 
 func main() {
@@ -124,6 +127,8 @@ func run() error {
 	redirect := flag.String("redirect", "http://oidc.client.test/auth/callback", "the client's redirect_uri")
 	postLogout := flag.String("post-logout", "http://oidc.client.test/", "the client's post_logout_redirect_uri")
 	backChannel := flag.String("back-channel", "", "where Hydra reaches this host, host:port, for a client with a back-channel, http://10.0.6.1:<port> on hydra-dev; empty leaves that check out")
+	webhookURL := flag.String("webhook", "", "where the dispatcher reaches this host for its webhooks, http://10.0.6.1:<port> on hydra-dev, the stack started with HYDRA_DEV_WEBHOOK at the same URL: every scenario then goes through them, and the webhook-* ones can run; empty leaves them out")
+	webhookKey := flag.String("webhook-key", "527e1ffcaac07fcf0b9bbdac0d66987a343990b3bf4879fc7e453e96a58511e9", "secrets.webhook_signing_key of the dispatcher, in hexadecimal; hydra-dev's by default")
 	password := flag.String("password", "123456", "password of hydra-sql's accounts")
 	cookieKey := flag.String("cookie-key", "504c39b17f9e971e485b0472d2585c012b181d917d96567d353d88662750bda0", "secrets.cookie_key of the dispatcher, in hexadecimal, to open the note of logout; hydra-dev's development key by default")
 	symfony := flag.Bool("symfony", false, "drive the Symfony dispatcher's pages (make capture), checking the subject only")
@@ -195,6 +200,18 @@ func run() error {
 	}
 	if *backChannel != "" {
 		stop, err := d.listenBackChannel(*backChannel)
+		if err != nil {
+			return err
+		}
+		defer stop()
+	}
+
+	if *webhookURL != "" {
+		signing, err := hex.DecodeString(*webhookKey)
+		if err != nil {
+			return fmt.Errorf("-webhook-key: %w", err)
+		}
+		stop, err := d.listenWebhooks(*webhookURL, signing)
 		if err != nil {
 			return err
 		}
@@ -324,6 +341,8 @@ type driver struct {
 	version         string
 	backChannelURL  string
 	backChannelHits atomic.Int32
+	// hooks is the receiver of the webhooks, nil without -webhook.
+	hooks *hookReceiver
 	// mark is the newest email when the authorization started: the code of
 	// hydra-passwordless comes after it.
 	mark int
