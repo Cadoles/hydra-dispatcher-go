@@ -281,8 +281,8 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			switch {
 			case r.Event == "logout.started", r.Event == "logout.session_revoked":
 				// Info, as the catalogue has them, in the audit log too.
-			case r.Sentry, r.Event == "hydra.request_failed":
-				// The latter without Sentry: flow.error, of the same request, goes.
+			case r.Sentry, r.Event == "hydra.request_failed", r.Event == "webhook.failed":
+				// The last two without Sentry: flow.error, of the same request, goes.
 				level = slog.LevelError
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
 				level = slog.LevelWarn
@@ -306,6 +306,9 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			if r.Event == "hydra.request_failed" {
 				args = append(args, "operation", r.Operation, "status", r.Status)
 			}
+			if r.Event == "hydra.request_abandoned" {
+				args = append(args, "operation", r.Operation, "duration_ms", r.Elapsed.Milliseconds())
+			}
 			o.Log.Log(ctx, level, r.Event, args...)
 		}
 	}
@@ -316,15 +319,21 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 // (hydra.request_failed): what an exploitant needs to understand an E1004 or an
 // E1007, which only name their code. Hydra unavailable, whatever the page; a refusal
 // when the page says so, a 409 of 2.1 being read again before it concludes. Not a
-// challenge unknown or expired, an expected answer that challenge.invalid reports; not
-// a browser that gave up, nor a call that max_in_flight did not make.
+// challenge unknown or expired, an expected answer that challenge.invalid reports; nor
+// a call that max_in_flight did not make. A call its client gave up on is another
+// event, hydra.request_abandoned, at the info level (Q64).
 func requestFailed(a Answers, reports []Report) []Report {
-	refusedPage := slices.ContainsFunc(reports, func(r Report) bool { return r.Event == "flow.error" && r.Detail == string(E1007) })
+	failedPage := slices.ContainsFunc(reports, func(r Report) bool {
+		return r.Event == "flow.error" && (r.Detail == string(E1004) || r.Detail == string(E1007))
+	})
 	var out []Report
 	for _, err := range a.failures() {
 		switch class := classify(err); {
-		case class == unavailable && !errors.Is(err, context.Canceled) && !errors.Is(err, hydra.ErrOverloaded),
-			(class == refused || class == conflict) && refusedPage:
+		case class == unavailable && errors.Is(err, context.Canceled):
+			op, _, _ := hydra.Failure(err)
+			out = append(out, Report{Event: "hydra.request_abandoned", Operation: op, Elapsed: hydra.Elapsed(err)})
+		case class == unavailable && !errors.Is(err, hydra.ErrOverloaded),
+			(class == refused || class == conflict) && failedPage:
 			op, status, cause := hydra.Failure(err)
 			out = append(out, Report{Event: "hydra.request_failed", Operation: op, Status: status, Detail: cause})
 		}

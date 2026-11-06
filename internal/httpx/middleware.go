@@ -176,9 +176,9 @@ func Routes(mux *http.ServeMux) http.Handler {
 var quietPaths = map[string]bool{"/health": true, "/ready": true, "/metrics": true}
 
 // AccessLog writes one line per request. Successful requests are sampled at
-// sample (0 to 1); errors and aborted requests are always written. The query
-// string, which carries the challenges, is never logged; logIP is truncated,
-// full or none.
+// sample (0 to 1); errors and aborted requests are always written: a panic, or a
+// client gone before the answer, whose status no one read. The query string, which
+// carries the challenges, is never logged; logIP is truncated, full or none.
 func AccessLog(logger *slog.Logger, sample float64, logIP string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -199,6 +199,7 @@ func AccessLog(logger *slog.Logger, sample float64, logIP string) Middleware {
 				case status == 0:
 					status = http.StatusOK
 				}
+				aborted = aborted || errors.Is(r.Context().Err(), context.Canceled)
 				if aborted || status >= 400 || mathrand.Float64() < sample {
 					logRequest(logger, r, start, sw, status, aborted, logIP)
 				}

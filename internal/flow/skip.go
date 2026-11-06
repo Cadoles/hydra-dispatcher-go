@@ -110,9 +110,11 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 		return *stop // SKP-9: nothing written, a reload replays the webhook
 	}
 	if body.Subject != f.Hydra.Subject {
-		// SKP-7: Hydra 2.1 would refuse the accept, 2.2 start a login again.
+		// SKP-7: Hydra 2.1 would refuse the accept, 2.2 start a login again. The page
+		// gives the way out, as FIN-3: past a logout, Hydra says no skip, and the
+		// webhook's subject is no longer compared to anything (Q63).
 		return r.rejectLogin(f, ReasonSkipSubject, rejection(ReasonSkipSubject, "The subject authenticated is not the one of the Hydra session."),
-			func(string) Outcome { return s.fail(E1003) })
+			func(string) Outcome { return otherSubject(s, f) })
 	}
 	ctx = withoutDispatcher(ctx)
 	marker := r.Env.Keys.SkipMarker(f.HydraSessionID, body.Subject, body.GetAcr(), body.Amr, f.Hydra.RequestURL)

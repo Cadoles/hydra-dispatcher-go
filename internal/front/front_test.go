@@ -666,6 +666,34 @@ func TestLogoutConfirmation(t *testing.T) {
 	}
 }
 
+// LGO-18, Q62: no page answers a browser's preload, each of these GET able to act
+// without a click: SKP-12 delete a session, SKP-1 and SKC-1 accept, SUI-5 give the
+// verifier. The first read is not made, nor a cookie set; the visit goes on.
+func TestPagesPreloaded(t *testing.T) {
+	ref := strings.Repeat("a", 20)
+	for _, target := range []string{
+		"/?login_challenge=" + strings.Repeat("b", 32),
+		"/?ref=" + ref,
+		"/oauth2/auth?ref=" + ref,
+		"/consent?consent_challenge=" + strings.Repeat("c", 32),
+		logoutPath,
+		"/logout/next?ref=" + ref,
+	} {
+		w := newWorld(t)
+		resp := w.do(http.MethodGet, target, nil, "Sec-Purpose", "prefetch")
+		if resp.StatusCode != http.StatusServiceUnavailable || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
+			t.Errorf("%s: %d, cookies %v, calls %v", target, resp.StatusCode, resp.Cookies(), w.hydra.calls)
+		}
+		if resp.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: Cache-Control %q", target, resp.Header.Get("Cache-Control"))
+		}
+		w.hydra.errs["get_consent"] = &hydra.RequestError{Op: "get_consent_request", Status: http.StatusNotFound}
+		if resp = w.do(http.MethodGet, target, nil); resp.StatusCode == http.StatusServiceUnavailable {
+			t.Errorf("%s, the visit: %d", target, resp.StatusCode)
+		}
+	}
+}
+
 // LGO-18, Q59: a browser's preload has no effect, whatever the logout request. A
 // HEAD aside, the first request a client's link makes runs the whole chain.
 func TestLogoutPreloaded(t *testing.T) {
@@ -673,6 +701,7 @@ func TestLogoutPreloaded(t *testing.T) {
 		{"Sec-Purpose", "prefetch"},
 		{"Sec-Purpose", "prefetch;prerender"},
 		{"Sec-Purpose", "prefetch;anonymous-client-ip"},
+		{"Sec-Purpose", "prerender"},
 		{"Purpose", "prefetch"},
 	} {
 		w := newWorld(t)

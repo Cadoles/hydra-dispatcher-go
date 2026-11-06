@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -8,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +19,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -686,6 +690,7 @@ func TestLogoutStart(t *testing.T) {
 		}{
 			{"absent, at ea - 60 s", false, 9 * time.Minute},
 			{"absent, a second past it: not LGO-5, the accept is made", false, 9*time.Minute + time.Second},
+			{"absent, past ea itself: not LGO-5 either", false, 10*time.Minute + time.Second},
 			{"present, a second past it", true, 9*time.Minute + time.Second},
 		} {
 			w := logoutWorld(t)
@@ -1885,14 +1890,104 @@ func TestRequestFailed(t *testing.T) {
 		}
 	})
 	t.Run("the DELETE of SKP-12", func(t *testing.T) {
-		w := newWorld(t)
-		w.hydra.login.Skip, w.hydra.login.Subject, w.hydra.login.SessionId = true, "alice", ory.PtrString("s")
-		w.hydra.errs["revoke_session"] = &hydra.UnavailableError{Op: "revoke_login_session", Status: 500}
-		r := w.handle(Entry{LoginChallenge: hydraL, Memory: Memory{Content: &Remembered{V: 1, SID: "s", Sub: "alice", Lo: true}}})
-		if r.Response.Code != E1004 || !has(r, "hydra.request_failed", func(x Report) bool { return x.Operation == "revoke_login_session" }) {
+		for _, err := range []error{
+			&hydra.UnavailableError{Op: "revoke_login_session", Status: 500},
+			&hydra.RequestError{Op: "revoke_login_session", Status: 403}, // Q64: a refusal under E1004
+		} {
+			w := newWorld(t)
+			w.hydra.login.Skip, w.hydra.login.Subject, w.hydra.login.SessionId = true, "alice", ory.PtrString("s")
+			w.hydra.errs["revoke_session"] = err
+			r := w.handle(Entry{LoginChallenge: hydraL, Memory: Memory{Content: &Remembered{V: 1, SID: "s", Sub: "alice", Lo: true}}})
+			if r.Response.Code != E1004 || !has(r, "hydra.request_failed", func(x Report) bool { return x.Operation == "revoke_login_session" }) {
+				t.Errorf("%v: answer %+v, reports %+v", err, r.Response, r.Reports)
+			}
+		}
+	})
+	t.Run("a refusal, then a second mutation stopped: flow.error and its cause", func(t *testing.T) {
+		f := lastDone(t)
+		f.ExpiresAt = testNow.Add(-time.Millisecond).UnixMilli()
+		in := Input{Event: Loop{Ref: lref, Cookie: f.CSRF}, Env: testEnv(), Loaded: true, Reread: true, Flow: f, Answers: Answers{
+			Login:  &LoginRead{Request: loginRequest(t)},
+			Accept: &Done{Call: Call{Op: AcceptLogin}, Err: &hydra.RequestError{Op: "accept_login", Status: 400}},
+		}}
+		out := Decide(in)
+		got := requestFailed(in.Answers, out.Reports)
+		if out.Response.Code != E1007 || len(got) != 1 || got[0].Operation != "accept_login" {
+			t.Errorf("answer %+v, reports %+v, then %+v", out.Response, out.Reports, got)
+		}
+	})
+	t.Run("hydra.timeout: a failure, no abandon", func(t *testing.T) {
+		w := logoutWorld(t)
+		w.demand(logoutU, false)
+		w.hydra.errs["get_logout"] = callError(t, context.Background(), 50*time.Millisecond, func(_ http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		})
+		r := w.handle(Logout{Challenge: logoutU})
+		if r.Response.Code != E1004 || !has(r, "flow.error") || !has(r, "hydra.request_failed", func(x Report) bool { return x.Operation == "get_logout_request" }) || has(r, "hydra.request_abandoned") {
 			t.Errorf("answer %+v, reports %+v", r.Response, r.Reports)
 		}
 	})
+	t.Run("the client gave up: the operation, at the info level", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		w := logoutWorld(t)
+		w.demand(logoutU, false)
+		w.hydra.errs["get_logout"] = callError(t, ctx, 2*time.Second, func(http.ResponseWriter, *http.Request) {})
+		r := w.handle(Logout{Challenge: logoutU})
+		if has(r, "flow.error") || has(r, "hydra.request_failed") || !has(r, "hydra.request_abandoned", func(x Report) bool { return x.Operation == "get_logout_request" && !x.Sentry }) {
+			t.Errorf("reports %+v", r.Reports)
+		}
+		logs := w.logs.String()
+		if !strings.Contains(logs, `"level":"INFO","msg":"hydra.request_abandoned"`) || !strings.Contains(logs, `"operation":"get_logout_request","duration_ms":`) {
+			t.Errorf("no line at the info level, with its operation and duration:\n%s", logs)
+		}
+	})
+	t.Run("the cause reaches the log", func(t *testing.T) {
+		w := logoutWorld(t)
+		w.demand(logoutU, false)
+		w.hydra.errs["get_logout"] = callError(t, context.Background(), 2*time.Second, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "down", http.StatusBadGateway)
+		})
+		r := w.handle(Logout{Challenge: logoutU})
+		if !has(r, "hydra.request_failed", func(x Report) bool { return x.Status == 502 && x.Detail == "502 Bad Gateway" }) {
+			t.Errorf("reports %+v", r.Reports)
+		}
+		if logs := w.logs.String(); !strings.Contains(logs, `"detail":"502 Bad Gateway"`) {
+			t.Errorf("no cause in the log:\n%s", logs)
+		}
+	})
+}
+
+// callError is the error of a real call of the client to handler, at hydra.timeout.
+func callError(t *testing.T, ctx context.Context, timeout time.Duration, handler http.HandlerFunc) error {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	c, err := hydra.New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(timeout), MaxInFlight: 1}, config.TLS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.LogoutRequest(ctx, logoutU)
+	if err == nil {
+		t.Fatal("the call did not fail")
+	}
+	return err
+}
+
+// The level of the events a transition reports without Sentry (Journalisation).
+func TestReportLevels(t *testing.T) {
+	for event, level := range map[string]string{
+		"webhook.failed":          "ERROR",
+		"hydra.request_failed":    "ERROR",
+		"hydra.request_abandoned": "INFO",
+	} {
+		var buf bytes.Buffer
+		o := &Orchestrator{Log: slog.New(slog.NewJSONHandler(&buf, nil))}
+		r := o.result(context.Background(), Input{}, Outcome{}, []Report{{Event: event}})
+		if !strings.Contains(buf.String(), `"level":"`+level+`","msg":"`+event+`"`) || r.Reports[0].Sentry {
+			t.Errorf("%s: %s", event, buf.String())
+		}
+	}
 }
 
 // FIN-3, Q60: the way out of page E1003.

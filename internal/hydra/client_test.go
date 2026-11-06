@@ -1,6 +1,7 @@
 package hydra
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	ory "github.com/ory/hydra-client-go/v26"
 
@@ -846,9 +848,29 @@ func TestFailure(t *testing.T) {
 			t.Errorf("Failure: %q %d %q", op, status, cause)
 		}
 	})
-	t.Run("a refusal", func(t *testing.T) {
-		if op, status, cause := Failure(&RequestError{Op: "accept_login", Status: 409}); op != "accept_login" || status != 409 || cause != "" {
+	t.Run("a refusal, without its body", func(t *testing.T) {
+		if op, status, cause := Failure(&RequestError{Op: "accept_login", Status: 409, Body: []byte(email)}); op != "accept_login" || status != 409 || cause != "" {
 			t.Errorf("Failure: %q %d %q", op, status, cause)
+		}
+	})
+	t.Run("a cause at most maxCause", func(t *testing.T) {
+		_, _, cause := Failure(&UnavailableError{Op: "op", err: errors.New(strings.Repeat("é", maxCause))})
+		if len(cause) > maxCause+len("…") || !utf8.ValidString(cause) || !strings.HasSuffix(cause, "…") {
+			t.Errorf("%d bytes: %q", len(cause), cause)
+		}
+	})
+	t.Run("the time of the call", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(20 * time.Millisecond)
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		defer srv.Close()
+		_, err := newTestClient(t, srv.URL, 4, time.Second).LogoutRequest(context.Background(), challenge)
+		if d := Elapsed(err); d < 20*time.Millisecond {
+			t.Errorf("Elapsed %s", d)
+		}
+		if d := Elapsed(errors.New(email)); d != 0 {
+			t.Errorf("not a call: Elapsed %s", d)
 		}
 	})
 	t.Run("not a call", func(t *testing.T) {
@@ -856,4 +878,100 @@ func TestFailure(t *testing.T) {
 			t.Errorf("Failure: %q %d %q", op, status, cause)
 		}
 	})
+}
+
+// rawAnswer answers each connection with the bytes given, whatever the request; REQ
+// stands for the request's first line.
+func rawAnswer(t *testing.T, answer string) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = c.Close() }()
+				r := bufio.NewReader(c)
+				first, _ := r.ReadString('\n')
+				for {
+					if l, err := r.ReadString('\n'); err != nil || l == "\r\n" {
+						break
+					}
+				}
+				_, _ = c.Write([]byte(strings.ReplaceAll(answer, "REQ", strings.TrimSpace(first))))
+			}()
+		}
+	}()
+	return "http://" + ln.Addr().String()
+}
+
+// What a server or a gateway answers, on every call, never reaches the cause of the
+// log: no value it quotes, whatever carries it, and a bounded length (Q64).
+func TestFailureKeepsNoValue(t *testing.T) {
+	const challenge, value = "the-challenge-0123456789", "the-sid-alice@example.org"
+	answer := func(status, contentType, body string, headers ...string) string {
+		return fmt.Sprintf("HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n%s\r\n%s",
+			status, contentType, len(body), strings.Join(append(headers, ""), "\r\n"), body)
+	}
+	long := strings.Repeat("x", 3000)
+	ctx := context.Background()
+	calls := map[string]func(c *Client) error{
+		"get_login": func(c *Client) error { _, err := c.LoginRequest(ctx, challenge); return err },
+		"accept_login": func(c *Client) error {
+			_, err := c.AcceptLogin(ctx, challenge, ory.AcceptOAuth2LoginRequest{Subject: "s"})
+			return err
+		},
+		"reject_login": func(c *Client) error { _, err := c.RejectLogin(ctx, challenge, ory.RejectOAuth2Request{}); return err },
+		"get_consent":  func(c *Client) error { _, err := c.ConsentRequest(ctx, challenge); return err },
+		"accept_consent": func(c *Client) error {
+			_, err := c.AcceptConsent(ctx, challenge, ory.AcceptOAuth2ConsentRequest{})
+			return err
+		},
+		"reject_consent": func(c *Client) error {
+			_, err := c.RejectConsent(ctx, challenge, ory.RejectOAuth2Request{})
+			return err
+		},
+		"get_logout":    func(c *Client) error { _, err := c.LogoutRequest(ctx, challenge); return err },
+		"accept_logout": func(c *Client) error { _, err := c.AcceptLogout(ctx, challenge); return err },
+		"reject_logout": func(c *Client) error { return c.RejectLogout(ctx, challenge) },
+		"revoke":        func(c *Client) error { return c.RevokeLoginSession(ctx, challenge) },
+	}
+	for name, raw := range map[string]string{
+		"a 5xx document":                answer("500 Internal Server Error", "application/json", `{"error":"server_error","error_description":"`+value+`"}`),
+		"a 5xx, its status line":        answer("502 upstream said "+value, "text/plain", value),
+		"a 5xx document, its line":      answer("502 upstream said "+value, "application/json", `{"error":"x"}`),
+		"a long status line":            answer("502 "+long, "text/plain", "x"),
+		"a 4xx, its status line":        answer("403 refused "+value, "text/plain", value),
+		"a 429 document":                answer("429 Too Many Requests", "application/json", `{"error":"slow","error_description":"`+value+`"}`),
+		"a redirect, its status line":   answer("302 moved "+value, "text/plain", "", "Location: http://elsewhere.invalid/"),
+		"a Location unread":             answer("302 Found", "text/plain", "", "Location: http://[bad/?sid="+value),
+		"a 200, not JSON":               answer("200 OK", "application/json", "sid="+value),
+		"a 200, a date":                 answer("200 OK", "application/json", `{"challenge":"c","subject":"s","sid":"i","request_url":"http://x","requested_at":"`+value+`"}`),
+		"no HTTP":                       "sid=" + value + "\r\n",
+		"no HTTP, the request repeated": "REQ upstream error\r\n",
+		"no HTTP, long":                 long + "\r\n",
+		"an unread status":              "HTTP/1.1 abc " + value + "\r\n\r\n",
+		"an unread header":              "HTTP/1.1 200 OK\r\n" + value + "\r\n\r\n",
+		"an unread length":              "HTTP/1.1 200 OK\r\nContent-Length: " + value + "\r\n\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newTestClient(t, rawAnswer(t, raw), 16, 2*time.Second)
+			for op, call := range calls {
+				err := call(c)
+				if err == nil {
+					continue // 200 without a body to read: the reject and the delete
+				}
+				_, _, cause := Failure(err)
+				if strings.Contains(cause, value) || strings.Contains(cause, challenge) || len(cause) > maxCause+len("…") {
+					t.Errorf("%s: the cause %q", op, cause)
+				}
+			}
+		})
+	}
 }

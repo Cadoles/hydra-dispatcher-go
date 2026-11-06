@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -229,6 +230,39 @@ func TestAccessLog(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "secret-challenge") {
 		t.Error("the query string reached the access log")
+	}
+}
+
+// A client gone before the answer: what the handler answers, no one reads. The line is
+// written, sampled out or not, and says so (Q64).
+func TestAccessLogClientGone(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ok", func(http.ResponseWriter, *http.Request) {})
+	mux.HandleFunc("GET /bad", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tt := range []struct {
+		path   string
+		ctx    context.Context
+		status float64
+		lines  int
+		abort  any
+	}{
+		{"/ok", context.Background(), 200, 0, nil},
+		{"/bad", context.Background(), 502, 1, nil},
+		{"/ok", gone, 200, 1, true},
+		{"/bad", gone, 502, 1, true},
+	} {
+		h, buf := stack(mux, 0, "none")
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.path, nil).WithContext(tt.ctx))
+		lines := logLines(t, buf)
+		if len(lines) != tt.lines {
+			t.Errorf("%s: lines %v, want %d", tt.path, lines, tt.lines)
+			continue
+		}
+		if tt.lines == 1 && (lines[0]["status"] != tt.status || lines[0]["aborted"] != tt.abort) {
+			t.Errorf("%s: %v, want the status %v and aborted %v", tt.path, lines[0], tt.status, tt.abort)
+		}
 	}
 }
 

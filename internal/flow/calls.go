@@ -41,7 +41,10 @@ func (r *run) mutated(op Op) bool {
 // blocked stands for an accept or a reject the transition would make after
 // another: Decide answers with the fact of the first, when it succeeded.
 func blocked() Outcome {
-	return Outcome{Response: Response{Kind: ErrorPage, Code: E1007}, Reports: []Report{{Event: "state.conflict", Detail: "second mutation", Sentry: true}}}
+	return Outcome{Response: Response{Kind: ErrorPage, Code: E1007}, Reports: []Report{
+		{Event: "state.conflict", Detail: "second mutation", Sentry: true},
+		{Event: "flow.error", Detail: string(E1007), Sentry: true},
+	}}
 }
 
 // hydraFailure answers the error of an accept or a reject made on f (Q11,
@@ -126,9 +129,9 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 	return r.accepted(f, d)
 }
 
-// otherSubject is page E1003 of FIN-3: Hydra keeps a session of someone else in this
-// browser, and refuses this sign-in. The page gives the way out, Hydra's logout, which
-// asks first (LGO-6): nothing ends without a click (Q60).
+// otherSubject is page E1003 of FIN-3 and SKP-7: Hydra keeps a session of someone else
+// in this browser, and refuses this sign-in. The page gives the way out, Hydra's logout,
+// which asks first (LGO-6): nothing ends without a click (Q60, Q63).
 func otherSubject(s surface, f *Flow) Outcome {
 	o := s.fail(E1003)
 	o.Response.SignOut = signOutURL(f.Hydra.RequestURL)

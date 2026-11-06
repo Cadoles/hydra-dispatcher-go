@@ -80,6 +80,8 @@ type UnavailableError struct {
 	// server is the error document of a 5xx (serverCause), a server's free text.
 	server string
 	err    error
+	// elapsed is how long the call ran.
+	elapsed time.Duration
 }
 
 func (e *UnavailableError) Error() string {
@@ -95,27 +97,55 @@ func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailab
 func (e *UnavailableError) Unwrap() error { return e.err }
 
 // Failure is what the log says of a failed call (hydra.request_failed): its
-// operation, the status of the answer, 0 when none came, and the cause. Not the error
-// document of a 5xx: serverCause only masks the values of the request's query, and the
-// free text of a server or a gateway may quote a sid or a subject, which the log never
-// holds (Journalisation).
+// operation, the status of the answer, 0 when none came, and the cause, at most
+// maxCause. Not the error document of a 5xx: serverCause only masks the values of the
+// request's query, and the free text of a server or a gateway may quote a sid or a
+// subject, which the log never holds (Journalisation).
 func Failure(err error) (op string, status int, cause string) {
 	var unavailable *UnavailableError
 	var request *RequestError
 	switch {
 	case errors.As(err, &unavailable):
 		cause = strings.TrimSpace(unavailable.detail)
-		if unavailable.err != nil {
+		if text := unavailable.cause(); text != "" {
 			if cause != "" {
 				cause += ": "
 			}
-			cause += unavailable.err.Error()
+			cause += text
+		}
+		if len(cause) > maxCause {
+			cause = strings.ToValidUTF8(cause[:maxCause], "") + "…"
 		}
 		return unavailable.Op, unavailable.Status, cause
 	case errors.As(err, &request):
 		return request.Op, request.Status, ""
 	}
 	return "", 0, ""
+}
+
+// cause is what Failure keeps of the error of a call. An answer of 300 and up, read
+// whole, is named by its status alone: the text of its status line, which read and the
+// SDK repeat, is a server's. Go's libraries quote what they could not read, a line that
+// is no HTTP, a Location, a Content-Length or a date: that, and what follows, stays out.
+func (e *UnavailableError) cause() string {
+	if e.err == nil {
+		return ""
+	}
+	if _, answered := errorBody(e.err); answered && e.Status >= 300 {
+		return strings.TrimSpace(fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status)))
+	}
+	text, _, _ := strings.Cut(e.err.Error(), `"`)
+	return strings.TrimRight(text, " :")
+}
+
+// Elapsed is how long a failed call ran (hydra.request_abandoned), 0 when it was not
+// made.
+func Elapsed(err error) time.Duration {
+	var unavailable *UnavailableError
+	if errors.As(err, &unavailable) {
+		return unavailable.elapsed
+	}
+	return 0
 }
 
 // RequestError is a 4xx answer: an unknown challenge (404), an expired one
@@ -267,6 +297,7 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 	default:
 		return zero, fmt.Errorf("%s: %w", op, ErrOverloaded)
 	}
+	start := time.Now()
 	v, resp, err := do()
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
@@ -274,7 +305,12 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 	if err == nil {
 		return v, nil
 	}
-	return zero, classify(op, resp, err)
+	failure := classify(op, resp, err)
+	var unavailable *UnavailableError
+	if errors.As(failure, &unavailable) {
+		unavailable.elapsed = time.Since(start)
+	}
+	return zero, failure
 }
 
 // InFlight returns the number of calls running, for hydra_in_flight.

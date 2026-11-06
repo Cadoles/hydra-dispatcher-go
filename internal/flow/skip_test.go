@@ -305,8 +305,8 @@ func TestSkipLogin(t *testing.T) {
 			says: hydraSays{GetLogin: read(nil), LoginHook: {loginHook: &LoginHookAnswer{Subject: ory.PtrString("bob")}}, RejectLogin: {redirectTo: hydraDone}},
 			kind: ErrorPage, code: E1003, calls: []Op{GetLogin, LoginHook, RejectLogin}, write: finished, check: func(t *testing.T, p played) {
 				rejected(RejectLogin, "login_required")(t, p)
-				if p.Response.SignOut != "" { // Q60: a webhook's answer, that a logout does not change
-					t.Errorf("a way out: %q", p.Response.SignOut)
+				if !strings.HasSuffix(p.Response.SignOut, "/oauth2/sessions/logout") { // Q63: past a logout, no skip, nothing compared
+					t.Errorf("the way out: %q", p.Response.SignOut)
 				}
 			}},
 		{name: "SKP-7 EXP-4, Hydra 401 on the reject", env: hook, ev: entry,

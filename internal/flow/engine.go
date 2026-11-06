@@ -264,7 +264,8 @@ type ConsentScreen struct {
 // Kind and Reason are those of skip.accepted and skip.ignored (login or
 // consent, and the check of the cookie that failed); App and Result those of
 // logout.propagated; RP, Apps and Again those of logout.started, RP that of
-// logout.verifier_sent; Operation and Status those of hydra.request_failed.
+// logout.verifier_sent; Operation and Status those of hydra.request_failed, Operation
+// and Elapsed those of hydra.request_abandoned.
 type Report struct {
 	Event     string
 	Detail    string
@@ -277,6 +278,7 @@ type Report struct {
 	Again     bool
 	Operation string
 	Status    int
+	Elapsed   time.Duration
 	Sentry    bool
 	Audit     bool
 }
@@ -648,9 +650,10 @@ func (s surface) fail(code Code) Outcome {
 
 // unavailable is E1004 for Hydra unavailable or answering what it should
 // not (B1, Q11); Overloaded when the call was not even made, max_in_flight
-// calls being already in flight. A browser that gave up cancels the call: no one
-// reads this page, and Hydra did not fail, so nothing goes to the application log or
-// to Sentry; the access log keeps the request.
+// calls being already in flight. A client that gave up, a browser, a proxy or an app,
+// cancels the call: no one reads this page, and nothing says Hydra failed, so neither
+// flow.error nor Sentry; hydra.request_abandoned tells it, at the info level, and the
+// access log marks the request aborted (Q64).
 func (s surface) unavailable(err error) Outcome {
 	o := s.fail(E1004)
 	o.Response.Overloaded = errors.Is(err, hydra.ErrOverloaded)

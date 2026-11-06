@@ -108,14 +108,14 @@ func New(o Options) (*Handler, error) {
 
 // Register adds the routes to mux.
 func (h *Handler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /{$}", h.entry)
+	mux.HandleFunc("GET /{$}", visit(h.entry))
 	mux.HandleFunc("POST /{$}", h.choose)
-	mux.HandleFunc("GET /oauth2/auth", h.loop)
-	mux.HandleFunc("GET /consent", h.consentGet)
+	mux.HandleFunc("GET /oauth2/auth", visit(h.loop))
+	mux.HandleFunc("GET /consent", visit(h.consentGet))
 	mux.HandleFunc("POST /consent", h.consentPost)
-	mux.HandleFunc("GET /logout", h.logoutGet)
+	mux.HandleFunc("GET /logout", visit(h.logoutGet))
 	mux.HandleFunc("POST /logout", h.logoutPost)
-	mux.HandleFunc("GET /logout/next", h.logoutNext)
+	mux.HandleFunc("GET /logout/next", visit(h.logoutNext))
 	mux.HandleFunc("POST /locale/{code}", h.locale)
 	mux.HandleFunc("GET /static/{name...}", h.static)
 }
@@ -333,11 +333,6 @@ func (h *Handler) logoutGet(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		return
 	}
-	if preloaded(r) {
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		return // LGO-18
-	}
 	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Logout{
 		Challenge: r.URL.Query().Get("logout_challenge"),
 		Cookie:    h.cookie(r, csrfCookie),
@@ -345,10 +340,24 @@ func (h *Handler) logoutGet(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
-// preloaded tells a browser's preload from a visit (LGO-18, Q59): Sec-Purpose on a
-// prefetch or a prerender, Purpose on those of the browsers before it. A client's
-// demand has no page: answered, the preload would run the whole chain, without a
-// click. A browser drops a 503, and asks again when the link is followed.
+// visit answers a browser's preload of a page 503 without a body, a cookie or a call
+// (LGO-18, Q59, Q62): each of these GET can act without a click, the whole chain of a
+// logout (LGO-8, SUI-5), the delete of a session after a chain stopped (SKP-12), the
+// accepts of a skip (SKP-1, SKC-1). A browser drops a 503, and asks again when the link
+// is followed.
+func visit(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if preloaded(r) {
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// preloaded tells a browser's preload from a visit: Sec-Purpose on a prefetch or a
+// prerender, Purpose on those of the browsers before it.
 func preloaded(r *http.Request) bool {
 	return r.Header.Get("Sec-Purpose") != "" || r.Header.Get("Purpose") == "prefetch"
 }
