@@ -308,6 +308,10 @@ func TestSkipLogin(t *testing.T) {
 				if !strings.HasSuffix(p.Response.SignOut, "/oauth2/sessions/logout") { // Q63: past a logout, no skip, nothing compared
 					t.Errorf("the way out: %q", p.Response.SignOut)
 				}
+				// Q67: the log tells a webhook's doing from FIN-3.
+				if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "flow.rejected" && r.Detail == "skip_subject:webhook" }) {
+					t.Errorf("reports %+v", p.Reports)
+				}
 			}},
 		{name: "SKP-7 EXP-4, Hydra 401 on the reject", env: hook, ev: entry,
 			says: hydraSays{GetLogin: read(nil), LoginHook: {loginHook: &LoginHookAnswer{Subject: ory.PtrString("bob")}}, RejectLogin: {err: err401}},

@@ -326,33 +326,44 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Respons
 }
 
 // logoutGet is GET /logout (LGO): the confirmation, or the accept at once of a
-// client's demand. A HEAD, which the pattern covers, neither calls nor writes
-// nothing, a logout otherwise leaving on a HEAD (LGO-17, Q57).
+// client's demand, unless another site's page asks for it by a subrequest (LGO-19).
 func (h *Handler) logoutGet(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodHead {
-		w.Header().Set("Cache-Control", "no-store")
-		return
-	}
 	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Logout{
-		Challenge: r.URL.Query().Get("logout_challenge"),
-		Cookie:    h.cookie(r, csrfCookie),
-		Memory:    h.memory(r),
+		Challenge:  r.URL.Query().Get("logout_challenge"),
+		Cookie:     h.cookie(r, csrfCookie),
+		Memory:     h.memory(r),
+		Subrequest: subrequest(r),
 	}))
 }
 
-// visit answers a browser's preload of a page 503 without a body, a cookie or a call
-// (LGO-18, Q59, Q62): each of these GET can act without a click, the whole chain of a
+// subrequest tells what another site's page loads for itself, an <img>, an iframe or a
+// fetch, from a visit (LGO-19, Q65): the fetch metadata of a browser, sent over HTTPS
+// and on localhost. Hydra's cookie goes with it when it is SameSite=None, its default
+// in production, and the verifier would make the browser lose it, whoever's id_token
+// the link holds (HLO-8). The memory cookie, Lax, does not: LGO-7 sees nothing.
+func subrequest(r *http.Request) bool {
+	dest := r.Header.Get("Sec-Fetch-Dest")
+	return r.Header.Get("Sec-Fetch-Site") == "cross-site" && dest != "" && dest != "document"
+}
+
+// visit serves a page in GET to a visit only, without a body, a cookie or a call to
+// anything else: each of these GET can act without a click, the whole chain of a
 // logout (LGO-8, SUI-5), the delete of a session after a chain stopped (SKP-12), the
-// accepts of a skip (SKP-1, SKC-1). A browser drops a 503, and asks again when the link
-// is followed.
+// accepts of a skip or of a consent (SKP-1, SKC-1). A browser's preload gets 425 (LGO-18,
+// Q59, Q62, Q66), which it drops, asking again when the link is followed: a 4xx, as a
+// load balancer counting the 5xx would take the preloads of a client's page for an
+// instance failing. A HEAD, which the GET pattern covers, gets 200 (LGO-17, Q57, Q66).
 func visit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if preloaded(r) {
+		switch {
+		case preloaded(r):
 			w.Header().Set("Cache-Control", "no-store")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
+			w.WriteHeader(http.StatusTooEarly)
+		case r.Method == http.MethodHead:
+			w.Header().Set("Cache-Control", "no-store")
+		default:
+			next(w, r)
 		}
-		next(w, r)
 	}
 }
 
@@ -381,10 +392,6 @@ func (h *Handler) logoutPost(w http.ResponseWriter, r *http.Request) {
 
 // logoutNext is GET /logout/next (SUI), where the apps send the browser back.
 func (h *Handler) logoutNext(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodHead {
-		w.Header().Set("Cache-Control", "no-store")
-		return // LGO-17
-	}
 	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.LogoutNext{Ref: r.URL.Query().Get("ref")}))
 }
 

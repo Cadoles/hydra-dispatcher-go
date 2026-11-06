@@ -267,6 +267,14 @@ func TestLogoutConfirmation(t *testing.T) {
 			w := logoutWorld(t)
 			w.demand(logoutU, tc.rp)
 			r := w.handle(Logout{Challenge: logoutU, Memory: tc.memory, Cookie: cookie})
+			if tc.confirm && !tc.other {
+				// Each of these goes on asking as a subrequest.
+				w2 := logoutWorld(t)
+				w2.demand(logoutU, tc.rp)
+				if x := w2.handle(Logout{Challenge: logoutU, Memory: tc.memory, Cookie: cookie, Subrequest: true}); x.Response.Kind != LogoutPage {
+					t.Errorf("a subrequest: %+v", x.Response)
+				}
+			}
 			if !tc.confirm {
 				if r.Response.Kind != Redirect || !slices.Equal(w.hydra.calls, []string{"get_logout", "accept_logout"}) || r.Response.Remember == nil {
 					t.Errorf("LGO-8: %+v, calls %v", r.Response, w.hydra.calls)
@@ -284,6 +292,18 @@ func TestLogoutConfirmation(t *testing.T) {
 				t.Errorf("HLO-7: client %+v, rp %v", s.Client, tc.rp)
 			}
 		})
+	}
+	// LGO-19 (Q65): a client's demand, but another site's page asks for it by a
+	// subrequest: the question, which no one answers there, whatever the cookie. No text
+	// of another session: that cookie does not reach it. A POST never says so.
+	for name, memory := range map[string]Memory{"no cookie": {}, "a cookie of the session": same, "a note": noteOther} {
+		w := logoutWorld(t)
+		w.demand(logoutU, true)
+		r := w.handle(Logout{Challenge: logoutU, Memory: memory, Cookie: cookie, Subrequest: true})
+		s := r.Response.Logout
+		if r.Response.Kind != LogoutPage || s == nil || s.State != LogoutConfirm || s.OtherSession || r.Response.Remember != nil || w.store.puts != 0 || !slices.Equal(w.hydra.calls, []string{"get_logout"}) || has(r, "logout.started") {
+			t.Errorf("LGO-19, %s: %+v, calls %v", name, r.Response, w.hydra.calls)
+		}
 	}
 	// A browser without the cookie gets a new value.
 	w := logoutWorld(t)
@@ -1893,6 +1913,9 @@ func TestRequestFailed(t *testing.T) {
 		for _, err := range []error{
 			&hydra.UnavailableError{Op: "revoke_login_session", Status: 500},
 			&hydra.RequestError{Op: "revoke_login_session", Status: 403}, // Q64: a refusal under E1004
+			&hydra.RequestError{Op: "revoke_login_session", Status: 404}, // Q67: any answer under it
+			&hydra.RequestError{Op: "revoke_login_session", Status: 410}, // Q67
+			&hydra.RequestError{Op: "revoke_login_session", Status: 401}, // Q67
 		} {
 			w := newWorld(t)
 			w.hydra.login.Skip, w.hydra.login.Subject, w.hydra.login.SessionId = true, "alice", ory.PtrString("s")
@@ -1914,6 +1937,20 @@ func TestRequestFailed(t *testing.T) {
 		got := requestFailed(in.Answers, out.Reports)
 		if out.Response.Code != E1007 || len(got) != 1 || got[0].Operation != "accept_login" {
 			t.Errorf("answer %+v, reports %+v, then %+v", out.Response, out.Reports, got)
+		}
+		if !slices.ContainsFunc(out.Reports, func(x Report) bool { return x.Event == "flow.error" && x.Detail == string(E1007) && x.Sentry }) {
+			t.Errorf("no flow.error for Sentry: %+v", out.Reports)
+		}
+	})
+	t.Run("a refusal under another page says nothing", func(t *testing.T) {
+		a := Answers{Accept: &Done{Err: &hydra.RequestError{Op: "accept_login", Status: 409}}}
+		for code, want := range map[Code]int{E1004: 1, E1007: 1, E1000: 0, E1005: 0, E1006: 0, E1002: 0} {
+			if got := requestFailed(a, []Report{{Event: "flow.error", Detail: string(code)}}); len(got) != want {
+				t.Errorf("under %s: %+v", code, got)
+			}
+		}
+		if got := requestFailed(a, []Report{{Event: "state.conflict", Detail: string(E1007)}}); len(got) != 0 {
+			t.Errorf("not a flow.error: %+v", got)
 		}
 	})
 	t.Run("hydra.timeout: a failure, no abandon", func(t *testing.T) {
@@ -1940,6 +1977,23 @@ func TestRequestFailed(t *testing.T) {
 		logs := w.logs.String()
 		if !strings.Contains(logs, `"level":"INFO","msg":"hydra.request_abandoned"`) || !strings.Contains(logs, `"operation":"get_logout_request","duration_ms":`) {
 			t.Errorf("no line at the info level, with its operation and duration:\n%s", logs)
+		}
+	})
+	t.Run("the client gave up on a Hydra that hangs: warn (Q67)", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		w := logoutWorld(t)
+		w.demand(logoutU, false)
+		w.hydra.errs["get_logout"] = callError(t, ctx, time.Minute, func(_ http.ResponseWriter, r *http.Request) {
+			time.AfterFunc(slowAbandon, cancel) // from here: the call began before
+			<-r.Context().Done()
+		})
+		r := w.handle(Logout{Challenge: logoutU})
+		if has(r, "flow.error") || has(r, "hydra.request_failed") || !has(r, "hydra.request_abandoned") {
+			t.Errorf("reports %+v", r.Reports)
+		}
+		if logs := w.logs.String(); !strings.Contains(logs, `"level":"WARN","msg":"hydra.request_abandoned"`) {
+			t.Errorf("no warn line:\n%s", logs)
 		}
 	})
 	t.Run("the cause reaches the log", func(t *testing.T) {
@@ -1976,16 +2030,23 @@ func callError(t *testing.T, ctx context.Context, timeout time.Duration, handler
 
 // The level of the events a transition reports without Sentry (Journalisation).
 func TestReportLevels(t *testing.T) {
-	for event, level := range map[string]string{
-		"webhook.failed":          "ERROR",
-		"hydra.request_failed":    "ERROR",
-		"hydra.request_abandoned": "INFO",
+	for _, tc := range []struct {
+		report Report
+		level  string
+	}{
+		{Report{Event: "webhook.failed"}, "ERROR"},
+		{Report{Event: "hydra.request_failed"}, "ERROR"},
+		{Report{Event: "hydra.request_abandoned"}, "INFO"},
+		{Report{Event: "hydra.request_abandoned", Elapsed: slowAbandon - time.Millisecond}, "INFO"},
+		{Report{Event: "hydra.request_abandoned", Elapsed: slowAbandon}, "WARN"},
+		{Report{Event: "flow.rejected", Detail: "skip_subject"}, "INFO"},
+		{Report{Event: "flow.rejected", Detail: "skip_subject:webhook"}, "WARN"},
 	} {
 		var buf bytes.Buffer
 		o := &Orchestrator{Log: slog.New(slog.NewJSONHandler(&buf, nil))}
-		r := o.result(context.Background(), Input{}, Outcome{}, []Report{{Event: event}})
-		if !strings.Contains(buf.String(), `"level":"`+level+`","msg":"`+event+`"`) || r.Reports[0].Sentry {
-			t.Errorf("%s: %s", event, buf.String())
+		r := o.result(context.Background(), Input{}, Outcome{}, []Report{tc.report})
+		if !strings.Contains(buf.String(), `"level":"`+tc.level+`","msg":"`+tc.report.Event+`"`) || r.Reports[0].Sentry {
+			t.Errorf("%+v: %s", tc.report, buf.String())
 		}
 	}
 }

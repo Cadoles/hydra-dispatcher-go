@@ -854,7 +854,8 @@ func TestFailure(t *testing.T) {
 		}
 	})
 	t.Run("a cause at most maxCause", func(t *testing.T) {
-		_, _, cause := Failure(&UnavailableError{Op: "op", err: errors.New(strings.Repeat("é", maxCause))})
+		// Cut inside a character: maxCause is even, and é two bytes.
+		_, _, cause := Failure(&UnavailableError{Op: "op", err: errors.New("x" + strings.Repeat("é", maxCause))})
 		if len(cause) > maxCause+len("…") || !utf8.ValidString(cause) || !strings.HasSuffix(cause, "…") {
 			t.Errorf("%d bytes: %q", len(cause), cause)
 		}
@@ -914,7 +915,7 @@ func rawAnswer(t *testing.T, answer string) string {
 // What a server or a gateway answers, on every call, never reaches the cause of the
 // log: no value it quotes, whatever carries it, and a bounded length (Q64).
 func TestFailureKeepsNoValue(t *testing.T) {
-	const challenge, value = "the-challenge-0123456789", "the-sid-alice@example.org"
+	const challenge, value, element = "the-challenge-0123456789", "the-sid-alice@example.org", "the-sid-alice"
 	answer := func(status, contentType, body string, headers ...string) string {
 		return fmt.Sprintf("HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n%s\r\n%s",
 			status, contentType, len(body), strings.Join(append(headers, ""), "\r\n"), body)
@@ -959,6 +960,9 @@ func TestFailureKeepsNoValue(t *testing.T) {
 		"an unread status":              "HTTP/1.1 abc " + value + "\r\n\r\n",
 		"an unread header":              "HTTP/1.1 200 OK\r\n" + value + "\r\n\r\n",
 		"an unread length":              "HTTP/1.1 200 OK\r\nContent-Length: " + value + "\r\n\r\n",
+		"a 200 XML, an element":         answer("200 OK", "application/xml", "<"+element+"/>"),
+		"a 200 XML, closed by another":  answer("200 OK", "application/xml", "<a>x</"+element+">"),
+		"a 200 XML, a broken element":   answer("200 OK", "application/xml", "</"+value+">"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newTestClient(t, rawAnswer(t, raw), 16, 2*time.Second)
@@ -968,10 +972,48 @@ func TestFailureKeepsNoValue(t *testing.T) {
 					continue // 200 without a body to read: the reject and the delete
 				}
 				_, _, cause := Failure(err)
-				if strings.Contains(cause, value) || strings.Contains(cause, challenge) || len(cause) > maxCause+len("…") {
+				if strings.Contains(cause, element) || strings.Contains(cause, challenge) || len(cause) > maxCause+len("…") {
 					t.Errorf("%s: the cause %q", op, cause)
 				}
 			}
 		})
+	}
+}
+
+// Error, which ready.check_failed writes, holds what the cause holds, its own bound
+// included, and the failed checks of /health/ready; encoding/json's '<' is no citation.
+func TestErrorKeepsNoValue(t *testing.T) {
+	const value = "the-sid-alice"
+	for name, raw := range map[string]string{
+		"no HTTP":     "sid=" + value + "\r\n",
+		"long":        strings.Repeat("x", 3000) + value + "\r\n",
+		"status line": "HTTP/1.1 502 upstream said " + value + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+		"a header":    "HTTP/1.1 200 OK\r\n" + value + "\r\n\r\n",
+	} {
+		err := newTestClient(t, rawAnswer(t, raw), 4, 2*time.Second).Ready(context.Background())
+		if err == nil || strings.Contains(err.Error(), value) || len(err.Error()) > 2*maxCause {
+			t.Errorf("%s: %d bytes: %v", name, len(fmt.Sprint(err)), err)
+		}
+	}
+	if msg := (&UnavailableError{Op: "op", Status: 500}).Error(); msg != "op: hydra unavailable: status 500" {
+		t.Errorf("no underlying error: %q", msg)
+	}
+	if msg := (&UnavailableError{Op: "op", err: errors.New(strings.Repeat("x", 3*maxCause))}).Error(); len(msg) > 2*maxCause {
+		t.Errorf("no bound: %d bytes", len(msg))
+	}
+	// What stays says something, without a loose end.
+	for raw, want := range map[string]string{
+		"sid=" + value + "\r\n": "net/http: HTTP/1.x transport connection broken: malformed HTTP response",
+		"HTTP/1.1 599 " + value + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n": "599",
+	} {
+		err := newTestClient(t, rawAnswer(t, raw), 4, 2*time.Second).Ready(context.Background())
+		if _, _, cause := Failure(err); cause != want {
+			t.Errorf("the cause %q, want %q", cause, want)
+		}
+	}
+	html := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 6\r\nConnection: close\r\n\r\n<html>"
+	_, err := newTestClient(t, rawAnswer(t, html), 4, 2*time.Second).LogoutRequest(context.Background(), "x")
+	if _, _, cause := Failure(err); !strings.Contains(cause, "invalid character '<'") {
+		t.Errorf("the cause of an HTML answer: %q", cause)
 	}
 }

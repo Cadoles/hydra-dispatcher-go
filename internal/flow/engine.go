@@ -203,8 +203,8 @@ type Response struct {
 	Code Code
 	// Link is the client's client_uri on page E1002, "" for none.
 	Link string
-	// SignOut is Hydra's logout on page E1003, the way out of a session that is
-	// someone else's (FIN-3, Q60), "" for none.
+	// SignOut is Hydra's logout on page E1003, the way out of a session that stops this
+	// sign-in (FIN-3, SKP-7, Q60, Q63), "" for none.
 	SignOut string
 	Choice  *ChoiceScreen
 	Consent *ConsentScreen
@@ -342,7 +342,8 @@ var reasonNames = [...]string{"", "expired", "unmet_acr", "client_restriction", 
 func (r Reason) String() string { return reasonNames[r] }
 
 // detail is the reason of a reject as its events give it: the reason, and
-// for a not_ours reject the check of A3 that failed (not_ours:login).
+// for a not_ours reject the check of A3 that failed (not_ours:login), for SKP-7
+// the webhook (skip_subject:webhook).
 func (c Call) detail() string {
 	if c.Check == "" {
 		return c.Reason.String()
@@ -382,7 +383,8 @@ type Call struct {
 	Challenge string
 	Reason    Reason
 	// Check is the check of A3 a not_ours reject failed (checkFlow to
-	// checkLogin), for its audit event.
+	// checkLogin), for its audit event, or what made a skip's subject another
+	// (checkWebhook, SKP-7).
 	Check string
 	// Gen is the flow's generation when the call was decided.
 	Gen int64
@@ -650,10 +652,10 @@ func (s surface) fail(code Code) Outcome {
 
 // unavailable is E1004 for Hydra unavailable or answering what it should
 // not (B1, Q11); Overloaded when the call was not even made, max_in_flight
-// calls being already in flight. A client that gave up, a browser, a proxy or an app,
-// cancels the call: no one reads this page, and nothing says Hydra failed, so neither
-// flow.error nor Sentry; hydra.request_abandoned tells it, at the info level, and the
-// access log marks the request aborted (Q64).
+// calls being already in flight. A connection the client closed, a browser, a proxy or
+// an app, half-closed included, or the server's past its grace, cancels the call:
+// nothing says Hydra failed, so neither flow.error nor Sentry; hydra.request_abandoned
+// tells it, and the access log marks the request client_gone (Q64, Q67).
 func (s surface) unavailable(err error) Outcome {
 	o := s.fail(E1004)
 	o.Response.Overloaded = errors.Is(err, hydra.ErrOverloaded)

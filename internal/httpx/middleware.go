@@ -176,9 +176,12 @@ func Routes(mux *http.ServeMux) http.Handler {
 var quietPaths = map[string]bool{"/health": true, "/ready": true, "/metrics": true}
 
 // AccessLog writes one line per request. Successful requests are sampled at
-// sample (0 to 1); errors and aborted requests are always written: a panic, or a
-// client gone before the answer, whose status no one read. The query string, which
-// carries the challenges, is never logged; logIP is truncated, full or none.
+// sample (0 to 1); errors, aborted requests (a panic) and those of a client gone are
+// always written. A client gone (client_gone, Q67) closed its connection before the
+// handler ended; a half-close counts, net/http reading EOF, and that client may still
+// read the status; so does the server cutting a request past its grace. The query
+// string, which carries the challenges, is never logged; logIP is truncated, full or
+// none.
 func AccessLog(logger *slog.Logger, sample float64, logIP string) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -199,9 +202,9 @@ func AccessLog(logger *slog.Logger, sample float64, logIP string) Middleware {
 				case status == 0:
 					status = http.StatusOK
 				}
-				aborted = aborted || errors.Is(r.Context().Err(), context.Canceled)
-				if aborted || status >= 400 || mathrand.Float64() < sample {
-					logRequest(logger, r, start, sw, status, aborted, logIP)
+				gone := errors.Is(r.Context().Err(), context.Canceled)
+				if aborted || gone || status >= 400 || mathrand.Float64() < sample {
+					logRequest(logger, r, start, sw, status, aborted, gone, logIP)
 				}
 			}()
 			next.ServeHTTP(sw, r)
@@ -210,7 +213,7 @@ func AccessLog(logger *slog.Logger, sample float64, logIP string) Middleware {
 	}
 }
 
-func logRequest(logger *slog.Logger, r *http.Request, start time.Time, sw *statusWriter, status int, aborted bool, logIP string) {
+func logRequest(logger *slog.Logger, r *http.Request, start time.Time, sw *statusWriter, status int, aborted, gone bool, logIP string) {
 	var traceID, route string
 	if inf := infoFrom(r.Context()); inf != nil {
 		traceID, route = inf.traceID, inf.route
@@ -228,6 +231,9 @@ func logRequest(logger *slog.Logger, r *http.Request, start time.Time, sw *statu
 	}
 	if aborted {
 		attrs = append(attrs, slog.Bool("aborted", true))
+	}
+	if gone {
+		attrs = append(attrs, slog.Bool("client_gone", true))
 	}
 	if ip := FormatIP(ClientIP(r.Context()), logIP); ip != "" {
 		attrs = append(attrs, slog.String("ip", ip))

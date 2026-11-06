@@ -79,6 +79,11 @@ type Result struct {
 	Config   *store.Snapshot
 }
 
+// slowAbandon is how long a call must have waited for its abandon to say something of
+// Hydra: a browser closed at once stays at the info level, a proxy's timeout during a
+// Hydra that hangs does not (Q67).
+const slowAbandon = time.Second
+
 // maxRounds bounds the rounds of one request: a read, the calls (two to
 // Hydra and a webhook at most), a re-read, a replay.
 const maxRounds = 16
@@ -284,6 +289,9 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			case r.Sentry, r.Event == "hydra.request_failed", r.Event == "webhook.failed":
 				// The last two without Sentry: flow.error, of the same request, goes.
 				level = slog.LevelError
+			case r.Event == "hydra.request_abandoned" && r.Elapsed >= slowAbandon,
+				r.Event == "flow.rejected" && r.Detail == ReasonSkipSubject.String()+":"+checkWebhook:
+				level = slog.LevelWarn
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
 				level = slog.LevelWarn
 			}
@@ -317,11 +325,12 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 
 // requestFailed reports the calls of this request that Hydra failed
 // (hydra.request_failed): what an exploitant needs to understand an E1004 or an
-// E1007, which only name their code. Hydra unavailable, whatever the page; a refusal
-// when the page says so, a 409 of 2.1 being read again before it concludes. Not a
-// challenge unknown or expired, an expected answer that challenge.invalid reports; nor
-// a call that max_in_flight did not make. A call its client gave up on is another
-// event, hydra.request_abandoned, at the info level (Q64).
+// E1007, which only name their code. Hydra unavailable, whatever the page; any other
+// answer when the page says so, a 409 of 2.1 being read again before it concludes, a
+// DELETE of SKP-12 answered 404 (Q67). Not a challenge unknown or expired under another
+// page, an expected answer that challenge.invalid reports; nor a call that max_in_flight
+// did not make. A call whose client closed its connection is another event,
+// hydra.request_abandoned, at the info level, warn past slowAbandon (Q64, Q67).
 func requestFailed(a Answers, reports []Report) []Report {
 	failedPage := slices.ContainsFunc(reports, func(r Report) bool {
 		return r.Event == "flow.error" && (r.Detail == string(E1004) || r.Detail == string(E1007))
@@ -333,7 +342,7 @@ func requestFailed(a Answers, reports []Report) []Report {
 			op, _, _ := hydra.Failure(err)
 			out = append(out, Report{Event: "hydra.request_abandoned", Operation: op, Elapsed: hydra.Elapsed(err)})
 		case class == unavailable && !errors.Is(err, hydra.ErrOverloaded),
-			(class == refused || class == conflict) && failedPage:
+			class != unavailable && failedPage:
 			op, status, cause := hydra.Failure(err)
 			out = append(out, Report{Event: "hydra.request_failed", Operation: op, Status: status, Detail: cause})
 		}

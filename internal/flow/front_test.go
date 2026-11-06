@@ -910,6 +910,9 @@ func TestFinalAccept(t *testing.T) {
 				if p.Response.SignOut != "http://public.hydra.test/oauth2/sessions/logout" { // Q60
 					t.Errorf("the way out: %q", p.Response.SignOut)
 				}
+				if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "flow.rejected" && r.Detail == "skip_subject" }) { // Q67
+					t.Errorf("reports %+v", p.Reports)
+				}
 			}},
 		{name: "FIN-3, Hydra 401", ev: loop, stored: skip("bob"), says: hydraSays{RejectLogin: {err: err401}},
 			kind: ErrorPage, code: E1002, link: true, calls: []Op{RejectLogin}, write: finished},

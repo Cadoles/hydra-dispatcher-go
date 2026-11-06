@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -89,7 +90,11 @@ func (e *UnavailableError) Error() string {
 	if e.Status != 0 {
 		msg += fmt.Sprintf(": status %d", e.Status)
 	}
-	return msg + e.detail + e.server + ": " + e.err.Error()
+	msg += e.detail + e.server
+	if text := bounded(e.cause()); text != "" {
+		msg += ": " + text
+	}
+	return msg
 }
 
 func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailable }
@@ -113,20 +118,31 @@ func Failure(err error) (op string, status int, cause string) {
 			}
 			cause += text
 		}
-		if len(cause) > maxCause {
-			cause = strings.ToValidUTF8(cause[:maxCause], "") + "…"
-		}
-		return unavailable.Op, unavailable.Status, cause
+		return unavailable.Op, unavailable.Status, bounded(cause)
 	case errors.As(err, &request):
 		return request.Op, request.Status, ""
 	}
 	return "", 0, ""
 }
 
-// cause is what Failure keeps of the error of a call. An answer of 300 and up, read
-// whole, is named by its status alone: the text of its status line, which read and the
-// SDK repeat, is a server's. Go's libraries quote what they could not read, a line that
-// is no HTTP, a Location, a Content-Length or a date: that, and what follows, stays out.
+// bounded cuts a cause to maxCause, on a character boundary.
+func bounded(cause string) string {
+	if len(cause) > maxCause {
+		return strings.ToValidUTF8(cause[:maxCause], "") + "…"
+	}
+	return cause
+}
+
+// cited finds where a library starts citing what it could not read: a double quote, or
+// the name of an XML element, as the SDK's decoder gives it; not the '<' of
+// encoding/json, a single character.
+var cited = regexp.MustCompile(`"|<[^']`)
+
+// cause is what Failure and Error keep of the error of a call. An answer of 300 and up,
+// read whole, is named by its status alone: the text of its status line, which read and
+// the SDK repeat, is a server's. Go's libraries cite what they could not read, a line
+// that is no HTTP, a Location, a Content-Length, a date, an element: that, and what
+// follows, stays out (Q64, Q67).
 func (e *UnavailableError) cause() string {
 	if e.err == nil {
 		return ""
@@ -134,7 +150,10 @@ func (e *UnavailableError) cause() string {
 	if _, answered := errorBody(e.err); answered && e.Status >= 300 {
 		return strings.TrimSpace(fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status)))
 	}
-	text, _, _ := strings.Cut(e.err.Error(), `"`)
+	text := e.err.Error()
+	if at := cited.FindStringIndex(text); at != nil {
+		text = text[:at[0]]
+	}
 	return strings.TrimRight(text, " :")
 }
 

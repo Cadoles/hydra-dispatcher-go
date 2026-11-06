@@ -80,7 +80,7 @@ func (r *run) rejectLogin(f *Flow, reason Reason, body ory.RejectOAuth2Request, 
 	if err := d.err(); err != nil {
 		return r.hydraFailure(f, err)
 	}
-	return ok(d.RedirectTo).writing(f.Reduce()).report(Report{Event: "flow.rejected", Detail: d.Call.Reason.String()})
+	return ok(d.RedirectTo).writing(f.Reduce()).report(Report{Event: "flow.rejected", Detail: d.Call.detail()})
 }
 
 // expire rejects an expired flow with login_required (M9, ENT-8, EXP-2).

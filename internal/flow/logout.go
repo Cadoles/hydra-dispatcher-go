@@ -36,6 +36,8 @@ type Logout struct {
 	Accept     bool
 	Token      string
 	SameOrigin bool
+	// Subrequest is what another site's page loads for itself, no visit (LGO-19).
+	Subrequest bool
 }
 
 // LogoutNext is GET /logout/next (SUI), where the apps send the browser back.
@@ -320,10 +322,12 @@ func (r *run) logout(ev Logout) Outcome {
 	}
 	c := ev.Memory.Content
 	other := c != nil && !c.Lo && c.SID != req.GetSid()
-	if !req.GetRpInitiated() || other {
+	if !req.GetRpInitiated() || other || ev.Subrequest {
 		// LGO-6, LGO-7 (Q47): nothing cleared. A cookie of another session asks
 		// too, a client's id_token sufficing to Hydra to make a browser lose its
 		// cookie (HLO-8); a note stays after a logout finished, and says nothing.
+		// So does a subrequest of another site, which that cookie does not reach:
+		// no one answers the question there, and nothing leaves (LGO-19, Q65).
 		csrf := csrfValue(ev.Cookie, r.Env.Draw)
 		out := logoutPage(&LogoutScreen{State: LogoutConfirm, Challenge: ev.Challenge, CSRF: csrf, Client: req.Client, OtherSession: req.GetRpInitiated() && other})
 		out.Response.SetCSRF = csrf

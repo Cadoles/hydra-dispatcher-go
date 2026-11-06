@@ -1,11 +1,13 @@
 package httpx
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -233,25 +235,28 @@ func TestAccessLog(t *testing.T) {
 	}
 }
 
-// A client gone before the answer: what the handler answers, no one reads. The line is
-// written, sampled out or not, and says so (Q64).
+// A client gone before the handler ended: the line is written, sampled out or not, and
+// says so; aborted stays a panic's (Q64, Q67).
 func TestAccessLogClientGone(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ok", func(http.ResponseWriter, *http.Request) {})
 	mux.HandleFunc("GET /bad", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) })
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
+	past, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
 	for _, tt := range []struct {
 		path   string
 		ctx    context.Context
 		status float64
 		lines  int
-		abort  any
+		gone   any
 	}{
 		{"/ok", context.Background(), 200, 0, nil},
 		{"/bad", context.Background(), 502, 1, nil},
 		{"/ok", gone, 200, 1, true},
 		{"/bad", gone, 502, 1, true},
+		{"/bad", past, 502, 1, nil}, // a deadline is no client gone
 	} {
 		h, buf := stack(mux, 0, "none")
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.path, nil).WithContext(tt.ctx))
@@ -260,9 +265,43 @@ func TestAccessLogClientGone(t *testing.T) {
 			t.Errorf("%s: lines %v, want %d", tt.path, lines, tt.lines)
 			continue
 		}
-		if tt.lines == 1 && (lines[0]["status"] != tt.status || lines[0]["aborted"] != tt.abort) {
-			t.Errorf("%s: %v, want the status %v and aborted %v", tt.path, lines[0], tt.status, tt.abort)
+		if tt.lines == 1 && (lines[0]["status"] != tt.status || lines[0]["client_gone"] != tt.gone || lines[0]["aborted"] != nil) {
+			t.Errorf("%s: %v, want the status %v, client_gone %v, not aborted", tt.path, lines[0], tt.status, tt.gone)
 		}
+	}
+}
+
+// A half-close: the client closes its writing side and waits. net/http reads EOF and
+// cancels the request's context, yet that client reads the answer (Q67): client_gone
+// does not say no one read it.
+func TestAccessLogHalfClose(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /wait", func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	h, buf := stack(mux, 0, "none")
+	srv := httptest.NewServer(h)
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write([]byte("GET /wait HTTP/1.1\r\nHost: x\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil || !strings.Contains(line, "502") {
+		t.Errorf("the client read %q, %v", line, err)
+	}
+	_ = conn.Close()
+	srv.Close() // waits for the handler, hence for its log line
+	if lines := logLines(t, buf); len(lines) != 1 || lines[0]["client_gone"] != true || lines[0]["status"] != float64(502) {
+		t.Errorf("log lines = %v", lines)
 	}
 }
 

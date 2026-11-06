@@ -112,9 +112,15 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 	if body.Subject != f.Hydra.Subject {
 		// SKP-7: Hydra 2.1 would refuse the accept, 2.2 start a login again. The page
 		// gives the way out, as FIN-3: past a logout, Hydra says no skip, and the
-		// webhook's subject is no longer compared to anything (Q63).
-		return r.rejectLogin(f, ReasonSkipSubject, rejection(ReasonSkipSubject, "The subject authenticated is not the one of the Hydra session."),
+		// webhook's subject is no longer compared to anything (Q63). The cookie's
+		// subject being the session's (MEM-5), only the webhook changed it: its log
+		// line says so, an exploitant's to fix (Q67).
+		out := r.rejectLogin(f, ReasonSkipSubject, rejection(ReasonSkipSubject, "The subject authenticated is not the one of the Hydra session."),
 			func(string) Outcome { return otherSubject(s, f) })
+		if out.Call != nil {
+			out.Call.Check = checkWebhook
+		}
+		return out
 	}
 	ctx = withoutDispatcher(ctx)
 	marker := r.Env.Keys.SkipMarker(f.HydraSessionID, body.Subject, body.GetAcr(), body.Amr, f.Hydra.RequestURL)
@@ -340,6 +346,9 @@ func withoutDispatcher(ctx Object) Object {
 	}
 	return out
 }
+
+// checkWebhook is the Call.Check of SKP-7's reject.
+const checkWebhook = "webhook"
 
 // The members of a context that are the dispatcher's.
 const (

@@ -666,9 +666,10 @@ func TestLogoutConfirmation(t *testing.T) {
 	}
 }
 
-// LGO-18, Q62: no page answers a browser's preload, each of these GET able to act
+// LGO-18, Q62, Q66: no page answers a browser's preload, each of these GET able to act
 // without a click: SKP-12 delete a session, SKP-1 and SKC-1 accept, SUI-5 give the
-// verifier. The first read is not made, nor a cookie set; the visit goes on.
+// verifier. The first read is not made, nor a cookie set; the visit goes on. A HEAD with
+// the header is a preload: LGO-18 comes before LGO-17.
 func TestPagesPreloaded(t *testing.T) {
 	ref := strings.Repeat("a", 20)
 	for _, target := range []string{
@@ -680,17 +681,132 @@ func TestPagesPreloaded(t *testing.T) {
 		"/logout/next?ref=" + ref,
 	} {
 		w := newWorld(t)
-		resp := w.do(http.MethodGet, target, nil, "Sec-Purpose", "prefetch")
-		if resp.StatusCode != http.StatusServiceUnavailable || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
-			t.Errorf("%s: %d, cookies %v, calls %v", target, resp.StatusCode, resp.Cookies(), w.hydra.calls)
-		}
-		if resp.Header.Get("Cache-Control") != "no-store" {
-			t.Errorf("%s: Cache-Control %q", target, resp.Header.Get("Cache-Control"))
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			resp := w.do(method, target, nil, "Sec-Purpose", "prefetch")
+			if resp.StatusCode != http.StatusTooEarly || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
+				t.Errorf("%s %s: %d, cookies %v, calls %v", method, target, resp.StatusCode, resp.Cookies(), w.hydra.calls)
+			}
+			if resp.Header.Get("Cache-Control") != "no-store" {
+				t.Errorf("%s %s: Cache-Control %q", method, target, resp.Header.Get("Cache-Control"))
+			}
 		}
 		w.hydra.errs["get_consent"] = &hydra.RequestError{Op: "get_consent_request", Status: http.StatusNotFound}
-		if resp = w.do(http.MethodGet, target, nil); resp.StatusCode == http.StatusServiceUnavailable {
+		if resp := w.do(http.MethodGet, target, nil); resp.StatusCode == http.StatusTooEarly {
 			t.Errorf("%s, the visit: %d", target, resp.StatusCode)
 		}
+	}
+}
+
+// LGO-17, LGO-18, with what the pages would do of a visit: a preload or a HEAD after a
+// chain stopped deletes nothing (SKP-12), of a session remembered accepts nothing
+// (SKP-1, SKC-1); the visit does.
+func TestPagesActOnVisitsOnly(t *testing.T) {
+	sealed := func(w *world, m *flow.Remembered) string {
+		v, err := w.front.o.Remember.Seal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	noVisit := []struct {
+		name, method string
+		header       []string
+		status       int
+	}{
+		{"a preload", http.MethodGet, []string{"Sec-Purpose", "prefetch"}, http.StatusTooEarly},
+		{"a HEAD", http.MethodHead, nil, http.StatusOK},
+	}
+	t.Run("SKP-12", func(t *testing.T) {
+		w := newWorld(t)
+		w.hydra.skip = true
+		w.cookies["dispatcher_remember"] = sealed(w, &flow.Remembered{V: flow.RememberedFormat, SID: sessionID, Sub: "alice", Lo: true, IAT: time.Now().Unix()})
+		target := "/?login_challenge=" + hydraL2
+		for _, tc := range noVisit {
+			if resp := w.do(tc.method, target, nil, tc.header...); resp.StatusCode != tc.status || len(w.hydra.calls) != 0 {
+				t.Errorf("%s: %d, calls %v", tc.name, resp.StatusCode, w.hydra.calls)
+			}
+		}
+		if location(t, w.do(http.MethodGet, target, nil), http.StatusSeeOther); !slices.Contains(w.hydra.calls, "revoke_session") {
+			t.Errorf("the visit: calls %v", w.hydra.calls)
+		}
+	})
+	t.Run("SKP-1, SKC-1", func(t *testing.T) {
+		w := newWorld(t)
+		w.remembered(`{"email":"alice@example.org"}`)
+		w.hydra.skip, w.hydra.consentSkip, w.hydra.calls = true, true, nil
+		for _, target := range []string{"/?login_challenge=" + hydraL2, "/consent?consent_challenge=" + hydraC} {
+			for _, tc := range noVisit {
+				if resp := w.do(tc.method, target, nil, tc.header...); resp.StatusCode != tc.status || len(w.hydra.calls) != 0 {
+					t.Errorf("%s of %s: %d, calls %v", tc.name, target, resp.StatusCode, w.hydra.calls)
+				}
+			}
+		}
+		location(t, w.do(http.MethodGet, "/?login_challenge="+hydraL2, nil), http.StatusSeeOther)
+		location(t, w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil), http.StatusSeeOther)
+		if !slices.Equal(w.hydra.calls, []string{"get_login", "accept_login", "get_consent", "accept_consent"}) {
+			t.Errorf("the visits: calls %v", w.hydra.calls)
+		}
+	})
+}
+
+// LGO-18 stops the pages in GET: neither a form nor a static file, which a page
+// prerendered loads with the same header.
+func TestPreloadStopsOnlyThePages(t *testing.T) {
+	w := newWorld(t)
+	if resp := w.do(http.MethodGet, "/static/base.css", nil, "Sec-Purpose", "prefetch;prerender"); resp.StatusCode != http.StatusOK {
+		t.Errorf("a static file: %d", resp.StatusCode)
+	}
+	for _, target := range []string{"/", "/consent", "/logout"} {
+		if resp := w.do(http.MethodPost, target, url.Values{}, "Sec-Purpose", "prefetch"); resp.StatusCode == http.StatusTooEarly {
+			t.Errorf("POST %s: %d", target, resp.StatusCode)
+		}
+	}
+}
+
+// LGO-19, Q65: what another site's page loads for itself asks the question, which no one
+// answers there: nothing leaves. A visit from elsewhere leaves, as a subrequest of the
+// same site, which the memory cookie reaches (LGO-7).
+func TestLogoutSubrequest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		site  string
+		dest  string
+		asked bool
+	}{
+		{"an image of another site", "cross-site", "image", true},
+		{"an iframe of another site", "cross-site", "iframe", true},
+		{"a fetch of another site", "cross-site", "empty", true},
+		{"a script of another site", "cross-site", "script", true},
+		{"a link followed from another site", "cross-site", "document", false},
+		{"an image of the same site", "same-site", "image", false},
+		{"an iframe of the same origin", "same-origin", "iframe", false},
+		{"typed in", "none", "document", false},
+		{"another site, no destination", "cross-site", "", false},
+		{"a destination, no site", "", "image", false},
+		{"no metadata, HTTP", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			w.hydra.rpInitiated = true
+			var header []string
+			if tc.site != "" {
+				header = append(header, "Sec-Fetch-Site", tc.site)
+			}
+			if tc.dest != "" {
+				header = append(header, "Sec-Fetch-Dest", tc.dest)
+			}
+			resp := w.do(http.MethodGet, logoutPath, nil, header...)
+			if !tc.asked {
+				if u := location(t, resp, http.StatusSeeOther); u.String() != loggedOut || !slices.Contains(w.hydra.calls, "accept_logout") || w.note(t) == nil {
+					t.Errorf("it should leave: %s, calls %v", u, w.hydra.calls)
+				}
+				return
+			}
+			page := text(t, resp)
+			if resp.StatusCode != http.StatusOK || !strings.Contains(page, `name="logout_challenge"`) || !slices.Equal(w.hydra.calls, []string{"get_logout"}) || w.note(t) != nil {
+				t.Errorf("the question: %d, calls %v, note %+v", resp.StatusCode, w.hydra.calls, w.note(t))
+			}
+		})
 	}
 }
 
@@ -707,7 +823,7 @@ func TestLogoutPreloaded(t *testing.T) {
 		w := newWorld(t)
 		w.hydra.rpInitiated = true
 		resp := w.do(http.MethodGet, logoutPath, nil, header...)
-		if resp.StatusCode != http.StatusServiceUnavailable || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
+		if resp.StatusCode != http.StatusTooEarly || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
 			t.Errorf("%v: %d, cookies %v, calls %v", header, resp.StatusCode, resp.Cookies(), w.hydra.calls)
 		}
 		if resp.Header.Get("Cache-Control") != "no-store" {
@@ -871,13 +987,17 @@ func TestLogoutPages(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway || setCookie(resp, "dispatcher_remember") != nil {
 		t.Errorf("accept down: %d", resp.StatusCode)
 	}
-	// LGO-17: a HEAD, which the GET pattern covers: no call, no write, no cookie.
+	// LGO-17: a HEAD, which the GET pattern covers: no call, no write, no cookie, on
+	// each page in GET (Q66).
 	w = newWorld(t)
 	w.hydra.rpInitiated = true
-	for _, target := range []string{logoutPath, "/logout", "/logout/next?ref=" + strings.Repeat("a", 20), "/logout/next"} {
+	for _, target := range []string{
+		logoutPath, "/logout", "/logout/next?ref=" + strings.Repeat("a", 20), "/logout/next",
+		"/", "/?login_challenge=" + hydraL, "/?ref=" + strings.Repeat("a", 20), "/oauth2/auth?ref=" + strings.Repeat("a", 20), "/consent?consent_challenge=" + hydraC,
+	} {
 		resp := w.do(http.MethodHead, target, nil)
-		if resp.StatusCode != http.StatusOK || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
-			t.Errorf("HEAD %s: %d, cookies %v, calls %v", target, resp.StatusCode, resp.Cookies(), w.hydra.calls)
+		if resp.StatusCode != http.StatusOK || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 || resp.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("HEAD %s: %d, cookies %v, calls %v, Cache-Control %q", target, resp.StatusCode, resp.Cookies(), w.hydra.calls, resp.Header.Get("Cache-Control"))
 		}
 	}
 	// SUI-1, SUI-2.
