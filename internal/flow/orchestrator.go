@@ -67,7 +67,7 @@ type Orchestrator struct {
 	PropagateWithoutRecord string
 	// Log gets the reports of each request, nil drops them.
 	Log *slog.Logger
-	// Observers watch what each request decided.
+	// Observers watch what each request decided, once its lines are logged.
 	Observers []Observer
 	// Now is the clock, time.Now when nil.
 	Now func() time.Time
@@ -282,17 +282,6 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 	if _, ok := in.Event.(AppCall); ok {
 		surface = "emulated"
 	}
-	if len(o.Observers) > 0 {
-		after := in.Flow
-		if out.Write != nil {
-			after = out.Write
-		}
-		seen := Observation{Event: in.Event, Surface: surface, Before: in.Flow, After: after, Response: out.Response,
-			Reports: reports, Answers: in.Answers, Validations: in.Answers.validations(reports), Config: in.Env.Config, Now: o.now()}
-		for _, w := range o.Observers {
-			w.Observe(ctx, seen)
-		}
-	}
 	if o.Log != nil {
 		for _, r := range reports {
 			level := slog.LevelInfo
@@ -340,6 +329,17 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 				args = append(args, "result", r.Result)
 			}
 			o.Log.Log(ctx, level, r.Event, args...)
+		}
+	}
+	if len(o.Observers) > 0 {
+		after := in.Flow
+		if out.Write != nil {
+			after = out.Write
+		}
+		seen := Observation{Event: in.Event, Surface: surface, Before: in.Flow, After: after, Response: out.Response,
+			Reports: reports, Answers: in.Answers, Validations: in.Answers.validations(reports), Config: in.Env.Config, Now: o.now()}
+		for _, w := range o.Observers {
+			w.Observe(ctx, seen)
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}

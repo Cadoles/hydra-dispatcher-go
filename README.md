@@ -52,6 +52,12 @@ with the full IP. Its subjects are an HMAC by `secrets.audit_key`, or without it
 key derived from `secrets.challenge_key`, whose rotation then changes the pseudonyms;
 `observability.audit.pseudonymize_subject: false` writes them in clear.
 
+With `observability.sentry.dsn`, Sentry gets what demands an action: the pages E1000,
+E1004 to E1007, a panic, an error line of the log, at most
+`max_events_per_minute` by instance, grouped by code and operation. Never a subject,
+a claim, a challenge, a cookie or a query string; the info and warn lines of a request are
+its breadcrumbs, by name.
+
 `serve` exposes `/metrics` (Prometheus, OpenMetrics when asked for), in the memory
 of the instance, a scrape touching neither Redis nor the database, behind
 `security.metrics_authorized_hosts`; or on a port of its own with

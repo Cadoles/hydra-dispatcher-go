@@ -28,6 +28,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/webhook"
@@ -47,6 +48,24 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	sentryOptions := cfg.Observability.Sentry
+	release := sentryOptions.Release
+	if release == "" {
+		release = "hydra-dispatcher@" + version
+	}
+	stateBackend := "memory"
+	if cfg.State.RedisDSN != "" {
+		stateBackend = "redis"
+	}
+	tracker, err := sentrylog.New(sentrylog.Options{DSN: sentryOptions.DSN, Environment: sentryOptions.Environment, Release: release,
+		SampleRate: sentryOptions.SampleRate, TracesSampleRate: sentryOptions.TracesSampleRate, MaxEventsPerMinute: sentryOptions.MaxEventsPerMinute,
+		HydraMode: configuredHydraMode(cfg), StateBackend: stateBackend})
+	if err != nil {
+		return fmt.Errorf("observability.sentry.dsn: %w", err)
+	}
+	defer tracker.Flush()
+	logs.app = slog.New(tracker.Handler(logs.app.Handler()))
+	slog.SetDefault(logs.app)
 	logger := logs.app
 	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
 	// given by -config alone may listen where the probe does not look.
@@ -99,7 +118,7 @@ func serve(ctx context.Context, args []string) error {
 		live.Run(refreshCtx, store.RefreshEvery)
 	}()
 
-	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited})
+	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker})
 	if err != nil {
 		stop()
 		return err
@@ -163,6 +182,14 @@ func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metric
 		}
 	}()
 	return func() { <-done }, nil
+}
+
+// configuredHydraMode is the mode hydraSource chooses, for what is set before it.
+func configuredHydraMode(cfg *config.Config) string {
+	if cfg.Hydra.Version != "2.1" && len(cfg.Hydra.SystemSecrets) > 0 {
+		return "decrypt"
+	}
+	return "fallback"
 }
 
 // newAudit opens the audit log where observability.audit.output says: stdout beside the
@@ -308,6 +335,8 @@ type services struct {
 	// metrics is the catalogue of the instance, audit its audit log.
 	metrics *metrics.Metrics
 	audit   *audit.Log
+	// sentry is nil without a DSN.
+	sentry *sentrylog.Tracker
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -356,13 +385,17 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		stateBackend = "redis"
 	}
 	watch.SetBuild(version, stateBackend, hydraMode(source))
+	observers := []flow.Observer{watch, s.audit}
+	if s.sentry != nil {
+		observers = append(observers, s.sentry)
+	}
 	engine := &flow.Orchestrator{
 		Store:                  watch.States(s.states),
 		Config:                 s.config,
 		Source:                 source,
 		Hydra:                  hydraClient,
 		Webhooks:               watch.Webhooks(webhooks),
-		Observers:              []flow.Observer{watch, s.audit},
+		Observers:              observers,
 		BaseURL:                cfg.Server.BaseURL,
 		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),
 		Keys:                   keys,
@@ -428,6 +461,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		watch.HTTP,
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP),
 		httpx.Recover(logger),
+		s.sentry.Middleware,
 	), nil
 }
 

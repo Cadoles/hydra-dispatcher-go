@@ -1,15 +1,23 @@
 package front
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/getsentry/sentry-go"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
 )
 
 func scrapeOf(t *testing.T, m *metrics.Metrics) string {
@@ -65,5 +73,48 @@ func TestMetricsSkipUnavailable(t *testing.T) {
 	w.remembered(`{"blob":"` + base64.RawURLEncoding.EncodeToString(b) + `"}`)
 	if heard != 1 {
 		t.Errorf("heard %d", heard)
+	}
+}
+
+// fakeSentry keeps what Sentry would get.
+type fakeSentry struct {
+	mu     sync.Mutex
+	events []*sentry.Event
+}
+
+func (f *fakeSentry) Flush(time.Duration) bool              { return true }
+func (f *fakeSentry) FlushWithContext(context.Context) bool { return true }
+func (f *fakeSentry) Configure(sentry.ClientOptions)        {}
+func (f *fakeSentry) Close()                                {}
+func (f *fakeSentry) SendEvent(e *sentry.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, e)
+}
+
+// The pages through a real tracker: an event for E1004, by its operation, none for
+// E1001; the doc's test (Sentry, Tests).
+func TestSentryThroughThePages(t *testing.T) {
+	f := &fakeSentry{}
+	tracker, err := sentrylog.New(sentrylog.Options{DSN: "https://key@sentry.example/1", SampleRate: 1, Transport: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := newWorld(t)
+	w.o.Observers = []flow.Observer{tracker}
+	w.h = tracker.Middleware(w.h)
+	w.hydra.errs["get_login"] = &hydra.RequestError{Op: "get_login_request", Status: http.StatusNotFound, Body: []byte(`{"error":"not_found"}`)}
+	if resp := w.do(http.MethodGet, "/?login_challenge="+hydraL, nil); resp.StatusCode != http.StatusBadRequest || !strings.Contains(text(t, resp), "E1001") {
+		t.Fatalf("E1001: %d", resp.StatusCode)
+	}
+	if len(f.events) != 0 {
+		t.Fatalf("E1001 sent: %+v", f.events[0])
+	}
+	w.hydra.errs["get_login"] = &hydra.UnavailableError{Op: "get_login_request", Status: http.StatusBadGateway}
+	if resp := w.do(http.MethodGet, "/?login_challenge="+hydraL, nil); resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("E1004: %d", resp.StatusCode)
+	}
+	if len(f.events) != 1 || !slices.Equal(f.events[0].Fingerprint, []string{"E1004", "get_login_request"}) || f.events[0].Tags["surface"] != "front" {
+		t.Fatalf("events %+v", f.events)
 	}
 }
