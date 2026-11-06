@@ -31,6 +31,10 @@ import (
 const (
 	// hydraURLsEnv names the instances, comma-separated, each public|admin.
 	hydraURLsEnv = "HYDRA_URLS"
+	// shortURLsEnv names others of the same versions, at
+	// TTL_LOGIN_CONSENT_REQUEST=5s, for HLO-10; shortTTL is how long past it to wait.
+	shortURLsEnv = "HYDRA_SHORT_URLS"
+	shortTTL     = 5 * time.Second
 	// callbackHostEnv is the address the Hydras reach the test at, for the
 	// back-channel: the docker bridge's when unset.
 	callbackHostEnv = "HYDRA_CALLBACK_HOST"
@@ -56,11 +60,13 @@ type hydraInstance struct {
 // instances starts the back-channel and reads the instances: the tag without
 // HYDRA_URLS fails rather than passing untested, and each of the three versions
 // the dispatcher reads must be there.
-func instances(t *testing.T) []*hydraInstance {
+func instances(t *testing.T) []*hydraInstance { return instancesOf(t, hydraURLsEnv) }
+
+func instancesOf(t *testing.T, env string) []*hydraInstance {
 	t.Helper()
-	raw := os.Getenv(hydraURLsEnv)
+	raw := os.Getenv(env)
 	if raw == "" {
-		t.Fatal("the integration tag needs " + hydraURLsEnv + ": public|admin URLs, comma-separated, of a Hydra 2.1.2, 2.2.0 and 2.3.0 on Postgres (README)")
+		t.Fatal("the integration tag needs " + env + ": public|admin URLs, comma-separated, of a Hydra 2.1.2, 2.2.0 and 2.3.0 on Postgres (README)")
 	}
 	bc := newBackChannel(t)
 	httpc := &http.Client{
@@ -71,7 +77,7 @@ func instances(t *testing.T) []*hydraInstance {
 	for _, pair := range strings.Split(raw, ",") {
 		public, admin, ok := strings.Cut(strings.TrimSpace(pair), "|")
 		if !ok {
-			t.Fatalf("%s: %q is not public|admin", hydraURLsEnv, pair)
+			t.Fatalf("%s: %q is not public|admin", env, pair)
 		}
 		h := &hydraInstance{public: public, admin: admin, http: httpc, backChannel: bc}
 		var v struct {
@@ -85,7 +91,7 @@ func instances(t *testing.T) []*hydraInstance {
 	}
 	for _, want := range []string{"v2.1.2", "v2.2.0", "v2.3.0"} {
 		if !slices.ContainsFunc(out, func(h *hydraInstance) bool { return h.version == want }) {
-			t.Fatalf("%s: no %s", hydraURLsEnv, want)
+			t.Fatalf("%s: no %s", env, want)
 		}
 	}
 	return out
@@ -249,9 +255,10 @@ type playedConsent struct {
 }
 
 type playedLogout struct {
-	Subject     string `json:"subject"`
-	SID         string `json:"sid"`
-	RPInitiated bool   `json:"rp_initiated"`
+	Subject     string  `json:"subject"`
+	SID         string  `json:"sid"`
+	RPInitiated bool    `json:"rp_initiated"`
+	ExpiresAt   *string `json:"expires_at"`
 }
 
 func (h *hydraInstance) login(t *testing.T, l string) (int, playedLogin) {
@@ -561,7 +568,8 @@ func frontChannels(a answer) []string {
 }
 
 // TestHydraLogout plays the facts of HLO-2, HLO-6, HLO-8, HLO-9 and HLO-11 to
-// HLO-18 on each version, as a browser, each in its own browsers and client.
+// HLO-18 on each version, as a browser, each in its own browsers and client;
+// TestHydraLogoutExpiry those of HLO-10.
 func TestHydraLogout(t *testing.T) {
 	cases := []struct {
 		name string
@@ -573,12 +581,14 @@ func TestHydraLogout(t *testing.T) {
 		{"HLO-7 POST and HEAD on the public port", hlo7},
 		{"HLO-8 the hint of another subject", hlo8},
 		{"HLO-8 the verifier in another browser", hlo8OtherBrowser},
+		{"HLO-8 the verifier of a subject in the browser of another", hlo8OtherSubject},
 		{"HLO-9 a session not remembered", hlo9},
 		{"HLO-11 DELETE before the verifier", hlo11},
 		{"HLO-11 DELETE before the verifier of a client", hlo11Client},
 		{"HLO-11 a second verifier of a client", hlo11Second},
 		{"HLO-11 DELETE of a session not remembered", hlo11NotRemembered},
 		{"HLO-12 a session past remember_for", hlo12},
+		{"HLO-12 the cookie kept past remember_for", hlo12Kept},
 		{"HLO-12 the cookie lost", hlo12Lost},
 		{"HLO-13 the hint of a session deleted", hlo13},
 		{"HLO-14 prompt=login, then the former id_token", hlo14},
@@ -761,6 +771,41 @@ func hlo8OtherBrowser(t *testing.T, h *hydraInstance) {
 	}
 }
 
+// HLO-8, HLO-17: the subject of completeLogout is checked without rp_initiated:
+// alice's verifier in bob's browser leads to the post-logout, without effect, bob's
+// cookie and both sessions whole; in 2.1.2 it is spent, and alice's own ends on
+// urls.error.
+func hlo8OtherSubject(t *testing.T, h *hydraInstance) {
+	client := h.client(t, false, true)
+	alice, bob := h.browser(t), h.browser(t)
+	a := alice.signIn(client, "alice", true, 0)
+	bob.signIn(client, "bob", true, 0)
+	verifier := alice.logoutVerifier(nil)
+	wantDefault(t, bob.get(verifier))
+	if !bob.hasCookie() {
+		t.Error("bob's cookie is gone")
+	}
+	h.backChannel.quiet(t, client, 0)
+	if now := bob.skip(client); !now.Skip || now.Subject != "bob" {
+		t.Errorf("bob's session %+v", now)
+	}
+	if now := alice.skip(client); !now.Skip || now.SessionID != a.sid {
+		t.Errorf("alice's session %+v", now)
+	}
+	own := alice.get(verifier)
+	if h.version == "v2.1.2" {
+		wantError(t, own, "Not Found")
+		if !alice.skip(client).Skip {
+			t.Error("the spent verifier ended the session")
+		}
+		return
+	}
+	wantDefault(t, own)
+	if alice.skip(client).Skip {
+		t.Error("alice's verifier did not end her session")
+	}
+}
+
 // HLO-9: a session not remembered gives no logout request, with or without a
 // hint: neither the dispatcher nor the apps hear of it.
 func hlo9(t *testing.T, h *hydraInstance) {
@@ -856,9 +901,10 @@ func hlo11NotRemembered(t *testing.T, h *hydraInstance) {
 	h.backChannel.quiet(t, client, 0)
 }
 
-// HLO-12: past remember_for: without a hint, no logout request; with one, a
-// logout request with rp_initiated, the row staying in base. An id_token expired
-// is still a hint, the id_tokens of these instances living 3 s at most.
+// HLO-12: past remember_for, the browser drops the cookie: without a hint, no logout
+// request; with one, a logout request with rp_initiated, the row staying in base. An
+// id_token expired is still a hint, the id_tokens of these instances living 3 s at
+// most.
 func hlo12(t *testing.T, h *hydraInstance) {
 	client := h.client(t, false, false)
 	b := h.browser(t)
@@ -872,20 +918,51 @@ func hlo12(t *testing.T, h *hydraInstance) {
 		t.Fatalf("the id_token lives %s more: start the instance with TTL_ID_TOKEN=3s", ttl)
 	}
 	time.Sleep(idTokenTTL + time.Second)
-	if b.skip(client).Skip {
-		t.Error("Hydra says skip past remember_for")
+	if b.hasCookie() {
+		t.Error("the browser keeps the cookie past its Max-Age")
 	}
-	u, a := h.browser(t).askLogout(nil)
+	u, a := b.askLogout(nil)
 	if u != "" {
 		t.Error("a logout request without a hint")
 	}
 	wantDefault(t, a)
-	u, a = h.browser(t).askLogout(url.Values{"id_token_hint": {s.IDToken}})
+	u, a = b.askLogout(url.Values{"id_token_hint": {s.IDToken}})
 	if u == "" {
 		t.Fatalf("no logout request from an expired id_token: %d %s", a.status, a.location)
 	}
 	if r := h.logout(t, u); !r.RPInitiated || r.SID != s.sid {
 		t.Errorf("logout request %+v, want the session's, rp_initiated", r)
+	}
+}
+
+// HLO-12: Hydra does not judge remember_for itself, only the Max-Age of its cookie
+// does: the cookie kept past it still says skip and gives a logout request.
+func hlo12Kept(t *testing.T, h *hydraInstance) {
+	client := h.client(t, false, false)
+	b := h.browser(t)
+	s := b.signIn(client, "alice", true, 5)
+	if !b.hasCookie() {
+		t.Fatal("the sign-in lasted past remember_for")
+	}
+	u, err := url.Parse(h.public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []*http.Cookie
+	for _, c := range b.c.Jar.Cookies(u) {
+		kept = append(kept, &http.Cookie{Name: c.Name, Value: c.Value, Path: "/"})
+	}
+	time.Sleep(6 * time.Second)
+	if b.hasCookie() {
+		t.Error("the browser keeps the cookie past its Max-Age")
+	}
+	restored := h.browser(t)
+	restored.c.Jar.SetCookies(u, kept)
+	if now := restored.skip(client); !now.Skip || now.SessionID != s.sid {
+		t.Errorf("the cookie kept: %+v, want a skip of the session", now)
+	}
+	if q, a := restored.askLogout(nil); q == "" {
+		t.Errorf("the cookie kept, no logout request: %d %s", a.status, a.location)
 	}
 }
 
@@ -1224,5 +1301,63 @@ func hlo18Prompts(t *testing.T, h *hydraInstance) {
 	}
 	if !h.sessionInBase(t, s.IDToken) {
 		t.Error("the former session is gone from the base")
+	}
+}
+
+// HLO-10, on Postgres, each version at ttl.login_consent_request 5 s: an accept, then
+// the verifier past that time. 2.1.2 and 2.2.0 have no limit. 2.3.0 gives an expires_at
+// to a logout request without rp_initiated only: its verifier goes to urls.error, the
+// session whole, and GET logout then answers 410; with a hint, null, and no limit.
+func TestHydraLogoutExpiry(t *testing.T) {
+	for _, h := range instancesOf(t, shortURLsEnv) {
+		t.Run(h.version, func(t *testing.T) {
+			t.Parallel()
+			client := h.client(t, false, false)
+			b := h.browser(t)
+			b.signIn(client, "alice", true, 0)
+			u, a := b.askLogout(nil)
+			if u == "" {
+				t.Fatalf("no logout request: %d %s", a.status, a.location)
+			}
+			if r := h.logout(t, u); (r.ExpiresAt != nil) != (h.version == "v2.3.0") {
+				t.Errorf("expires_at %v", r.ExpiresAt)
+			}
+			verifier := h.accept(t, "logout", u, nil)
+			time.Sleep(shortTTL + time.Second)
+			if status, _ := h.call(t, http.MethodGet, "/admin/oauth2/auth/requests/logout", url.Values{"logout_challenge": {u}}, nil); status != http.StatusOK {
+				t.Errorf("past its time, GET logout: %d, want 200", status)
+			}
+			end := b.get(verifier)
+			if h.version == "v2.3.0" {
+				wantError(t, end, "request_unauthorized")
+				if !b.skip(client).Skip {
+					t.Error("the verifier past its time ended the session")
+				}
+			} else {
+				wantDefault(t, end)
+				if b.skip(client).Skip {
+					t.Error("the verifier did not end the session")
+				}
+			}
+			if status, _ := h.call(t, http.MethodGet, "/admin/oauth2/auth/requests/logout", url.Values{"logout_challenge": {u}}, nil); status != http.StatusGone {
+				t.Errorf("after the verifier, GET logout: %d, want 410", status)
+			}
+
+			c := h.browser(t)
+			s := c.signIn(client, "bob", true, 0)
+			u, a = c.askLogout(logoutHint(s.IDToken))
+			if u == "" {
+				t.Fatalf("no logout request: %d %s", a.status, a.location)
+			}
+			if r := h.logout(t, u); r.ExpiresAt != nil {
+				t.Errorf("with a hint, expires_at %v, want none", *r.ExpiresAt)
+			}
+			verifier = h.accept(t, "logout", u, nil)
+			time.Sleep(shortTTL + time.Second)
+			wantClientReturn(t, c.get(verifier))
+			if c.skip(client).Skip {
+				t.Error("the verifier of a client past that time did not end the session")
+			}
+		})
 	}
 }

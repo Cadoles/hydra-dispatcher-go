@@ -121,9 +121,10 @@ Hydra's logout, which no admin answer shows: the verifier, the back-channel, the
 session cookie (the HLO lines of the transitions table). It needs a Hydra 2.1.2,
 2.2.0 and 2.3.0 on Postgres, on ports of their own, never the stack's, given by
 `HYDRA_URLS`, comma-separated, each `public|admin`, with
-`urls.post_logout_redirect` and the short `id_token` lifetime below;
+`urls.post_logout_redirect` and the short `id_token` lifetime below; and three more,
+at the short request lifetime below, given by `HYDRA_SHORT_URLS`, for HLO-10.
 `HYDRA_CALLBACK_HOST` is where they reach the test for the back-channel, the docker
-bridge by default. The tag without `HYDRA_URLS` fails. The CI does not run it: its
+bridge by default. The tag without those two fails. The CI does not run it: its
 services cannot be given Hydra's command, nor migrate first:
 
 ```sh
@@ -131,17 +132,20 @@ docker run -d --rm --name hydra-pg -e POSTGRES_PASSWORD=hydra postgres:17-alpine
 PG=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' hydra-pg)
 port=56444
 for v in 2.1.2 2.2.0 2.3.0; do
-  db=h$(echo $v | tr -d .)
-  docker exec hydra-pg psql -U postgres -c "create database $db"
-  dsn="postgres://postgres:hydra@$PG:5432/$db?sslmode=disable"
-  docker run --rm -e DSN="$dsn" oryd/hydra:v$v migrate sql -e --yes
-  docker run -d --rm --name hydra-$db -p 127.0.0.1:$port:4444 -p 127.0.0.1:$((port+1)):4445 -e DSN="$dsn" \
-    -e SECRETS_SYSTEM=youReallyNeedToChangeThis -e URLS_SELF_ISSUER=http://127.0.0.1:$port \
-    -e URLS_LOGIN=http://login.test/login -e URLS_CONSENT=http://login.test/consent -e URLS_LOGOUT=http://login.test/logout \
-    -e URLS_POST_LOGOUT_REDIRECT=http://post.test/default -e TTL_ID_TOKEN=3s oryd/hydra:v$v serve all --dev
-  port=$((port+2))
+  for ttl in TTL_ID_TOKEN=3s TTL_LOGIN_CONSENT_REQUEST=5s; do
+    db=h$(echo $v | tr -d .)$port
+    docker exec hydra-pg psql -U postgres -c "create database $db"
+    dsn="postgres://postgres:hydra@$PG:5432/$db?sslmode=disable"
+    docker run --rm -e DSN="$dsn" oryd/hydra:v$v migrate sql -e --yes
+    docker run -d --rm --name hydra-$db -p 127.0.0.1:$port:4444 -p 127.0.0.1:$((port+1)):4445 -e DSN="$dsn" \
+      -e SECRETS_SYSTEM=youReallyNeedToChangeThis -e URLS_SELF_ISSUER=http://127.0.0.1:$port \
+      -e URLS_LOGIN=http://login.test/login -e URLS_CONSENT=http://login.test/consent -e URLS_LOGOUT=http://login.test/logout \
+      -e URLS_POST_LOGOUT_REDIRECT=http://post.test/default -e $ttl oryd/hydra:v$v serve all --dev
+    port=$((port+2))
+  done
 done
-HYDRA_URLS='http://127.0.0.1:56444|http://127.0.0.1:56445,http://127.0.0.1:56446|http://127.0.0.1:56447,http://127.0.0.1:56448|http://127.0.0.1:56449' \
+HYDRA_URLS='http://127.0.0.1:56444|http://127.0.0.1:56445,http://127.0.0.1:56448|http://127.0.0.1:56449,http://127.0.0.1:56452|http://127.0.0.1:56453' \
+HYDRA_SHORT_URLS='http://127.0.0.1:56446|http://127.0.0.1:56447,http://127.0.0.1:56450|http://127.0.0.1:56451,http://127.0.0.1:56454|http://127.0.0.1:56455' \
   go test -race -tags integration ./internal/hydra/...
 ```
 
