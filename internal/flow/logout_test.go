@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -174,6 +175,8 @@ func TestLogoutPageErrors(t *testing.T) {
 		{name: "LGO-10 no token", ev: Logout{Challenge: logoutU, Post: true, Accept: true, Cookie: cookie, SameOrigin: true}, code: E1008},
 		{name: "LGO-10 another token", ev: confirm(strings.Repeat("0", 64)), code: E1008},
 		{name: "LGO-10 no cookie", ev: Logout{Challenge: logoutU, Post: true, Accept: true, Token: cookie, SameOrigin: true}, code: E1008},
+		{name: "LGO-9 before LGO-1: the origin first", ev: Logout{Challenge: "a/b", Post: true, Accept: true, Token: cookie, Cookie: cookie}, code: E1008},
+		{name: "LGO-10 before LGO-1: then the token", ev: Logout{Challenge: "a/b", Post: true, Accept: true, Token: "other", Cookie: cookie, SameOrigin: true}, code: E1008},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := logoutWorld(t)
@@ -208,11 +211,19 @@ func TestLogoutPageErrors(t *testing.T) {
 			}
 		})
 	}
-	// LGO-5, just above the margin: the logout goes on.
+	// LGO-5, just above the margin: the logout goes on. Only a logout request without
+	// rp_initiated has an expires_at (HLO-10).
 	w := logoutWorld(t)
-	w.demand(logoutU, true, soon(61*time.Second))
-	if r := w.handle(Logout{Challenge: logoutU}); r.Response.Kind != Redirect {
+	w.demand(logoutU, false, soon(61*time.Second))
+	if r := w.handle(confirm(cookie)); r.Response.Kind != Redirect {
 		t.Errorf("61 s left: %+v", r.Response)
+	}
+	// LGO-5 does not stop a refusal: it costs nothing, and the page says the truth.
+	w = logoutWorld(t)
+	w.demand(logoutU, false, soon(-time.Second))
+	r := w.handle(Logout{Challenge: logoutU, Post: true, Token: cookie, Cookie: cookie, SameOrigin: true})
+	if r.Response.Kind != LogoutPage || r.Response.Logout.State != LogoutDeclined || !slices.Contains(w.hydra.calls, "reject_logout") {
+		t.Errorf("a refusal past expires_at: %+v, calls %v", r.Response, w.hydra.calls)
 	}
 }
 
@@ -361,8 +372,14 @@ func TestLogoutForm(t *testing.T) {
 			}
 		})
 	}
-	// LGO-16: the store unreadable on the way of a refusal.
+	// LGO-12: the page of a client's demand (LGO-7) keeps its client.
 	w := logoutWorld(t)
+	w.demand(logoutU, true)
+	if r := w.handle(refuse); r.Response.Logout == nil || r.Response.Logout.Client == nil {
+		t.Errorf("LGO-12, no client: %+v", r.Response)
+	}
+	// LGO-16: the store unreadable on the way of a refusal.
+	w = logoutWorld(t)
 	w.demand(logoutU, false)
 	w.store.getErr = 1
 	if r := w.handle(refuse); r.Response.Code != E1000 || !has(r, "state.error") {
@@ -556,8 +573,8 @@ func TestLogoutStart(t *testing.T) {
 	t.Run("DEP-2 TTL up to expires_at - 60 s", func(t *testing.T) {
 		w := logoutWorld(t)
 		at := testNow.Add(10 * time.Minute)
-		w.demand(logoutU, true, func(r *ory.OAuth2LogoutRequest) { r.ExpiresAt, r.RequestedAt = &at, &testNow })
-		w.handle(Logout{Challenge: logoutU})
+		w.demand(logoutU, false, func(r *ory.OAuth2LogoutRequest) { r.ExpiresAt, r.RequestedAt = &at, &testNow })
+		w.handle(Logout{Challenge: logoutU, Post: true, Accept: true, Token: cookie, Cookie: cookie, SameOrigin: true})
 		if got := w.store.ttls; len(got) != 1 || got[0] != 9*time.Minute {
 			t.Errorf("TTL %v, want 9 min (Q52)", got)
 		}
@@ -624,6 +641,9 @@ func TestLogoutStart(t *testing.T) {
 			if got.Cur != tc.want || got.U != logoutU2 || got.RT != verifierOf(logoutU2) || !got.RP || got.Client == nil || !slices.Equal(got.Apps, rec.Apps) {
 				t.Errorf("record %+v, want cur %d", got, tc.want)
 			}
+			if n := r.Response.Remember; n == nil || !n.Lo {
+				t.Errorf("WRT-4, no note: %+v", n)
+			}
 			if !has(r, "logout.started", func(x Report) bool { return x.Again && x.Apps == 3 }) {
 				t.Errorf("Q58: %+v", r.Reports)
 			}
@@ -658,22 +678,30 @@ func TestLogoutStart(t *testing.T) {
 			t.Errorf("apps %v", got.Apps)
 		}
 	})
-	t.Run("DEP-7 ea - 60 s reached between the read and the write", func(t *testing.T) {
+	t.Run("DEP-7 ea - 60 s reached during the accept", func(t *testing.T) {
 		for _, tc := range []struct {
 			name   string
 			record bool
-		}{{"absent", false}, {"present", true}} {
+			after  time.Duration
+		}{
+			{"absent, at ea - 60 s", false, 9 * time.Minute},
+			{"absent, a second past it: not LGO-5, the accept is made", false, 9*time.Minute + time.Second},
+			{"present, a second past it", true, 9*time.Minute + time.Second},
+		} {
 			w := logoutWorld(t)
 			at := testNow.Add(10 * time.Minute)
-			w.demand(logoutU2, true, func(r *ory.OAuth2LogoutRequest) { r.ExpiresAt = &at })
+			w.demand(logoutU2, false, func(r *ory.OAuth2LogoutRequest) { r.ExpiresAt = &at })
 			if tc.record {
 				w.putRecord(w.chain(0))
 			}
 			puts := w.store.puts
-			w.hydra.before["accept_logout"] = func() { w.now = testNow.Add(9 * time.Minute) }
-			r := w.handle(Logout{Challenge: logoutU2})
+			w.hydra.before["accept_logout"] = func() { w.now = testNow.Add(tc.after) }
+			r := w.handle(Logout{Challenge: logoutU2, Post: true, Accept: true, Token: cookie, Cookie: cookie, SameOrigin: true})
 			if r.Response.Code != E1002 || r.Response.Link != "" || r.Response.Remember == nil || w.store.puts != puts {
 				t.Errorf("%s: answer %+v, puts %d", tc.name, r.Response, w.store.puts)
+			}
+			if has(r, "challenge.invalid") || !slices.Contains(w.hydra.calls, "accept_logout") {
+				t.Errorf("%s: a challenge past its life: %+v, calls %v", tc.name, r.Reports, w.hydra.calls)
 			}
 			if tc.record && w.record().U != logoutU {
 				t.Errorf("%s: written: %+v", tc.name, w.record())
@@ -810,6 +838,38 @@ func TestLogoutStartStore(t *testing.T) {
 		r := w.handle(Logout{Challenge: logoutU2})
 		dep6(t, w, r, verifierOf(logoutU2), 1)
 	})
+	t.Run("DEP-6 on DEP-4: an error for the apps that remain only", func(t *testing.T) {
+		w := logoutWorld(t)
+		w.putRecord(w.chain(2))
+		w.demand(logoutU2, true)
+		w.store.hook = func(int, string, []byte, uint64) (error, bool) { return state.ErrClosed, true }
+		r := w.handle(Logout{Challenge: logoutU2})
+		dep6(t, w, r, verifierOf(logoutU2), 1)
+		if !has(r, "logout.propagated", func(x Report) bool { return x.App == "oidc" && x.Result == "error" }) {
+			t.Errorf("reports %+v", r.Reports)
+		}
+		if !has(r, "logout.started", func(x Report) bool { return x.Apps == 3 && x.Again }) {
+			t.Errorf("the chain's size: %+v", r.Reports)
+		}
+	})
+	t.Run("DEP-5 the record gone at the conflict: DEP-2", func(t *testing.T) {
+		w := logoutWorld(t)
+		w.putRecord(w.chain(1))
+		w.demand(logoutU2, true)
+		w.store.hook = func(n int, k string, _ []byte, _ uint64) (error, bool) {
+			if n == 1 {
+				if err := w.store.StateStore.Delete(context.Background(), k); err != nil {
+					t.Fatal(err)
+				}
+				return state.ErrConflict, true
+			}
+			return nil, false
+		}
+		r := w.handle(Logout{Challenge: logoutU2})
+		if rec := w.record(); rec == nil || rec.Cur != 0 || r.Response.URL != appURL(rec.Apps[0], logoutRef(), 0) {
+			t.Errorf("answer %+v, record %+v", r.Response, rec)
+		}
+	})
 	t.Run("DEP-6 on DEP-3 and SUI-4", func(t *testing.T) {
 		w := logoutWorld(t, func(apps []store.App) { apps[0].LogoutURL = "" })
 		w.putRecord(w.chain(0))
@@ -818,6 +878,17 @@ func TestLogoutStartStore(t *testing.T) {
 		r := w.handle(Logout{Challenge: logoutU, Post: true, Accept: true, Token: cookie, Cookie: cookie, SameOrigin: true})
 		if r.Response.URL != verifierOf(logoutU) || r.Response.Remember == nil {
 			t.Errorf("answer %+v", r.Response)
+		}
+	})
+	t.Run("DEP-6 on DEP-3 and SUI-4: an error for the apps that remain only", func(t *testing.T) {
+		w := logoutWorld(t, func(apps []store.App) { apps[1].LogoutURL = "" })
+		w.putRecord(w.chain(1))
+		w.demand(logoutU, false)
+		w.store.hook = func(int, string, []byte, uint64) (error, bool) { return state.ErrClosed, true }
+		r := w.handle(Logout{Challenge: logoutU, Post: true, Accept: true, Token: cookie, Cookie: cookie, SameOrigin: true})
+		dep6(t, w, r, verifierOf(logoutU), 2)
+		if has(r, "logout.propagated", func(x Report) bool { return x.App == "sql" && x.Result == "error" }) {
+			t.Errorf("an error for an app past: %+v", r.Reports)
 		}
 	})
 	t.Run("SUI-3 on DEP-3: its answer stands, with the note", func(t *testing.T) {
@@ -1009,6 +1080,12 @@ func TestLogoutEmulated(t *testing.T) {
 			t.Errorf("answer %+v, want 404 %s", r.Response, missingSession)
 		}
 	}
+	t.Run("LEM-2 a challenge in upper case: its shape passes, no chain has that ref", func(t *testing.T) {
+		w := logoutWorld(t)
+		w.putRecord(w.chain(0))
+		c := strings.ToUpper(testKeys.LogoutChallenge(logoutRef(), 0, "sql"))
+		missing(t, w.handle(AppCall{Op: AppGetLogout, Challenge: c, Caller: callerOf("sql")}))
+	})
 	t.Run("LEM-2 absent", func(t *testing.T) {
 		w := logoutWorld(t)
 		for _, op := range []AppOp{AppGetLogout, AppAcceptLogout, AppRejectLogout} {
@@ -1557,6 +1634,15 @@ func TestLoginAfterLogoutNote(t *testing.T) {
 			t.Errorf("answer %+v", r.Response)
 		}
 	})
+	t.Run("MEM-11 before MEM-3: a note of another session past its exp", func(t *testing.T) {
+		w := newWorld(t)
+		skip(w, "this", authURL)
+		past := Memory{Content: &Remembered{V: 1, SID: "another", Sub: "alice", Lo: true, Exp: testNow.Add(-time.Hour).Unix()}}
+		r := w.handle(Entry{LoginChallenge: hydraL, Memory: past})
+		if !has(r, "skip.ignored", func(x Report) bool { return x.Reason == SkipLogout }) {
+			t.Errorf("reports %+v", r.Reports)
+		}
+	})
 	t.Run("no skip: a note changes nothing", func(t *testing.T) {
 		w := newWorld(t)
 		w.hydra.login.SessionId = ory.PtrString("the-session")
@@ -1633,6 +1719,20 @@ func TestConsentAfterLogout(t *testing.T) {
 		f := w.stored()
 		if !f.Done || f.ConsentRedirect != hydraDone || f.ConsentAt == 0 {
 			t.Errorf("flow %+v", f)
+		}
+	})
+	t.Run("CST-24 not a flow without a sid: nothing was deleted since it began", func(t *testing.T) {
+		w := newWorld(t)
+		w.hydra.consentSkip = true
+		w.hydra.login.SessionId = ory.PtrString("")
+		w.handle(Entry{LoginChallenge: hydraL})
+		step := w.handle(Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+		w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+		if r := w.handle(Loop{Ref: lref, Cookie: w.cookie}); r.Response.URL != verifierURL {
+			t.Fatalf("final accept: %+v", r.Response)
+		}
+		if r := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie}); slices.Contains(w.hydra.calls, "reject_consent") || has(r, "flow.rejected") {
+			t.Errorf("rejected: %+v, calls %v", r.Response, w.hydra.calls)
 		}
 	})
 	t.Run("CST-24 before the cookie", func(t *testing.T) {
@@ -1714,4 +1814,99 @@ func TestRememberApps(t *testing.T) {
 func loginSessionID(t *testing.T) string {
 	t.Helper()
 	return loginRequest(t).GetSessionId()
+}
+
+// What the log says of a failed call (hydra.request_failed, Journalisation): an
+// E1004 or an E1007 only name their code.
+func TestRequestFailed(t *testing.T) {
+	gaveUp := fmt.Errorf("get_logout_request: %w", context.Canceled)
+	saturated := fmt.Errorf("get_logout_request: %w", hydra.ErrOverloaded)
+	down := &hydra.UnavailableError{Op: "get_logout_request", Status: 500}
+	for _, tc := range []struct {
+		name   string
+		err    error
+		code   Code
+		op     string
+		status int
+		sentry bool
+	}{
+		{"Hydra down: the operation and the status", down, E1004, "get_logout_request", 500, true},
+		{"a refusal, on the page: the operation and the status", &hydra.RequestError{Op: "get_logout_request", Status: 403}, E1007, "get_logout_request", 403, true},
+		{"unknown: an expected answer", &hydra.RequestError{Op: "get_logout_request", Status: 404}, E1001, "", 0, false},
+		{"expired: an expected answer", &hydra.RequestError{Op: "get_logout_request", Status: 401}, E1002, "", 0, false},
+		{"the call not made", saturated, E1004, "", 0, true},
+		{"the browser gave up: neither event, nor Sentry", gaveUp, E1004, "", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := logoutWorld(t)
+			w.demand(logoutU, false)
+			w.hydra.errs["get_logout"] = tc.err
+			r := w.handle(Logout{Challenge: logoutU})
+			if r.Response.Code != tc.code {
+				t.Errorf("answer %+v, want %s", r.Response, tc.code)
+			}
+			got := has(r, "hydra.request_failed", func(x Report) bool { return x.Operation == tc.op && x.Status == tc.status })
+			if got != (tc.op != "") {
+				t.Errorf("hydra.request_failed %v, want %v: %+v", got, tc.op != "", r.Reports)
+			}
+			if tc.op == "" && has(r, "hydra.request_failed") {
+				t.Errorf("hydra.request_failed: %+v", r.Reports)
+			}
+			if s := slices.ContainsFunc(r.Reports, func(x Report) bool { return x.Sentry }); s != tc.sentry {
+				t.Errorf("Sentry %v, want %v: %+v", s, tc.sentry, r.Reports)
+			}
+			if has(r, "hydra.request_failed", func(x Report) bool { return x.Sentry }) {
+				t.Errorf("flow.error goes to Sentry, once: %+v", r.Reports)
+			}
+			if logs := w.logs.String(); tc.op != "" && (!strings.Contains(logs, `"level":"ERROR","msg":"hydra.request_failed"`) ||
+				!strings.Contains(logs, fmt.Sprintf(`"operation":%q,"status":%d`, tc.op, tc.status))) {
+				t.Errorf("no line at the error level, with its operation and status:\n%s", logs)
+			}
+		})
+	}
+	t.Run("a 409 read again, the flow gone on: no failure", func(t *testing.T) {
+		a := Answers{Accept: &Done{Err: &hydra.RequestError{Op: "accept_login", Status: 409}}}
+		if got := requestFailed(a, []Report{{Event: "hydra.login_accepted"}}); len(got) != 0 {
+			t.Errorf("reports %+v", got)
+		}
+		if got := requestFailed(a, []Report{{Event: "flow.error", Detail: string(E1007)}}); len(got) != 1 || got[0].Operation != "accept_login" {
+			t.Errorf("reports %+v", got)
+		}
+	})
+	t.Run("the calls of each kind", func(t *testing.T) {
+		err := &hydra.UnavailableError{Op: "op", Status: 502}
+		a := Answers{
+			Login: &LoginRead{Err: err}, Consent: &ConsentRead{Err: err}, Logout: &LogoutRead{Err: err},
+			Accept: &Done{Err: err}, Reject: &Done{Err: err}, ConsentAccept: &Done{Err: err}, ConsentReject: &Done{Err: err},
+			LogoutAccept: &Done{Err: err}, LogoutReject: &Done{Err: err}, Revoke: &Done{Err: err},
+		}
+		if got := requestFailed(a, nil); len(got) != 10 {
+			t.Errorf("%d reports, want one per call: %+v", len(got), got)
+		}
+	})
+	t.Run("the DELETE of SKP-12", func(t *testing.T) {
+		w := newWorld(t)
+		w.hydra.login.Skip, w.hydra.login.Subject, w.hydra.login.SessionId = true, "alice", ory.PtrString("s")
+		w.hydra.errs["revoke_session"] = &hydra.UnavailableError{Op: "revoke_login_session", Status: 500}
+		r := w.handle(Entry{LoginChallenge: hydraL, Memory: Memory{Content: &Remembered{V: 1, SID: "s", Sub: "alice", Lo: true}}})
+		if r.Response.Code != E1004 || !has(r, "hydra.request_failed", func(x Report) bool { return x.Operation == "revoke_login_session" }) {
+			t.Errorf("answer %+v, reports %+v", r.Response, r.Reports)
+		}
+	})
+}
+
+// FIN-3, Q60: the way out of page E1003.
+func TestSignOutURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"http://public.hydra.test/oauth2/auth?client_id=c&state=s#x": "http://public.hydra.test/oauth2/sessions/logout",
+		"https://sso.example/hydra/oauth2/auth?client_id=c":          "https://sso.example/hydra/oauth2/sessions/logout",
+		"/oauth2/auth?client_id=c":                                   "",
+		"http://public.hydra.test/elsewhere?client_id=c":             "",
+		"http://[bad/oauth2/auth":                                    "",
+		"":                                                           "",
+	} {
+		if got := signOutURL(raw); got != want {
+			t.Errorf("%q: %q, want %q", raw, got, want)
+		}
+	}
 }

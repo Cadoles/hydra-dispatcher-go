@@ -795,3 +795,65 @@ func TestTLS12Suites(t *testing.T) {
 		srv.Close()
 	}
 }
+
+// What the log says of a failed call: never a server's free text, which serverCause
+// only masks of the request's own query values.
+func TestFailure(t *testing.T) {
+	const challenge, sid, email = "secret-challenge", "secret-sid", "alice@example.com"
+	for _, tt := range []struct {
+		name    string
+		handler http.HandlerFunc
+		status  int
+		cause   string
+	}{
+		{"a 500, its document quoting a sid and a subject", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"server_error","error_description":"failed for ` + sid + ` ` + email + `"}`))
+		}, 500, "500 Internal Server Error"},
+		{"a 404 from elsewhere", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(email))
+		}, 404, "without Hydra's error document: 404 Not Found"},
+		{"a 200 cut short", func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"subject":"` + email + `"`))
+		}, 200, "unexpected end of JSON input"},
+		{"a redirect quoting the challenge", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://elsewhere.invalid/?c="+challenge, http.StatusFound)
+		}, 302, "302 Found"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(tt.handler)
+			defer srv.Close()
+			c := newTestClient(t, srv.URL, 4, time.Second)
+			_, err := c.LogoutRequest(context.Background(), challenge)
+			op, status, cause := Failure(err)
+			if op != "get_logout_request" || status != tt.status || cause != tt.cause {
+				t.Errorf("Failure: %q %d %q, want the status %d and the cause %q", op, status, cause, tt.status, tt.cause)
+			}
+			for _, secret := range []string{challenge, sid, email, srv.URL} {
+				if strings.Contains(cause, secret) {
+					t.Errorf("%q in the cause %q", secret, cause)
+				}
+			}
+		})
+	}
+	t.Run("no answer", func(t *testing.T) {
+		c := newTestClient(t, "http://127.0.0.1:1", 4, time.Second)
+		err := c.RevokeLoginSession(context.Background(), sid)
+		op, status, cause := Failure(err)
+		if op != "revoke_login_session" || status != 0 || !strings.Contains(cause, "connection refused") || strings.Contains(cause, sid) {
+			t.Errorf("Failure: %q %d %q", op, status, cause)
+		}
+	})
+	t.Run("a refusal", func(t *testing.T) {
+		if op, status, cause := Failure(&RequestError{Op: "accept_login", Status: 409}); op != "accept_login" || status != 409 || cause != "" {
+			t.Errorf("Failure: %q %d %q", op, status, cause)
+		}
+	})
+	t.Run("not a call", func(t *testing.T) {
+		if op, status, cause := Failure(errors.New(email)); op != "" || status != 0 || cause != "" {
+			t.Errorf("Failure: %q %d %q", op, status, cause)
+		}
+	})
+}

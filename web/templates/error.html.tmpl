@@ -2,6 +2,6 @@
 {{define "content"}}
 <h1>{{.T "error.title"}}</h1>
 <p role="alert">{{.T .Error.MessageKey}}</p>
-{{if .Error.Link}}<p><a href="{{.Error.Link}}">{{.T "error.back"}}</a></p>{{end}}
+{{if .Error.Link}}<p><a href="{{.Error.Link}}">{{.T "error.back"}}</a></p>{{end}}{{if .Error.SignOut}}<p><a href="{{.Error.SignOut}}">{{.T "error.sign_out"}}</a></p>{{end}}
 <p class="trace">{{.T "error.trace" .Error.TraceID}} · {{.Error.Code}}</p>
 {{end}}

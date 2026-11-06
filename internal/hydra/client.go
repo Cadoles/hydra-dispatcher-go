@@ -77,6 +77,8 @@ type UnavailableError struct {
 	// Status is the status of the answer, 0 when none came.
 	Status int
 	detail string
+	// server is the error document of a 5xx (serverCause), a server's free text.
+	server string
 	err    error
 }
 
@@ -85,12 +87,36 @@ func (e *UnavailableError) Error() string {
 	if e.Status != 0 {
 		msg += fmt.Sprintf(": status %d", e.Status)
 	}
-	return msg + e.detail + ": " + e.err.Error()
+	return msg + e.detail + e.server + ": " + e.err.Error()
 }
 
 func (e *UnavailableError) Is(target error) bool { return target == ErrUnavailable }
 
 func (e *UnavailableError) Unwrap() error { return e.err }
+
+// Failure is what the log says of a failed call (hydra.request_failed): its
+// operation, the status of the answer, 0 when none came, and the cause. Not the error
+// document of a 5xx: serverCause only masks the values of the request's query, and the
+// free text of a server or a gateway may quote a sid or a subject, which the log never
+// holds (Journalisation).
+func Failure(err error) (op string, status int, cause string) {
+	var unavailable *UnavailableError
+	var request *RequestError
+	switch {
+	case errors.As(err, &unavailable):
+		cause = strings.TrimSpace(unavailable.detail)
+		if unavailable.err != nil {
+			if cause != "" {
+				cause += ": "
+			}
+			cause += unavailable.err.Error()
+		}
+		return unavailable.Op, unavailable.Status, cause
+	case errors.As(err, &request):
+		return request.Op, request.Status, ""
+	}
+	return "", 0, ""
+}
 
 // RequestError is a 4xx answer: an unknown challenge (404), an expired one
 // (401, from Hydra 2.2 on), a refused body (400), or, from Hydra 2.1 only, a
@@ -270,7 +296,7 @@ func classify(op string, resp *http.Response, err error) error {
 	case !read: // the body of any other answer is read whole first
 		unavailable.detail = " while reading the body"
 	case resp.StatusCode >= 500:
-		unavailable.detail = serverCause(resp, body)
+		unavailable.server = serverCause(resp, body)
 	case resp.StatusCode < 400: // a redirect
 	case !hydraError(resp.StatusCode, body):
 		unavailable.detail = " without Hydra's error document"

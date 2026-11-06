@@ -8,10 +8,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -268,6 +270,7 @@ func (in Input) surface(code Code) Outcome {
 // error the app or the page shows leads to its cause.
 func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, reports []Report) Result {
 	reports = append(reports, out.Reports...)
+	reports = append(reports, requestFailed(in.Answers, reports)...)
 	if o.Log != nil {
 		surface := "front"
 		if _, ok := in.Event.(AppCall); ok {
@@ -278,7 +281,8 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			switch {
 			case r.Event == "logout.started", r.Event == "logout.session_revoked":
 				// Info, as the catalogue has them, in the audit log too.
-			case r.Sentry:
+			case r.Sentry, r.Event == "hydra.request_failed":
+				// The latter without Sentry: flow.error, of the same request, goes.
 				level = slog.LevelError
 			case r.Event == "challenge.invalid", r.Event == "security.ip_rejected", r.Event == "config.warning", r.Event == "hydra.decrypt_fallback", r.Event == "hydra.clock_skew", r.Audit:
 				level = slog.LevelWarn
@@ -299,10 +303,53 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			if r.Event == "logout.started" {
 				args = append(args, "apps", r.Apps, "again", r.Again)
 			}
+			if r.Event == "hydra.request_failed" {
+				args = append(args, "operation", r.Operation, "status", r.Status)
+			}
 			o.Log.Log(ctx, level, r.Event, args...)
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}
+}
+
+// requestFailed reports the calls of this request that Hydra failed
+// (hydra.request_failed): what an exploitant needs to understand an E1004 or an
+// E1007, which only name their code. Hydra unavailable, whatever the page; a refusal
+// when the page says so, a 409 of 2.1 being read again before it concludes. Not a
+// challenge unknown or expired, an expected answer that challenge.invalid reports; not
+// a browser that gave up, nor a call that max_in_flight did not make.
+func requestFailed(a Answers, reports []Report) []Report {
+	refusedPage := slices.ContainsFunc(reports, func(r Report) bool { return r.Event == "flow.error" && r.Detail == string(E1007) })
+	var out []Report
+	for _, err := range a.failures() {
+		switch class := classify(err); {
+		case class == unavailable && !errors.Is(err, context.Canceled) && !errors.Is(err, hydra.ErrOverloaded),
+			(class == refused || class == conflict) && refusedPage:
+			op, status, cause := hydra.Failure(err)
+			out = append(out, Report{Event: "hydra.request_failed", Operation: op, Status: status, Detail: cause})
+		}
+	}
+	return out
+}
+
+// failures are the errors of the calls made during the request.
+func (a Answers) failures() []error {
+	var errs []error
+	if a.Login != nil && a.Login.Err != nil {
+		errs = append(errs, a.Login.Err)
+	}
+	if a.Consent != nil && a.Consent.Err != nil {
+		errs = append(errs, a.Consent.Err)
+	}
+	if a.Logout != nil && a.Logout.Err != nil {
+		errs = append(errs, a.Logout.Err)
+	}
+	for _, d := range []*Done{a.Accept, a.Reject, a.ConsentAccept, a.ConsentReject, a.LogoutAccept, a.LogoutReject, a.Revoke} {
+		if d != nil && d.Err != nil {
+			errs = append(errs, d.Err)
+		}
+	}
+	return errs
 }
 
 // call makes a call a transition asked for, its answer kept for the request,

@@ -309,9 +309,10 @@ func (r *run) logout(ev Logout) Outcome {
 	if decline {
 		return r.logoutDecline(ev, req) // LGO-12, LGO-14
 	}
-	if ea := req.ExpiresAt; ea != nil && ea.Sub(r.Env.Now) < hydraMargin {
+	if ea := req.ExpiresAt; ea != nil && r.Answers.LogoutAccept == nil && ea.Sub(r.Env.Now) < hydraMargin {
 		// LGO-5 (Q52): the accept would answer 200, and the verifier be refused,
-		// the session whole: the clocks are not the same.
+		// the session whole: the clocks are not the same. Only before the accept:
+		// once made, a write decided again past that time is DEP-7's (ECR-8).
 		return s.absent().report(expiredChallenge())
 	}
 	if ev.Post {
@@ -448,9 +449,9 @@ func (r *run) logoutStart(ev Logout, req *ory.OAuth2LogoutRequest) Outcome {
 	// DEP-6 (Q53): the end of the session before the propagation: E1000 would
 	// leave it alive, to protect what is best effort. Apps not told for this
 	// logout, and no longer, Hydra giving no logout request for this session.
-	failed := func(apps []string, again bool) *Outcome {
+	failed := func(apps []string, cur int, again bool) *Outcome {
 		out := noted(s.redirect(d.RedirectTo), note).report(logoutStarted(rp, len(apps), again))
-		for _, id := range apps {
+		for _, id := range apps[cur:] {
 			out = out.report(propagated(id, "error"))
 		}
 		out = out.report(verifierSent(rp))
@@ -458,7 +459,7 @@ func (r *run) logoutStart(ev Logout, req *ory.OAuth2LogoutRequest) Outcome {
 	}
 	ref := r.Env.Keys.LogoutRef(req.GetSid())
 	if !r.Loaded {
-		return Outcome{LoadLogout: ref, Failed: failed(apps, false)}
+		return Outcome{LoadLogout: ref, Failed: failed(apps, 0, false)}
 	}
 	now := r.Env.Now
 	rec := r.Logout
@@ -476,7 +477,7 @@ func (r *run) logoutStart(ev Logout, req *ory.OAuth2LogoutRequest) Outcome {
 		app, _ := r.Env.Config.App(apps[0]) // chosen from this snapshot
 		out := noted(s.redirect(withQuery(app.LogoutURL, "logout_challenge", r.Env.Keys.LogoutChallenge(ref, 0, app.ID))), note).
 			report(logoutStarted(rp, len(apps), false))
-		out.WriteLogout, out.Failed = g, failed(apps, false)
+		out.WriteLogout, out.Failed = g, failed(apps, 0, false)
 		return out
 	case rec.U == ev.Challenge:
 		// DEP-3: a double submission, or a reload.
@@ -485,7 +486,7 @@ func (r *run) logoutStart(ev Logout, req *ory.OAuth2LogoutRequest) Outcome {
 		if out.Failed != nil {
 			out.Failed.Response.Remember = note // SUI-3: its answer stands, with the note
 		} else if out.WriteLogout != nil {
-			out.Failed = failed(rec.Apps, false) // SUI-4
+			out.Failed = failed(rec.Apps, rec.Cur, false) // SUI-4
 		}
 		return out
 	}
@@ -504,7 +505,7 @@ func (r *run) logoutStart(ev Logout, req *ory.OAuth2LogoutRequest) Outcome {
 	}
 	out := r.logoutStep(ref, g, true)
 	out.Response.Remember = note
-	out.Failed = failed(rec.Apps, true)
+	out.Failed = failed(rec.Apps, rec.Cur, true)
 	out.Reports = append(append([]Report{logoutStarted(rp, len(g.Apps), true)}, passed...), out.Reports...)
 	return out
 }

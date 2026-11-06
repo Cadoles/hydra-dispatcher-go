@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -201,7 +202,10 @@ type Response struct {
 	URL  string
 	Code Code
 	// Link is the client's client_uri on page E1002, "" for none.
-	Link    string
+	Link string
+	// SignOut is Hydra's logout on page E1003, the way out of a session that is
+	// someone else's (FIN-3, Q60), "" for none.
+	SignOut string
 	Choice  *ChoiceScreen
 	Consent *ConsentScreen
 	Logout  *LogoutScreen
@@ -260,19 +264,21 @@ type ConsentScreen struct {
 // Kind and Reason are those of skip.accepted and skip.ignored (login or
 // consent, and the check of the cookie that failed); App and Result those of
 // logout.propagated; RP, Apps and Again those of logout.started, RP that of
-// logout.verifier_sent.
+// logout.verifier_sent; Operation and Status those of hydra.request_failed.
 type Report struct {
-	Event  string
-	Detail string
-	Kind   string
-	Reason string
-	App    string
-	Result string
-	RP     *bool
-	Apps   int
-	Again  bool
-	Sentry bool
-	Audit  bool
+	Event     string
+	Detail    string
+	Kind      string
+	Reason    string
+	App       string
+	Result    string
+	RP        *bool
+	Apps      int
+	Again     bool
+	Operation string
+	Status    int
+	Sentry    bool
+	Audit     bool
 }
 
 // Op is a call a transition asks for.
@@ -642,10 +648,15 @@ func (s surface) fail(code Code) Outcome {
 
 // unavailable is E1004 for Hydra unavailable or answering what it should
 // not (B1, Q11); Overloaded when the call was not even made, max_in_flight
-// calls being already in flight.
+// calls being already in flight. A browser that gave up cancels the call: no one
+// reads this page, and Hydra did not fail, so nothing goes to the application log or
+// to Sentry; the access log keeps the request.
 func (s surface) unavailable(err error) Outcome {
 	o := s.fail(E1004)
 	o.Response.Overloaded = errors.Is(err, hydra.ErrOverloaded)
+	if errors.Is(err, context.Canceled) {
+		o.Reports = nil
+	}
 	return o
 }
 

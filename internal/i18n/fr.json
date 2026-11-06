@@ -14,6 +14,7 @@
   "error.title": "La connexion n'a pas pu aboutir",
   "error.trace": "Référence à donner au support : %s",
   "error.back": "Retourner à l'application",
+  "error.sign_out": "Se déconnecter de la session en cours",
   "error.E1000": "Une erreur inattendue est survenue. Réessayez dans quelques instants.",
   "error.E1001": "Le lien de connexion n'est pas valide.",
   "error.E1002": "Votre connexion a expiré ou est déjà terminée. Reprenez-la depuis l'application.",

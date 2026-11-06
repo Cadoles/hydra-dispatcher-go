@@ -111,7 +111,7 @@ type scopeGroup struct {
 
 type claimLine struct{ Label, Value string }
 
-type pageError struct{ Code, MessageKey, TraceID, Link string }
+type pageError struct{ Code, MessageKey, TraceID, Link, SignOut string }
 
 // form is what a page's form posts back. Print is the print of the claims a
 // consent screen without a flow shows (SKC-2, Q37), "" on a flow's.
@@ -484,6 +484,9 @@ func (h *Handler) samples(r *http.Request, cfg *store.Snapshot) []sample {
 			out = append(out, sample{name: "error", what: string(code), page: p})
 		}
 	}
+	p := h.page(r, cfg, nil)
+	p.Error = &pageError{Code: string(flow.E1003), MessageKey: "error." + string(flow.E1003), TraceID: "0123456789abcdef0123456789abcdef", SignOut: "https://hydra.example/oauth2/sessions/logout"}
+	out = append(out, sample{name: "error", what: "sign out", page: p})
 	return out
 }
 

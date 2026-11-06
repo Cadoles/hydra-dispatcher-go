@@ -666,6 +666,110 @@ func TestLogoutConfirmation(t *testing.T) {
 	}
 }
 
+// LGO-18, Q59: a browser's preload has no effect, whatever the logout request. A
+// HEAD aside, the first request a client's link makes runs the whole chain.
+func TestLogoutPreloaded(t *testing.T) {
+	for _, header := range [][]string{
+		{"Sec-Purpose", "prefetch"},
+		{"Sec-Purpose", "prefetch;prerender"},
+		{"Sec-Purpose", "prefetch;anonymous-client-ip"},
+		{"Purpose", "prefetch"},
+	} {
+		w := newWorld(t)
+		w.hydra.rpInitiated = true
+		resp := w.do(http.MethodGet, logoutPath, nil, header...)
+		if resp.StatusCode != http.StatusServiceUnavailable || text(t, resp) != "" || len(resp.Cookies()) != 0 || len(w.hydra.calls) != 0 {
+			t.Errorf("%v: %d, cookies %v, calls %v", header, resp.StatusCode, resp.Cookies(), w.hydra.calls)
+		}
+		if resp.Header.Get("Cache-Control") != "no-store" {
+			t.Errorf("%v: Cache-Control %q", header, resp.Header.Get("Cache-Control"))
+		}
+		// The link followed: the logout leaves.
+		resp = w.do(http.MethodGet, logoutPath, nil)
+		if u := location(t, resp, http.StatusSeeOther); u.String() != loggedOut || w.note(t) == nil {
+			t.Errorf("%v, then the visit: %s", header, u)
+		}
+	}
+	w := newWorld(t)
+	w.hydra.rpInitiated = true
+	if resp := w.do(http.MethodGet, logoutPath, nil, "Purpose", "other"); resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("another purpose: %d", resp.StatusCode)
+	}
+}
+
+// The handlers give the engine the cookie they read: the question of LGO-7 on a
+// GET, the apps of LST-1 on a POST, which keeps them in the note.
+func TestLogoutMemory(t *testing.T) {
+	sealed := func(w *world, sid, sub string, ap ...string) string {
+		v, err := w.front.o.Remember.Seal(&flow.Remembered{V: flow.RememberedFormat, SID: sid, Sub: sub, AP: ap, IAT: time.Now().Unix()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	w := newWorld(t)
+	w.hydra.rpInitiated = true
+	w.cookies["dispatcher_remember"] = sealed(w, "another-session", "bob")
+	if resp := w.do(http.MethodGet, logoutPath, nil); !strings.Contains(text(t, resp), "autre session") || resp.StatusCode != http.StatusOK {
+		t.Errorf("LGO-7: %d", resp.StatusCode)
+	}
+	snap := testSnapshot()
+	apps := slices.Clone(snap.Apps)
+	for i := range apps {
+		apps[i].LogoutURL = "http://" + apps[i].ID + ".hydra.test/logout"
+	}
+	w = newWorld(t, worldOptions{base: base, snapshot: store.NewSnapshot(apps, snap.Flows, snap.Settings)})
+	w.do(http.MethodGet, logoutPath, nil)
+	w.cookies["dispatcher_remember"] = sealed(w, sessionID, "alice", "sql")
+	resp := w.do(http.MethodPost, logoutPath, url.Values{"logout_challenge": {logoutU}, "csrf_token": {w.csrf()}, "action": {"accept"}}, sameOrigin...)
+	if u := location(t, resp, http.StatusSeeOther); u.Host != "sql.hydra.test" {
+		t.Errorf("LST-1, the app the cookie names: %s", u)
+	}
+	if n := w.note(t); n == nil || !slices.Equal(n.AP, []string{"sql"}) {
+		t.Errorf("WRT-4: %+v", n)
+	}
+}
+
+type stubEngine struct{ res flow.Result }
+
+func (e stubEngine) Handle(context.Context, flow.Event) flow.Result { return e.res }
+
+// respond on an error page: the note of DEP-7, and the way out of FIN-3 (Q60).
+func TestErrorPageAnswers(t *testing.T) {
+	serve := func(t *testing.T, res flow.Result) (*httptest.ResponseRecorder, *world) {
+		t.Helper()
+		w := newWorld(t)
+		o := w.front.o
+		o.Engine = stubEngine{res}
+		h, err := New(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		h.Register(mux)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, logoutPath, nil))
+		return rec, w
+	}
+	t.Run("DEP-7: E1002 and the note", func(t *testing.T) {
+		rec, _ := serve(t, flow.Result{Response: flow.Response{Kind: flow.ErrorPage, Code: flow.E1002, Remember: &flow.Remembered{V: flow.RememberedFormat, SID: sessionID, Sub: "alice", Lo: true}}})
+		if rec.Code != http.StatusBadRequest || setCookie(rec.Result(), "dispatcher_remember") == nil {
+			t.Errorf("%d, cookies %v", rec.Code, rec.Result().Cookies())
+		}
+	})
+	t.Run("FIN-3: the way out", func(t *testing.T) {
+		const out = "http://public.hydra.test/oauth2/sessions/logout"
+		rec, _ := serve(t, flow.Result{Response: flow.Response{Kind: flow.ErrorPage, Code: flow.E1003, SignOut: out}})
+		if body := rec.Body.String(); rec.Code != http.StatusBadRequest || !strings.Contains(body, `<a href="`+out+`">`) || !strings.Contains(body, "Se déconnecter de la session en cours") {
+			t.Errorf("%d\n%s", rec.Code, body)
+		}
+		rec, _ = serve(t, flow.Result{Response: flow.Response{Kind: flow.ErrorPage, Code: flow.E1003}})
+		if strings.Contains(rec.Body.String(), "Se déconnecter") {
+			t.Errorf("a link without a way out:\n%s", rec.Body.String())
+		}
+	})
+}
+
 func TestLogoutRefused(t *testing.T) {
 	w := newWorld(t)
 	w.do(http.MethodGet, logoutPath, nil)
@@ -1177,7 +1281,7 @@ func TestGoldenPages(t *testing.T) {
 	for _, l := range cfg.Settings.SupportedLocales {
 		r := httptest.NewRequest(http.MethodGet, "/?_locale="+l, nil)
 		for _, s := range h.samples(r, cfg) {
-			if s.name == "error" && !(s.what == "E1002" && s.page.Error.Link != "" || s.what == "E1004" && s.page.Error.Link == "") {
+			if s.name == "error" && !(s.what == "E1002" && s.page.Error.Link != "" || s.what == "E1004" && s.page.Error.Link == "" || s.what == "sign out") {
 				continue
 			}
 			var buf bytes.Buffer
@@ -1208,8 +1312,8 @@ func TestGoldenPages(t *testing.T) {
 			n++
 		}
 	}
-	if n != 24 {
-		t.Errorf("%d golden pages, want 24", n)
+	if n != 26 {
+		t.Errorf("%d golden pages, want 26", n)
 	}
 }
 

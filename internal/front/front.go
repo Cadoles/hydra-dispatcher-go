@@ -321,7 +321,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Respons
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	p := h.page(r, cfg, nil)
-	p.Error = &pageError{Code: string(resp.Code), MessageKey: "error." + string(resp.Code), TraceID: httpx.TraceID(r.Context()), Link: resp.Link}
+	p.Error = &pageError{Code: string(resp.Code), MessageKey: "error." + string(resp.Code), TraceID: httpx.TraceID(r.Context()), Link: resp.Link, SignOut: resp.SignOut}
 	h.render(w, r, status, "error", p)
 }
 
@@ -333,11 +333,24 @@ func (h *Handler) logoutGet(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		return
 	}
+	if preloaded(r) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return // LGO-18
+	}
 	h.respond(w, r, h.o.Engine.Handle(r.Context(), flow.Logout{
 		Challenge: r.URL.Query().Get("logout_challenge"),
 		Cookie:    h.cookie(r, csrfCookie),
 		Memory:    h.memory(r),
 	}))
+}
+
+// preloaded tells a browser's preload from a visit (LGO-18, Q59): Sec-Purpose on a
+// prefetch or a prerender, Purpose on those of the browsers before it. A client's
+// demand has no page: answered, the preload would run the whole chain, without a
+// click. A browser drops a 503, and asks again when the link is followed.
+func preloaded(r *http.Request) bool {
+	return r.Header.Get("Sec-Purpose") != "" || r.Header.Get("Purpose") == "prefetch"
 }
 
 // logoutPost is POST /logout, the confirmation's answer: accept, or any other

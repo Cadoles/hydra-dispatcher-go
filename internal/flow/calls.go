@@ -2,6 +2,8 @@ package flow
 
 import (
 	"encoding/json"
+	"net/url"
+	"strings"
 	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
@@ -104,7 +106,7 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 	}
 	if f.Hydra.Skip && body.Subject != f.Hydra.Subject {
 		return r.rejectLogin(f, ReasonSkipSubject, rejection(ReasonSkipSubject, "The subject authenticated is not the one of the Hydra session."),
-			func(string) Outcome { return s.fail(E1003) })
+			func(string) Outcome { return otherSubject(s, f) })
 	}
 	ctx = withoutDispatcher(ctx)
 	ctx[memberRef], _ = json.Marshal(ref) // a string always marshals
@@ -122,6 +124,31 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 		return r.hydraFailure(f, err)
 	}
 	return r.accepted(f, d)
+}
+
+// otherSubject is page E1003 of FIN-3: Hydra keeps a session of someone else in this
+// browser, and refuses this sign-in. The page gives the way out, Hydra's logout, which
+// asks first (LGO-6): nothing ends without a click (Q60).
+func otherSubject(s surface, f *Flow) Outcome {
+	o := s.fail(E1003)
+	o.Response.SignOut = signOutURL(f.Hydra.RequestURL)
+	return o
+}
+
+// signOutURL is Hydra's logout, beside its authorization endpoint that a login
+// request's request_url names, a path prefix of urls.self.public included; "" when it
+// names no such endpoint.
+func signOutURL(requestURL string) string {
+	u, err := url.Parse(requestURL)
+	if err != nil || !u.IsAbs() {
+		return ""
+	}
+	prefix, ok := strings.CutSuffix(u.Path, "/oauth2/auth")
+	if !ok {
+		return ""
+	}
+	u.Path, u.RawPath, u.RawQuery, u.Fragment = prefix+"/oauth2/sessions/logout", "", "", ""
+	return u.String()
 }
 
 // loginHook calls the login webhook with body and ctx, before the final
@@ -360,7 +387,7 @@ func (r *run) unusedFact() (Outcome, bool) {
 		}
 		out := s.redirect(d.RedirectTo)
 		if d.Call.Reason == ReasonSkipSubject {
-			out = s.fail(E1003)
+			out = otherSubject(s, f)
 		}
 		return out.writing(f.Reduce()).audited(d), true // ECR-4
 	case a.ConsentAccept.ok() && !r.used[AcceptConsent], a.ConsentReject.ok() && !r.used[RejectConsent]:

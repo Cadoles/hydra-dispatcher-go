@@ -14,6 +14,7 @@
   "error.title": "Sign-in could not complete",
   "error.trace": "Reference for the support: %s",
   "error.back": "Back to the application",
+  "error.sign_out": "Sign out of the current session",
   "error.E1000": "An unexpected error occurred. Try again in a moment.",
   "error.E1001": "The sign-in link is not valid.",
   "error.E1002": "Your sign-in expired or is already over. Start again from the application.",

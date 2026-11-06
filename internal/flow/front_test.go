@@ -839,6 +839,7 @@ func TestFinalAccept(t *testing.T) {
 	skip := func(sub string) *Flow {
 		f := lastDone(t)
 		f.Hydra.Skip, f.Hydra.Subject = true, sub
+		f.Hydra.RequestURL = "http://public.hydra.test/oauth2/auth?client_id=c"
 		return f
 	}
 	hook := func(e *Env) { e.Config.Settings.LoginAcceptWebhookURL = "http://hook.test/" }
@@ -904,7 +905,12 @@ func TestFinalAccept(t *testing.T) {
 				}
 			}},
 		{name: "FIN-3", ev: loop, stored: skip("bob"), says: hydraSays{RejectLogin: {redirectTo: hydraDone}},
-			kind: ErrorPage, code: E1003, calls: []Op{RejectLogin}, write: finished, check: rejected(RejectLogin, "login_required")},
+			kind: ErrorPage, code: E1003, calls: []Op{RejectLogin}, write: finished, check: func(t *testing.T, p played) {
+				rejected(RejectLogin, "login_required")(t, p)
+				if p.Response.SignOut != "http://public.hydra.test/oauth2/sessions/logout" { // Q60
+					t.Errorf("the way out: %q", p.Response.SignOut)
+				}
+			}},
 		{name: "FIN-3, Hydra 401", ev: loop, stored: skip("bob"), says: hydraSays{RejectLogin: {err: err401}},
 			kind: ErrorPage, code: E1002, link: true, calls: []Op{RejectLogin}, write: finished},
 		{name: "FIN-4, webhook failed", ev: loop, stored: lastDone(t), env: hook, says: hydraSays{LoginHook: {hookErr: errDown}},
@@ -1301,7 +1307,11 @@ func TestFactsCarriedOver(t *testing.T) {
 			kind: Redirect, url: "http://hydra/rejected", write: finished},
 		{name: "ECR-4, a reject for Hydra's skip", ev: loop, flow: choiceFlow(t),
 			answers: Answers{Reject: &Done{Call: Call{Op: RejectLogin, Reason: ReasonSkipSubject}, RedirectTo: "http://hydra/rejected"}},
-			kind:    ErrorPage, code: E1003, write: finished},
+			kind:    ErrorPage, code: E1003, write: finished, check: func(t *testing.T, out Outcome) {
+				if !strings.HasSuffix(out.Response.SignOut, "/oauth2/sessions/logout") { // Q60
+					t.Errorf("the way out: %q", out.Response.SignOut)
+				}
+			}},
 		{name: "ECR-8, a reject, the flow gone past hx: its redirect_to", ev: loop, answers: Answers{Reject: reject},
 			kind: Redirect, url: "http://hydra/rejected", check: expiry},
 		{name: "ECR-9, a reject on a finished flow: its redirect_to", ev: loop, flow: finishedFlow(t, "", 0), answers: Answers{Reject: reject},
