@@ -45,6 +45,11 @@ too, with the warning `bootstrap.claims_widened`.
 before going back to the previous image; in a terminal it names the migration
 and asks, unless `-yes`.
 
+`serve` exposes `/metrics` (Prometheus, OpenMetrics when asked for), in the memory
+of the instance, a scrape touching neither Redis nor the database, behind
+`security.metrics_authorized_hosts`; or on a port of its own with
+`observability.metrics.listen`, gone from the main one.
+
 `serve` exposes `/health` (liveness) and `/ready` (Hydra, the database and
 the state store reachable, within 2 s, Redis by a `PING`; 503 otherwise,
 details in the log). It reads the

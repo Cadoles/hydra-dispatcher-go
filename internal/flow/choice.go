@@ -185,6 +185,9 @@ func (r *run) start(ref string, f *Flow, id string, imposed bool, trigger string
 	}
 	g := f.clone()
 	g.FlowID, g.Imposed, g.ACR, g.Current = id, imposed, fl.ACR, 1
+	if g.StartedAt == 0 {
+		g.StartedAt = r.now()
+	}
 	g.Steps = make([]Step, len(fl.Steps))
 	for i, s := range fl.Steps {
 		g.Steps[i] = Step{App: s.AppID, Check: s.SubjectCheck}

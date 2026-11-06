@@ -1069,6 +1069,18 @@ func TestConsent(t *testing.T) {
 		{name: "CST-10 Q30, before the cookie", ev: Consent{Challenge: hydraC}, stored: acceptedFlow(t),
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.Subject = ory.PtrString("bob") }), RejectConsent: {redirectTo: hydraDone}},
 			kind: ErrorPage, code: E1007, calls: []Op{GetConsent, RejectConsent}, write: reducedNoCR},
+		{name: "CST-16, counted as a return", ev: get, stored: finishedFlow(t, hydraDone, 2*time.Second), says: hydraSays{GetConsent: read(nil)}, kind: Redirect, url: hydraDone, calls: []Op{GetConsent},
+			check: func(t *testing.T, p played) {
+				if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "consent.resubmitted" && r.Result == "replayed" }) {
+					t.Errorf("reports %+v", p.Reports)
+				}
+			}},
+		{name: "CST-7, counted as a return too late", ev: get, stored: finishedFlow(t, hydraDone, time.Minute), says: hydraSays{GetConsent: read(nil)}, kind: ErrorPage, code: E1002, link: true, calls: []Op{GetConsent},
+			check: func(t *testing.T, p played) {
+				if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "consent.resubmitted" && r.Result == "too_late" }) {
+					t.Errorf("reports %+v", p.Reports)
+				}
+			}},
 		{name: "CST-12 Q38, the webhook gets what Hydra holds of the login and the context sent", ev: get,
 			stored: func() *Flow {
 				f := acceptedFlow(t)

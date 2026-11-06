@@ -144,7 +144,7 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 	g := f.Reduce()
 	g.ConsentRedirect, g.ConsentAt, g.Skipped = d.RedirectTo, r.now(), true
 	out := s.redirect(d.RedirectTo).writing(g).
-		report(Report{Event: "hydra.login_accepted", Detail: body.GetAcr()}).
+		report(Report{Event: "hydra.login_accepted", Detail: body.GetAcr(), Flow: c.Flow}).
 		report(Report{Event: "skip.accepted", Kind: "login"})
 	out.Guard = true // SKP-8
 	return out
@@ -232,7 +232,7 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	}
 	// WRT-5: the cookie is not written again, its life stays its login's.
 	out := s.redirect(d.RedirectTo).
-		report(Report{Event: "hydra.consent_accepted"}).
+		report(Report{Event: "hydra.consent_accepted", Flow: c.Flow}).
 		report(Report{Event: "skip.accepted", Kind: "consent"})
 	out.Reports = append(reports, out.Reports...)
 	return out

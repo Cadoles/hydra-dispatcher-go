@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,5 +200,33 @@ func TestStepJSON(t *testing.T) {
 	}
 	if d := time.Duration(f.HydraExpiresAt-f.ExpiresAt) * time.Millisecond; d != 20*time.Minute {
 		t.Errorf("times are not milliseconds: %v", d)
+	}
+}
+
+// How a challenge came out, for challenge_validations_total (Q32, DEC-6).
+func TestValidations(t *testing.T) {
+	gone := func(status int) error { return &hydra.RequestError{Op: "get_login", Status: status} }
+	ok := &ory.OAuth2LoginRequest{}
+	for name, tc := range map[string]struct {
+		a       Answers
+		reports []Report
+		want    []Validation
+	}{
+		"no read":            {},
+		"fallback":           {a: Answers{Login: &LoginRead{Request: ok}}, want: []Validation{{Mode: ModeFallback, Result: ValidationOK}}},
+		"decrypted":          {a: Answers{Login: &LoginRead{Request: ok, Decrypted: true}}, want: []Validation{{Mode: ModeDecrypt, Result: ValidationOK}}},
+		"decrypted, past it": {a: Answers{Login: &LoginRead{Err: ErrChallengeExpired, Decrypted: true}}, want: []Validation{{Mode: ModeDecrypt, Result: ValidationExpired}}},
+		"a 401":              {a: Answers{Consent: &ConsentRead{Err: gone(401)}}, want: []Validation{{Mode: ModeFallback, Result: ValidationExpired}}},
+		"a 404":              {a: Answers{Login: &LoginRead{Err: gone(404)}}, want: []Validation{{Mode: ModeFallback, Result: ValidationInvalid}}},
+		"a 410, handled":     {a: Answers{Login: &LoginRead{Err: gone(410)}}},
+		"Hydra unavailable":  {a: Answers{Login: &LoginRead{Err: errors.New("down")}}},
+		"what Hydra knows and the dispatcher cannot open": {a: Answers{Login: &LoginRead{Request: ok}}, reports: []Report{{Event: "hydra.decrypt_fallback"}},
+			want: []Validation{{Mode: ModeDecrypt, Result: ValidationDecryptError}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := tc.a.validations(tc.reports); !slices.Equal(got, tc.want) {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

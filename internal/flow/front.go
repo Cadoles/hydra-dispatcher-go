@@ -453,10 +453,19 @@ func (r *run) consent(ev Consent) Outcome {
 	case Absent:
 		return s.absent() // CST-6 (T2): never accepted from the remember cookie
 	case Finished:
+		byConsent := f.ConsentRedirect != "" && !f.Skipped
 		if r.replays(f, csrf) {
-			return s.redirect(f.ConsentRedirect) // CST-16 (Q13)
+			out := s.redirect(f.ConsentRedirect) // CST-16 (Q13)
+			if byConsent {
+				out = out.report(Report{Event: "consent.resubmitted", Result: "replayed"})
+			}
+			return out
 		}
-		return s.ended(f) // CST-7
+		out := s.ended(f) // CST-7
+		if byConsent {
+			out = out.report(Report{Event: "consent.resubmitted", Result: "too_late"})
+		}
+		return out
 	case Accepted:
 	default:
 		// CST-8: not accepted by the dispatcher, expired or not; L is

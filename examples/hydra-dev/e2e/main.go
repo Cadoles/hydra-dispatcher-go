@@ -70,6 +70,7 @@ var scenarios = []scenario{
 	{name: "first-login-hydra-oidc", run: firstLogin("hydra-oidc")},
 	{name: "first-login-hydra-sql", run: firstLogin("hydra-sql")},
 	{name: "first-login-hydra-sql-2fa", run: firstLogin("hydra-sql-2fa")},
+	{name: "metrics-of-a-login", run: (*driver).metricsOfALogin},
 	{name: "second-login", run: (*driver).secondLogin},
 	{name: "second-login-without-memory", run: (*driver).secondLoginWithoutMemory},
 	{name: "second-login-fewer-scopes", run: (*driver).secondLoginFewerScopes},

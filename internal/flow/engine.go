@@ -267,9 +267,12 @@ type ConsentScreen struct {
 // logout.verifier_sent; Operation and Status those of hydra.request_failed, Operation
 // and Elapsed those of hydra.request_abandoned.
 type Report struct {
-	Event     string
-	Detail    string
-	Kind      string
+	Event  string
+	Detail string
+	Kind   string
+	// Flow names the flow of an accept without a flow of its own, a skip's, from the
+	// remember cookie, for the metrics.
+	Flow      string
 	Host      string
 	Reason    string
 	App       string

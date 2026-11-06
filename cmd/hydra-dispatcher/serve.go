@@ -22,6 +22,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -64,6 +65,7 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	var inFlight httpx.InFlight
+	watch := metrics.New(cfg.Observability.Metrics.MaxLabelValues, logger)
 	refreshCtx, stopRefresh := context.WithCancel(ctx)
 	refreshed := make(chan struct{})
 	// The stores close once the configuration is no longer refreshed and no
@@ -79,12 +81,14 @@ func serve(ctx context.Context, args []string) error {
 		stop()
 		return err
 	}
+	watch.ConfigRefreshed(nil)
+	live.OnRefresh = watch.ConfigRefreshed
 	go func() {
 		defer close(refreshed)
 		live.Run(refreshCtx, store.RefreshEvery)
 	}()
 
-	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live})
+	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch})
 	if err != nil {
 		stop()
 		return err
@@ -94,6 +98,13 @@ func serve(ctx context.Context, args []string) error {
 		stop()
 		return err
 	}
+	stopMetrics, err := serveMetrics(ctx, cfg, watch, logger, logs.access)
+	if err != nil {
+		_ = ln.Close()
+		stop()
+		return err
+	}
+	defer stopMetrics()
 	logger.Info("server.started", "addr", ln.Addr().String())
 	err = httpx.Serve(ctx, httpx.NewServer(inFlight.Track(handler), logger), ln, shutdownGrace)
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -106,6 +117,41 @@ func serve(ctx context.Context, args []string) error {
 	}
 	logger.Info("server.stopped")
 	return nil
+}
+
+// serveMetrics serves /metrics on observability.metrics.listen, a port of its own that
+// the ingress does not expose, filtered as on the main one; without that key, it does
+// nothing and newHandler routes /metrics. The function it returns waits for its end.
+func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metrics, logger, accessLogger *slog.Logger) (func(), error) {
+	addr := cfg.Observability.Metrics.Listen
+	if addr == "" {
+		return func() {}, nil
+	}
+	trusted, err := cfg.Server.TrustedProxies.Prefixes()
+	if err != nil {
+		return nil, err
+	}
+	hosts, err := cfg.Security.MetricsAuthorizedHosts.Prefixes()
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", watch.Filtered(hosts, cfg.Observability.LogIP))
+	handler := httpx.Chain(httpx.Routes(mux), httpx.RealIP(trusted), httpx.Trace(nil),
+		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP), httpx.Recover(logger))
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("observability.metrics.listen: %w", err)
+	}
+	logger.Info("metrics.started", "addr", ln.Addr().String())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := httpx.Serve(ctx, httpx.NewServer(handler, logger), ln, shutdownGrace); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			logger.Error("metrics.stopped", "err", err)
+		}
+	}()
+	return func() { <-done }, nil
 }
 
 // loggers are the application, access and warnings loggers of newLoggers.
@@ -218,6 +264,8 @@ type services struct {
 	database httpx.Check
 	states   state.StateStore
 	config   snapshots
+	// metrics is the catalogue of the instance.
+	metrics *metrics.Metrics
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -258,12 +306,21 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	if err != nil {
 		return nil, err
 	}
+	watch := s.metrics
+	hydraClient.Observer = watch
+	watch.WatchHydraInFlight(hydraClient.InFlight)
+	stateBackend := "memory"
+	if cfg.State.RedisDSN != "" {
+		stateBackend = "redis"
+	}
+	watch.SetBuild(version, stateBackend, hydraMode(source))
 	engine := &flow.Orchestrator{
-		Store:                  s.states,
+		Store:                  watch.States(s.states),
 		Config:                 s.config,
 		Source:                 source,
 		Hydra:                  hydraClient,
-		Webhooks:               webhooks,
+		Webhooks:               watch.Webhooks(webhooks),
+		Observers:              []flow.Observer{watch},
 		BaseURL:                cfg.Server.BaseURL,
 		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),
 		Keys:                   keys,
@@ -278,6 +335,8 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		CookiePath: cfg.Server.CookiePath,
 		ShowValues: cfg.Consent.ShowValues,
 		Logger:     logger,
+
+		SkipUnavailable: watch.SkipUnavailable,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
@@ -296,8 +355,16 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		LegacyV1Paths:   cfg.EmulatedAPI.LegacyV1Paths,
 		Logger:          logger,
 		LogIP:           cfg.Observability.LogIP,
+		Refused:         func() { watch.Refused("emulated") },
 	})
 	pages.Register(mux)
+	if cfg.Observability.Metrics.Listen == "" {
+		hosts, err := cfg.Security.MetricsAuthorizedHosts.Prefixes()
+		if err != nil {
+			return nil, err
+		}
+		mux.Handle("GET /metrics", watch.Filtered(hosts, cfg.Observability.LogIP))
+	}
 
 	csp := map[string][]string{}
 	for d, sources := range cfg.UI.CSPExtra {
@@ -313,6 +380,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 			return httpx.Within(trusted, ip) || httpx.Within(loginApps, ip) && appSource(s.config.Snapshot(), ip)
 		}),
 		httpx.SecurityHeaders(httpx.CSP(csp), strings.HasPrefix(cfg.Server.BaseURL, "https://"), cfg.TLS.HSTSIncludeSubdomains),
+		watch.HTTP,
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP),
 		httpx.Recover(logger),
 	), nil

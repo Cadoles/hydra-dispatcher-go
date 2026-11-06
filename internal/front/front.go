@@ -51,6 +51,8 @@ type Options struct {
 	// ShowValues is consent.show_values.
 	ShowValues bool
 	Logger     *slog.Logger
+	// SkipUnavailable, nil for none, is told of a memory of the skip too big to write.
+	SkipUnavailable func()
 }
 
 // Handler serves the pages.
@@ -231,6 +233,9 @@ func (h *Handler) remember(w http.ResponseWriter, r *http.Request, m *flow.Remem
 	if err != nil {
 		h.forget(w)
 		h.o.Logger.InfoContext(r.Context(), "skip.unavailable", "detail", err.Error())
+		if h.o.SkipUnavailable != nil {
+			h.o.SkipUnavailable()
+		}
 		return
 	}
 	var maxAge time.Duration // 0: a cookie of the browser's session

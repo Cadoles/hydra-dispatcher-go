@@ -48,6 +48,15 @@ func ClientIP(ctx context.Context) netip.Addr {
 	return netip.Addr{}
 }
 
+// Route returns the route of the request ctx belongs to, once matched: the pattern of
+// its mux, unmatched for none, "" before Routes ran.
+func Route(ctx context.Context) string {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.route
+	}
+	return ""
+}
+
 // UserAgent returns the User-Agent of the request ctx belongs to, or "".
 func UserAgent(ctx context.Context) string {
 	if inf := infoFrom(ctx); inf != nil {

@@ -43,6 +43,8 @@ type Options struct {
 	// path by an address; LogIP is observability.log_ip, for those addresses.
 	Logger *slog.Logger
 	LogIP  string
+	// Refused, nil for none, is told of a caller outside the allowlist.
+	Refused func()
 }
 
 // maxBody bounds the body of a call (Sécurité, report R5).
@@ -147,6 +149,9 @@ func (h *handler) admit(w http.ResponseWriter, r *http.Request, path string, leg
 	}
 	if !httpx.Within(h.AuthorizedHosts, ip) {
 		h.Logger.WarnContext(r.Context(), "security.ip_rejected", "surface", "emulated", "ip", httpx.FormatIP(ip, h.LogIP))
+		if h.Refused != nil {
+			h.Refused()
+		}
 		writeError(w, r, flow.AppError{Error: "request_forbidden", Description: "The request is not allowed.", StatusCode: http.StatusForbidden})
 		return ip, false
 	}

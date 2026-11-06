@@ -159,9 +159,49 @@ func (e *RequestError) RedirectTo() string {
 	return stringMember(doc, "redirect_to")
 }
 
+// Observer watches the calls: their operation, the class of their answer and how long
+// they ran, then the calls refused or past their delay. It must not block.
+type Observer interface {
+	HydraCall(op, statusClass string, elapsed time.Duration)
+	HydraRejected(reason string)
+}
+
+// The classes of an answer, and why a call is rejected, for Observer.
+const (
+	Class2xx      = "2xx"
+	Class4xx      = "4xx"
+	Class5xx      = "5xx"
+	ClassError    = "error"
+	ClassCanceled = "canceled"
+
+	RejectedLimit   = "limit"
+	RejectedTimeout = "timeout"
+)
+
+// statusClass is the class of the answer err tells of: canceled when the client left
+// (Q67), error for no answer or an unexpected one.
+func statusClass(err error) string {
+	var request *RequestError
+	var unavailable *UnavailableError
+	switch {
+	case err == nil:
+		return Class2xx
+	case errors.Is(err, context.Canceled):
+		return ClassCanceled
+	case errors.As(err, &request):
+		return Class4xx
+	case errors.As(err, &unavailable) && unavailable.Status >= 500:
+		return Class5xx
+	}
+	return ClassError
+}
+
 // Client calls the admin API with one shared transport and a cap on
 // concurrent calls.
 type Client struct {
+	// Observer, nil for none, is set before the first call.
+	Observer Observer
+
 	oauth2   ory.OAuth2API
 	metadata ory.MetadataAPI
 	// http and admin make the reads (see read), on the SDK's HTTP client.
@@ -263,6 +303,9 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 	case c.inFlight <- struct{}{}:
 		defer func() { <-c.inFlight }()
 	default:
+		if c.Observer != nil {
+			c.Observer.HydraRejected(RejectedLimit)
+		}
 		return zero, fmt.Errorf("%s: %w", op, ErrOverloaded)
 	}
 	start := time.Now()
@@ -271,12 +314,22 @@ func call[T any](c *Client, op string, do func() (T, *http.Response, error)) (T,
 		_ = resp.Body.Close()
 	}
 	if err == nil {
+		if c.Observer != nil {
+			c.Observer.HydraCall(op, Class2xx, time.Since(start))
+		}
 		return v, nil
 	}
 	failure := classify(op, resp, err)
+	elapsed := time.Since(start)
 	var unavailable *UnavailableError
 	if errors.As(failure, &unavailable) {
-		unavailable.elapsed = time.Since(start)
+		unavailable.elapsed = elapsed
+	}
+	if c.Observer != nil {
+		c.Observer.HydraCall(op, statusClass(failure), elapsed)
+		if errors.Is(failure, context.DeadlineExceeded) {
+			c.Observer.HydraRejected(RejectedTimeout)
+		}
 	}
 	return zero, failure
 }

@@ -84,6 +84,10 @@ type Flow struct {
 	// ConsentRedirect is then the redirect_to of the login accept, replayed
 	// for 10 s with or without the cookie (ENT-21).
 	Skipped bool `json:"sk,omitempty"`
+	// StartedAt is when the flow was first started on the choice, for
+	// auth_duration_seconds: a return to the choice keeps it, and a finished flow
+	// no longer has it. 0 in the flows written before P11, and on a skip.
+	StartedAt int64 `json:"st,omitempty"`
 	// ExpiresAt ends the step challenges (inclusive); HydraExpiresAt is the
 	// end of L at Hydra, and of the key.
 	ExpiresAt      int64 `json:"exp"`

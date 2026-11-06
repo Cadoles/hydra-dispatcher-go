@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1016,4 +1017,94 @@ func TestErrorKeepsNoValue(t *testing.T) {
 	if _, _, cause := Failure(err); !strings.Contains(cause, "invalid character '<'") {
 		t.Errorf("the cause of an HTML answer: %q", cause)
 	}
+}
+
+// observed keeps what a client reports of its calls.
+type observed struct {
+	mu       sync.Mutex
+	calls    []string
+	rejected []string
+}
+
+func (o *observed) HydraCall(op, class string, _ time.Duration) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls = append(o.calls, op+" "+class)
+}
+
+func (o *observed) HydraRejected(reason string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.rejected = append(o.rejected, reason)
+}
+
+// The class of each answer, as hydra_requests_total counts it; a client gone is canceled
+// (Q67), the 503 of max_in_flight no call, and a delay passed told apart.
+func TestObserver(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status   int
+		body     string
+		cancel   bool
+		slow     bool
+		want     string
+		rejected []string
+	}{
+		"200":                {status: 200, body: `{"redirect_to":"http://x"}`, want: "accept_login 2xx"},
+		"404":                {status: 404, body: `{"error":"not_found"}`, want: "accept_login 4xx"},
+		"409":                {status: 409, body: `{"error":"conflict"}`, want: "accept_login 4xx"},
+		"500":                {status: 500, body: `{"error":"x"}`, want: "accept_login 5xx"},
+		"502, no JSON":       {status: 502, body: `gateway`, want: "accept_login 5xx"},
+		"200 unusable":       {status: 200, body: `nope`, want: "accept_login error"},
+		"a client gone":      {cancel: true, want: "accept_login canceled"},
+		"past hydra.timeout": {slow: true, want: "accept_login error", rejected: []string{RejectedTimeout}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.cancel || tc.slow {
+					<-release
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			defer close(release)
+			timeout := 2 * time.Second
+			if tc.slow {
+				timeout = 50 * time.Millisecond
+			}
+			c, err := New(config.Hydra{AdminURL: srv.URL, Timeout: config.Duration(timeout), MaxInFlight: 1}, config.TLS{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := &observed{}
+			c.Observer = o
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancel {
+				time.AfterFunc(20*time.Millisecond, cancel)
+			}
+			_, _ = c.AcceptLogin(ctx, "L", ory.AcceptOAuth2LoginRequest{Subject: "alice"})
+			if len(o.calls) != 1 || o.calls[0] != tc.want || !slices.Equal(o.rejected, tc.rejected) {
+				t.Errorf("calls %v, rejected %v; want %s, %v", o.calls, o.rejected, tc.want, tc.rejected)
+			}
+		})
+	}
+	t.Run("max_in_flight reached: no call", func(t *testing.T) {
+		c, err := New(config.Hydra{AdminURL: "http://127.0.0.1:1", Timeout: config.Duration(time.Second), MaxInFlight: 1}, config.TLS{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		o := &observed{}
+		c.Observer = o
+		c.inFlight <- struct{}{}
+		if _, err := c.AcceptLogin(context.Background(), "L", ory.AcceptOAuth2LoginRequest{Subject: "alice"}); !errors.Is(err, ErrOverloaded) {
+			t.Fatal(err)
+		}
+		if len(o.calls) != 0 || !slices.Equal(o.rejected, []string{RejectedLimit}) {
+			t.Errorf("calls %v, rejected %v", o.calls, o.rejected)
+		}
+	})
 }

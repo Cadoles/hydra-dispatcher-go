@@ -67,6 +67,8 @@ type Orchestrator struct {
 	PropagateWithoutRecord string
 	// Log gets the reports of each request, nil drops them.
 	Log *slog.Logger
+	// Observers watch what each request decided.
+	Observers []Observer
 	// Now is the clock, time.Now when nil.
 	Now func() time.Time
 }
@@ -276,11 +278,22 @@ func (in Input) surface(code Code) Outcome {
 func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, reports []Report) Result {
 	reports = append(reports, out.Reports...)
 	reports = append(reports, requestFailed(in.Answers, reports)...)
-	if o.Log != nil {
-		surface := "front"
-		if _, ok := in.Event.(AppCall); ok {
-			surface = "emulated"
+	surface := "front"
+	if _, ok := in.Event.(AppCall); ok {
+		surface = "emulated"
+	}
+	if len(o.Observers) > 0 {
+		after := in.Flow
+		if out.Write != nil {
+			after = out.Write
 		}
+		seen := Observation{Event: in.Event, Surface: surface, Before: in.Flow, After: after, Response: out.Response,
+			Reports: reports, Validations: in.Answers.validations(reports), Config: in.Env.Config, Now: o.now()}
+		for _, w := range o.Observers {
+			w.Observe(ctx, seen)
+		}
+	}
+	if o.Log != nil {
 		for _, r := range reports {
 			level := slog.LevelInfo
 			switch {
@@ -322,6 +335,9 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			}
 			if r.Event == "webhook.abandoned" {
 				args = append(args, "host", r.Host, "duration_ms", r.Elapsed.Milliseconds())
+			}
+			if r.Event == "consent.resubmitted" {
+				args = append(args, "result", r.Result)
 			}
 			o.Log.Log(ctx, level, r.Event, args...)
 		}

@@ -23,6 +23,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -56,7 +57,7 @@ func testServices(t *testing.T, database httpx.Check) services {
 	// Its sources outside every allowlist of the tests.
 	far := store.App{ID: "far", LoginURL: "http://far/login", ConsentURL: "http://far/consent", AuthMode: "network",
 		AllowedSources: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}}
-	return services{database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app, far}, nil, store.DefaultSettings())}}
+	return services{metrics: metrics.New(200, nil), database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app, far}, nil, store.DefaultSettings())}}
 }
 
 func testConfig(t *testing.T, hydraAdminURL string) *config.Config {
@@ -581,4 +582,82 @@ func TestHydraSource(t *testing.T) {
 	if _, err := hydraSource(config.Hydra{Version: "2.2", SystemSecrets: config.List{""}}, nil); err == nil {
 		t.Error("an empty secret accepted")
 	}
+}
+
+// /metrics stays up with Redis and the database down, which a scrape never touches, on
+// the main port, behind security.metrics_authorized_hosts (doc, Prometheus).
+func TestMetricsRoute(t *testing.T) {
+	hydra := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer hydra.Close()
+	logger := slog.New(slog.DiscardHandler)
+	services := testServices(t, func(context.Context) error { return errors.New("database down") })
+	down := errors.New("redis down")
+	services.states = pinged{services.states, &down}
+	cfg := testConfig(t, hydra.URL)
+	h, err := newHandler(cfg, logger, logger, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(remote string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		r.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	rec := get("10.1.2.3:1")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "hydra_dispatcher_build_info") || !strings.Contains(rec.Body.String(), `hydra_mode="fallback"`) ||
+		!strings.Contains(rec.Body.String(), `state_backend="memory"`) || !strings.Contains(rec.Body.String(), "go_goroutines") || !strings.Contains(rec.Body.String(), "hydra_dispatcher_hydra_in_flight 0") {
+		t.Errorf("scrape: %d\n%s", rec.Code, rec.Body)
+	}
+	if rec := get("203.0.113.9:1"); rec.Code != http.StatusForbidden {
+		t.Errorf("outside the allowlist: %d", rec.Code)
+	}
+	if !strings.Contains(get("10.1.2.3:1").Body.String(), `route="/metrics"`) {
+		t.Error("the requests are not counted")
+	}
+}
+
+// observability.metrics.listen: /metrics on a port of its own, gone from the main one.
+func TestMetricsListen(t *testing.T) {
+	hydra := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer hydra.Close()
+	logger := slog.New(slog.DiscardHandler)
+	cfg := testConfig(t, hydra.URL)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Observability.Metrics.Listen = ln.Addr().String()
+	_ = ln.Close()
+	local := config.List{"127.0.0.1/32"}
+	cfg.Security.MetricsAuthorizedHosts = &local
+	services := testServices(t, func(context.Context) error { return nil })
+	h, err := newHandler(cfg, logger, logger, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	r.RemoteAddr = "10.1.2.3:1"
+	h.ServeHTTP(rec, r)
+	if rec.Code == http.StatusOK {
+		t.Errorf("/metrics still on the main port: %d", rec.Code)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	wait, err := serveMetrics(ctx, cfg, services.metrics, logger, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Get("http://" + cfg.Observability.Metrics.Listen + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "hydra_dispatcher_build_info") {
+		t.Errorf("dedicated port: %d %s", resp.StatusCode, body)
+	}
+	cancel()
+	wait()
 }

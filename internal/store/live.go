@@ -35,6 +35,10 @@ type Live struct {
 	mu     sync.Mutex
 	warned []string // the warnings last logged
 	failed bool     // the last refresh failed
+
+	// OnRefresh, nil for none, is told of each refresh that ended, nil for one that
+	// succeeded; not of one the caller canceled. It is set before Run.
+	OnRefresh func(err error)
 }
 
 // NewLive reads a first snapshot: without one, nothing can be served. The
@@ -64,6 +68,9 @@ func (l *Live) Refresh(ctx context.Context) error {
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return err
 		}
+		if l.OnRefresh != nil {
+			l.OnRefresh(err)
+		}
 		// An error: the replica serves a configuration that no longer
 		// follows the database.
 		if !l.failed && l.current.Load() != nil {
@@ -71,6 +78,9 @@ func (l *Live) Refresh(ctx context.Context) error {
 		}
 		l.failed = true
 		return err
+	}
+	if l.OnRefresh != nil {
+		l.OnRefresh(nil)
 	}
 	if l.failed {
 		l.logger.InfoContext(ctx, "config.refresh_recovered")

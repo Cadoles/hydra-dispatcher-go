@@ -260,3 +260,29 @@ func TestLiveRunStops(t *testing.T) {
 		t.Errorf("a refresh stopped with Run logged as failed:\n%s", logs.String())
 	}
 }
+
+// OnRefresh hears of each refresh that ended, not of one its caller canceled.
+func TestLiveOnRefresh(t *testing.T) {
+	src := &fakeSource{snapshot: &Snapshot{}}
+	logger := slog.New(slog.DiscardHandler)
+	live, err := NewLive(context.Background(), src, logger, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var heard []error
+	live.OnRefresh = func(err error) { heard = append(heard, err) }
+	if err := live.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	down := errors.New("down")
+	src.set(nil, down)
+	if err := live.Refresh(context.Background()); !errors.Is(err, down) {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = live.Refresh(canceled)
+	if len(heard) != 2 || heard[0] != nil || !errors.Is(heard[1], down) {
+		t.Errorf("heard %v", heard)
+	}
+}
