@@ -465,7 +465,7 @@ func TestHTTPCountsAPanic(t *testing.T) {
 func TestFiltered(t *testing.T) {
 	var logs bytes.Buffer
 	m := New(200, slog.New(slog.NewJSONHandler(&logs, nil)))
-	h := httpx.Chain(m.Filtered([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "full"), httpx.RealIP(nil))
+	h := httpx.Chain(m.Filtered([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, "full", nil), httpx.RealIP(nil))
 	get := func(remote, accept string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 		r.RemoteAddr = remote

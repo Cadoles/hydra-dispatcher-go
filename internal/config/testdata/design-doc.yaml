@@ -26,6 +26,7 @@ secrets:
   challenge_key: "${DISPATCHER_CHALLENGE_KEY}"     # 32 octets : HMAC des challenges d'étape
   challenge_keys_previous: []                      # vérification seule, pour la rotation
   webhook_signing_key: "${DISPATCHER_WEBHOOK_KEY}" # HMAC des requêtes webhook
+  audit_key: "${DISPATCHER_AUDIT_KEY:-}"           # HMAC du subject dans l'audit ; vide : dérivée de challenge_key
 tls:
   min_version: "1.2"             # suites conformes au guide TLS de l'ANSSI
   ca_file: ""                    # CA dédiée pour Hydra et l'IdP admin ; les webhooks ont webhooks.ca_file

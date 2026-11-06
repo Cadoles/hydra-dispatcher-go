@@ -288,7 +288,7 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			after = out.Write
 		}
 		seen := Observation{Event: in.Event, Surface: surface, Before: in.Flow, After: after, Response: out.Response,
-			Reports: reports, Validations: in.Answers.validations(reports), Config: in.Env.Config, Now: o.now()}
+			Reports: reports, Answers: in.Answers, Validations: in.Answers.validations(reports), Config: in.Env.Config, Now: o.now()}
 		for _, w := range o.Observers {
 			w.Observe(ctx, seen)
 		}

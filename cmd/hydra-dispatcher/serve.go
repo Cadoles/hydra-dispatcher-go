@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"log/syslog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -15,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
@@ -66,6 +70,13 @@ func serve(ctx context.Context, args []string) error {
 	}
 	var inFlight httpx.InFlight
 	watch := metrics.New(cfg.Observability.Metrics.MaxLabelValues, logger)
+	audited, closeAudit, err := newAudit(cfg, os.Stdout)
+	if err != nil {
+		_ = states.Close()
+		_ = db.Close()
+		return err
+	}
+	defer closeAudit()
 	refreshCtx, stopRefresh := context.WithCancel(ctx)
 	refreshed := make(chan struct{})
 	// The stores close once the configuration is no longer refreshed and no
@@ -88,7 +99,7 @@ func serve(ctx context.Context, args []string) error {
 		live.Run(refreshCtx, store.RefreshEvery)
 	}()
 
-	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch})
+	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited})
 	if err != nil {
 		stop()
 		return err
@@ -98,7 +109,7 @@ func serve(ctx context.Context, args []string) error {
 		stop()
 		return err
 	}
-	stopMetrics, err := serveMetrics(ctx, cfg, watch, logger, logs.access)
+	stopMetrics, err := serveMetrics(ctx, cfg, watch, audited, logger, logs.access)
 	if err != nil {
 		_ = ln.Close()
 		stop()
@@ -122,7 +133,7 @@ func serve(ctx context.Context, args []string) error {
 // serveMetrics serves /metrics on observability.metrics.listen, a port of its own that
 // the ingress does not expose, filtered as on the main one; without that key, it does
 // nothing and newHandler routes /metrics. The function it returns waits for its end.
-func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metrics, logger, accessLogger *slog.Logger) (func(), error) {
+func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metrics, audited *audit.Log, logger, accessLogger *slog.Logger) (func(), error) {
 	addr := cfg.Observability.Metrics.Listen
 	if addr == "" {
 		return func() {}, nil
@@ -136,7 +147,7 @@ func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metric
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", watch.Filtered(hosts, cfg.Observability.LogIP))
+	mux.Handle("GET /metrics", watch.Filtered(hosts, cfg.Observability.LogIP, func(c context.Context) { audited.Refused(c, "metrics") }))
 	handler := httpx.Chain(httpx.Routes(mux), httpx.RealIP(trusted), httpx.Trace(nil),
 		httpx.AccessLog(accessLogger, cfg.Observability.AccessLogSample, cfg.Observability.LogIP), httpx.Recover(logger))
 	ln, err := net.Listen("tcp", addr)
@@ -152,6 +163,36 @@ func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metric
 		}
 	}()
 	return func() { <-done }, nil
+}
+
+// newAudit opens the audit log where observability.audit.output says: stdout beside the
+// other two streams, told apart by log_type, a file it appends to, or syslog, the
+// failure to open it stopping serve: an audit log must not vanish in silence. Its level
+// and format do not follow log_level or log_format: a SIEM reads it, in JSON.
+func newAudit(cfg *config.Config, stdout io.Writer) (*audit.Log, func(), error) {
+	w, closer := stdout, func() {}
+	switch out := cfg.Observability.Audit.Output; {
+	case out == "syslog":
+		s, err := syslog.New(syslog.LOG_AUTHPRIV|syslog.LOG_INFO, "hydra-dispatcher")
+		if err != nil {
+			return nil, nil, fmt.Errorf("observability.audit.output: %w", err)
+		}
+		w, closer = s, func() { _ = s.Close() }
+	case strings.HasPrefix(out, "file:"):
+		f, err := os.OpenFile(strings.TrimPrefix(out, "file:"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return nil, nil, fmt.Errorf("observability.audit.output: %w", err)
+		}
+		w, closer = f, func() { _ = f.Close() }
+	}
+	key := cfg.Secrets.AuditKey
+	if key == nil {
+		mac := hmac.New(sha256.New, cfg.Secrets.ChallengeKey)
+		mac.Write([]byte("dispatcher-audit-key"))
+		key = mac.Sum(nil)
+	}
+	logger := slog.New(newLogHandler(w, "json", slog.LevelInfo)).With("log_type", "audit")
+	return audit.New(logger, key, !cfg.Observability.Audit.PseudonymizeSubject), closer, nil
 }
 
 // loggers are the application, access and warnings loggers of newLoggers.
@@ -264,8 +305,9 @@ type services struct {
 	database httpx.Check
 	states   state.StateStore
 	config   snapshots
-	// metrics is the catalogue of the instance.
+	// metrics is the catalogue of the instance, audit its audit log.
 	metrics *metrics.Metrics
+	audit   *audit.Log
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -320,7 +362,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Source:                 source,
 		Hydra:                  hydraClient,
 		Webhooks:               watch.Webhooks(webhooks),
-		Observers:              []flow.Observer{watch},
+		Observers:              []flow.Observer{watch, s.audit},
 		BaseURL:                cfg.Server.BaseURL,
 		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),
 		Keys:                   keys,
@@ -355,7 +397,10 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		LegacyV1Paths:   cfg.EmulatedAPI.LegacyV1Paths,
 		Logger:          logger,
 		LogIP:           cfg.Observability.LogIP,
-		Refused:         func() { watch.Refused("emulated") },
+		Refused: func(c context.Context) {
+			watch.Refused("emulated")
+			s.audit.Refused(c, "emulated")
+		},
 	})
 	pages.Register(mux)
 	if cfg.Observability.Metrics.Listen == "" {
@@ -363,7 +408,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		if err != nil {
 			return nil, err
 		}
-		mux.Handle("GET /metrics", watch.Filtered(hosts, cfg.Observability.LogIP))
+		mux.Handle("GET /metrics", watch.Filtered(hosts, cfg.Observability.LogIP, func(c context.Context) { s.audit.Refused(c, "metrics") }))
 	}
 
 	csp := map[string][]string{}

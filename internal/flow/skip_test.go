@@ -95,7 +95,7 @@ func ignoredFor(kind, reason string) func(t *testing.T, p played) {
 func acceptedSkip(kind string) func(t *testing.T, p played) {
 	return func(t *testing.T, p played) {
 		t.Helper()
-		if !slices.Contains(p.Reports, Report{Event: "skip.accepted", Kind: kind}) {
+		if !slices.ContainsFunc(p.Reports, func(r Report) bool { return r.Event == "skip.accepted" && r.Kind == kind && r.Flow != "" }) {
 			t.Errorf("no skip.accepted %s: %+v", kind, p.Reports)
 		}
 		if p.Response.Remember != nil {

@@ -26,6 +26,8 @@ type Observation struct {
 	Before, After *Flow
 	Response      Response
 	Reports       []Report
+	// Answers are the calls made during the request, what they read and what they sent.
+	Answers Answers
 	// Validations are how the challenges of Hydra read during the request came out.
 	Validations []Validation
 	Config      *store.Snapshot

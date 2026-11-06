@@ -89,6 +89,9 @@ type Secrets struct {
 	ChallengeKey           Key  `yaml:"challenge_key"`
 	ChallengeKeysPrevious  Keys `yaml:"challenge_keys_previous"`
 	WebhookSigningKey      Key  `yaml:"webhook_signing_key"`
+	// AuditKey pseudonymises the subjects of the audit log; empty, a key derived from
+	// ChallengeKey, whose rotation then changes the pseudonyms (Q75).
+	AuditKey Key `yaml:"audit_key"`
 }
 
 type TLS struct {

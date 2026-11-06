@@ -278,6 +278,15 @@ func (f *Flow) Reduce() *Flow {
 	}
 }
 
+// ClientID is the client_id of the login request's client; "" without one, or of no
+// flow.
+func (f *Flow) ClientID() string {
+	if f == nil {
+		return ""
+	}
+	return f.clientID()
+}
+
 func (f *Flow) clientID() string {
 	var c struct {
 		ID string `json:"client_id"`

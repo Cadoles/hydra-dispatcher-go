@@ -280,6 +280,7 @@ func (s Secrets) checkSharedKeys(fail func(path, format string, args ...any)) {
 		{"secrets.encryption_key", append(Keys{s.EncryptionKey}, s.EncryptionKeysPrevious...)},
 		{"secrets.challenge_key", append(Keys{s.ChallengeKey}, s.ChallengeKeysPrevious...)},
 		{"secrets.webhook_signing_key", Keys{s.WebhookSigningKey}},
+		{"secrets.audit_key", Keys{s.AuditKey}},
 	} {
 		for _, k := range ring.keys {
 			switch other, ok := owner[string(k)]; {

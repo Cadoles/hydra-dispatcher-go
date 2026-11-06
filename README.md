@@ -45,6 +45,13 @@ too, with the warning `bootstrap.claims_widened`.
 before going back to the previous image; in a terminal it names the migration
 and asks, unless `-yes`.
 
+The audit log (`observability.audit.output`: `stdout`, beside the other two streams
+under `log_type` `audit`, `file:<path>`, or `syslog`) is for a SIEM: authentications
+that succeed or fail, skips, a subject that changes between steps, logouts, IP refusals,
+with the full IP. Its subjects are an HMAC by `secrets.audit_key`, or without it by a
+key derived from `secrets.challenge_key`, whose rotation then changes the pseudonyms;
+`observability.audit.pseudonymize_subject: false` writes them in clear.
+
 `serve` exposes `/metrics` (Prometheus, OpenMetrics when asked for), in the memory
 of the instance, a scrape touching neither Redis nor the database, behind
 `security.metrics_authorized_hosts`; or on a port of its own with

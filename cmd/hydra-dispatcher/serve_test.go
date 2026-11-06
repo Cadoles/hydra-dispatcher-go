@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
@@ -57,7 +58,7 @@ func testServices(t *testing.T, database httpx.Check) services {
 	// Its sources outside every allowlist of the tests.
 	far := store.App{ID: "far", LoginURL: "http://far/login", ConsentURL: "http://far/consent", AuthMode: "network",
 		AllowedSources: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}}
-	return services{metrics: metrics.New(200, nil), database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app, far}, nil, store.DefaultSettings())}}
+	return services{metrics: metrics.New(200, nil), audit: audit.New(slog.New(slog.DiscardHandler), []byte("k"), false), database: database, states: mem, config: fixedSnapshot{store.NewSnapshot([]store.App{app, far}, nil, store.DefaultSettings())}}
 }
 
 func testConfig(t *testing.T, hydraAdminURL string) *config.Config {
@@ -645,7 +646,7 @@ func TestMetricsListen(t *testing.T) {
 		t.Errorf("/metrics still on the main port: %d", rec.Code)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	wait, err := serveMetrics(ctx, cfg, services.metrics, logger, logger)
+	wait, err := serveMetrics(ctx, cfg, services.metrics, services.audit, logger, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,4 +661,50 @@ func TestMetricsListen(t *testing.T) {
 	}
 	cancel()
 	wait()
+}
+
+// observability.audit.output: a file it appends to, one that cannot open stops serve;
+// the pseudonym without secrets.audit_key is derived, another key gives another one.
+func TestNewAudit(t *testing.T) {
+	hydra := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer hydra.Close()
+	cfg := testConfig(t, hydra.URL)
+	path := filepath.Join(t.TempDir(), "audit.log")
+	cfg.Observability.Audit.Output = "file:" + path
+	write := func() string {
+		log, closer, err := newAudit(cfg, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closer()
+		log.Refused(context.Background(), "metrics")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	write()
+	text := write()
+	if strings.Count(text, `"log_type":"audit"`) != 2 || strings.Count(text, `"msg":"security.ip_rejected"`) != 2 {
+		t.Errorf("not appended, or not the audit stream: %s", text)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v, err %v", info.Mode(), err)
+	}
+	cfg.Observability.Audit.Output = "file:" + filepath.Join(t.TempDir(), "missing", "audit.log")
+	if _, _, err := newAudit(cfg, io.Discard); err == nil || !strings.Contains(err.Error(), "observability.audit.output") {
+		t.Errorf("err = %v", err)
+	}
+	var out bytes.Buffer
+	cfg.Observability.Audit.Output = "stdout"
+	log, closer, err := newAudit(cfg, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closer()
+	log.Refused(context.Background(), "metrics")
+	if !strings.Contains(out.String(), `"log_type":"audit"`) {
+		t.Errorf("stdout: %s", out.String())
+	}
 }

@@ -184,8 +184,9 @@ func (m *Metrics) Handler() http.Handler {
 }
 
 // Filtered is Handler behind security.metrics_authorized_hosts. A refusal is logged and
-// counted: the access log keeps silent on a GET of /metrics.
-func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string) http.Handler {
+// counted, the access log keeping silent on a GET of /metrics, and given to refused, nil
+// for none: the audit log.
+func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string, refused func(context.Context)) http.Handler {
 	next := m.Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := httpx.ClientIP(r.Context())
@@ -193,6 +194,9 @@ func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string) http.Handler {
 			m.Refused("metrics")
 			if m.log != nil {
 				m.log.WarnContext(r.Context(), "security.ip_rejected", "surface", "metrics", "ip", httpx.FormatIP(ip, logIP))
+			}
+			if refused != nil {
+				refused(r.Context())
 			}
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
