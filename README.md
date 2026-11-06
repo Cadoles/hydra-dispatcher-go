@@ -169,8 +169,10 @@ the `dispatcher_remember` cookie, then without it (the skip ignored, then
 another account refused), with `prompt=consent` (the screen without a flow,
 refused) and reloaded during the redirection; the logout, confirmed through the
 `logout_url` of each app, refused, asked by a client with its `id_token_hint`,
-and a chain stopped at an app, passed by a new demand or cut by the next login;
-`prompt=consent` accepted and refused; back to the choice. Start `make up-go` in
+and a chain stopped at an app, passed by a new demand, cut by the next login or left
+by the link of page E1003; what the apps answer to a challenge that is not theirs; a
+preload and a change of language on the logout's page; `prompt=consent` accepted and
+refused; back to the choice. Start `make up-go` in
 `hydra-dev`, whose README sets the `*.hydra.test` names up, then:
 
 ```sh
@@ -181,7 +183,8 @@ go run ./examples/hydra-dev/e2e -v second-login
 
 `-back-channel http://10.0.6.1:<port>` adds a check to the scenario of a chain
 stopped: a client registered for the run hears of the session deleted on that
-port of this host, which Hydra's container reaches.
+port of this host, which Hydra's container reaches. `-cookie-key` opens the note of
+logout, hydra-dev's development key by default.
 
 ## Fixture tools
 

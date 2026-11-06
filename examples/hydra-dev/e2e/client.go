@@ -391,3 +391,18 @@ func random() string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+// idTokenClaims reads the claims of an id_token, its signature not checked: the client
+// got it from the token endpoint.
+func idTokenClaims(token string) (map[string]any, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("an id_token of %d parts", len(parts))
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]any
+	return claims, json.Unmarshal(data, &claims)
+}

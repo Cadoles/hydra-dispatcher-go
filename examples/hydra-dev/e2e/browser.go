@@ -143,6 +143,23 @@ func (b *browser) do(req *http.Request, body []byte) (response, error) {
 	return response{resp, string(data)}, nil
 }
 
+// preload makes a request as a browser's preload does, Sec-Purpose given unless "",
+// without following it, and returns its status.
+func (b *browser) preload(method, u, purpose string) (int, error) {
+	req, err := http.NewRequest(method, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	if purpose != "" {
+		req.Header.Set("Sec-Purpose", purpose)
+	}
+	resp, err := b.do(req, nil)
+	if err != nil {
+		return 0, err
+	}
+	return resp.StatusCode, nil
+}
+
 // post sends a form from origin, a site or not, with its Origin, and follows the
 // redirects: what another site's page can make a browser do.
 func (b *browser) post(u string, values url.Values, origin string) (page, error) {
