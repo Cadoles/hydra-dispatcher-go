@@ -22,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
 //go:embed migrations/*.sql
@@ -149,42 +151,12 @@ func (p *Postgres) migrator() (*goose.Provider, error) {
 		goose.WithSessionLocker(locker), goose.WithDisableGlobalRegistry(true))
 }
 
-// App is a login app.
-type App struct {
-	ID         string
-	LoginURL   string
-	ConsentURL string
-	// LogoutURL "" leaves the app out of the logout.
-	LogoutURL string
-	Method    string
-	// AuthMode is network (AllowedSources) or mtls (ClientCertFingerprint):
-	// how the emulated API knows the app.
-	AuthMode              string
-	AllowedSources        []netip.Prefix
-	ClientCertFingerprint string
-	// ReceiveClaims names the claims of the previous steps the app receives:
-	// all of them when nil, none when empty.
-	ReceiveClaims []string
-}
-
-// Flow is a sequence of apps the user may choose.
-type Flow struct {
-	ID          string
-	Title       map[string]string
-	Description map[string]string
-	// IconURL is nil for no icon.
-	IconURL map[string]string
-	Enabled bool
-	// ACR "" sends none.
-	ACR   string
-	Steps []Step // by position
-}
-
-type Step struct {
-	AppID        string `json:"app_id"`
-	Position     int    `json:"position"`
-	SubjectCheck string `json:"subject_check"` // none, equal or claim:<name>
-}
+// The entities of the configuration, and their rules: internal/domain.
+type (
+	App  = domain.App
+	Flow = domain.Flow
+	Step = domain.Step
+)
 
 // Snapshot is the configuration at one moment, read in one transaction.
 // Nothing changes it: Live replaces it whole.

@@ -1,0 +1,186 @@
+package domain
+
+import (
+	"fmt"
+	"net/netip"
+	"slices"
+	"strings"
+	"testing"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
+// violations collects what a check reports, as "field: message" lines.
+func violations(check func(Fail)) []string {
+	var got []string
+	check(func(field, format string, args ...any) {
+		got = append(got, field+": "+fmt.Sprintf(format, args...))
+	})
+	return got
+}
+
+// wants tells whether got holds a line starting with each of want, and
+// nothing else.
+func wants(t *testing.T, name string, got []string, want ...string) {
+	t.Helper()
+	for _, w := range want {
+		if !slices.ContainsFunc(got, func(g string) bool { return strings.HasPrefix(g, w) }) {
+			t.Errorf("%s: no %q in %q", name, w, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("%s: %d violations %q, want %d", name, len(got), got, len(want))
+	}
+}
+
+const fingerprint = "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+
+func validApp() App {
+	return App{ID: "a", LoginURL: "http://a/login", ConsentURL: "https://a/consent", Method: "pwd", AuthMode: "network",
+		AllowedSources: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, ReceiveClaims: []string{"email"}}
+}
+
+func TestApp(t *testing.T) {
+	for name, tt := range map[string]struct {
+		change func(*App)
+		want   []string
+	}{
+		"valid":           {func(*App) {}, nil},
+		"mtls":            {func(a *App) { a.AuthMode, a.AllowedSources, a.ClientCertFingerprint = "mtls", nil, fingerprint }, nil},
+		"no id":           {func(a *App) { a.ID = "" }, []string{"id: is required"}},
+		"id with a slash": {func(a *App) { a.ID = "a/b" }, []string{`id: "a/b" is not an id`}},
+		"id of 129":       {func(a *App) { a.ID = strings.Repeat("a", 129) }, []string{"id: "}},
+		"relative URL":    {func(a *App) { a.LoginURL = "/login" }, []string{"login_url: is not an absolute"}},
+		"no consent URL":  {func(a *App) { a.ConsentURL = "" }, []string{"consent_url: is required"}},
+		"ftp logout":      {func(a *App) { a.LogoutURL = "ftp://a/out" }, []string{`logout_url: "ftp://a/out" is not`}},
+		"no method":       {func(a *App) { a.Method = "" }, []string{"method: is required"}},
+		"long method":     {func(a *App) { a.Method = strings.Repeat("é", 65) }, []string{"method: is longer than 64 characters"}},
+		"method of 64":    {func(a *App) { a.Method = strings.Repeat("é", 64) }, nil},
+		"NUL in a method": {func(a *App) { a.Method = "m\x00" }, []string{"method: contains a NUL character"}},
+		"invalid UTF-8":   {func(a *App) { a.Method = "m\xff" }, []string{"method: is not UTF-8"}},
+		"auth mode":       {func(a *App) { a.AuthMode = "" }, []string{`auth_mode: "" is not network or mtls`}},
+		"fingerprint":     {func(a *App) { a.ClientCertFingerprint = fingerprint }, []string{"client_cert_fingerprint: only applies to auth_mode: mtls"}},
+		"sources in mtls": {func(a *App) { a.AuthMode, a.ClientCertFingerprint = "mtls", fingerprint }, []string{"allowed_sources: only applies to auth_mode: network"}},
+		"no fingerprint":  {func(a *App) { a.AuthMode, a.AllowedSources = "mtls", nil }, []string{"client_cert_fingerprint: must be the SHA-256"}},
+		"uppercase": {func(a *App) {
+			a.AuthMode, a.AllowedSources, a.ClientCertFingerprint = "mtls", nil, strings.ToUpper(fingerprint)
+		}, []string{"client_cert_fingerprint: must be the SHA-256"}},
+		"unmasked source":     {func(a *App) { a.AllowedSources = []netip.Prefix{netip.MustParsePrefix("10.1.2.3/8")} }, []string{`allowed_sources[0]: "10.1.2.3/8" is not a network`}},
+		"zero source":         {func(a *App) { a.AllowedSources = []netip.Prefix{{}} }, []string{"allowed_sources[0]: "}},
+		"empty claim":         {func(a *App) { a.ReceiveClaims = []string{"email", ""} }, []string{"receive_claims[1]: is empty"}},
+		"no claim":            {func(a *App) { a.ReceiveClaims = []string{} }, nil},
+		"NUL in a claim":      {func(a *App) { a.ReceiveClaims = []string{"a\x00"} }, []string{"receive_claims[0]: contains a NUL character"}},
+		"every claim (nil)":   {func(a *App) { a.ReceiveClaims = nil }, nil},
+		"several at once":     {func(a *App) { a.ID, a.Method = "", "" }, []string{"id: is required", "method: is required"}},
+		"URL with a password": {func(a *App) { a.LoginURL = "ftp://user:secret@a/?token=t" }, []string{`login_url: "ftp://user:xxxxx@a/" is not`}},
+	} {
+		a := validApp()
+		tt.change(&a)
+		wants(t, name, violations(a.Check), tt.want...)
+	}
+}
+
+func validFlow() Flow {
+	return Flow{ID: "f", Title: map[string]string{"fr": "F"}, Description: map[string]string{"": "D"}, Enabled: true, ACR: "loa2",
+		Steps: []Step{{AppID: "a", Position: 0, SubjectCheck: "none"}, {AppID: "b", Position: 10, SubjectCheck: "claim:email"}}}
+}
+
+func TestFlow(t *testing.T) {
+	apps := func(id string) bool { return id == "a" || id == "b" }
+	for name, tt := range map[string]struct {
+		change func(*Flow)
+		want   []string
+	}{
+		"valid":              {func(*Flow) {}, nil},
+		"no id":              {func(f *Flow) { f.ID = "" }, []string{"id: is required"}},
+		"no title":           {func(f *Flow) { f.Title = nil }, []string{"title: is required"}},
+		"empty title":        {func(f *Flow) { f.Title = map[string]string{"fr": ""} }, []string{"title: is required"}},
+		"no description":     {func(f *Flow) { f.Description = map[string]string{} }, []string{"description: is required"}},
+		"NUL in a locale":    {func(f *Flow) { f.Title["fr\x00"] = "F" }, []string{`title: key "fr\x00" contains a NUL`}},
+		"NUL in an icon":     {func(f *Flow) { f.IconURL = map[string]string{"": "http://i\x00"} }, []string{"icon_url: contains a NUL"}},
+		"no steps":           {func(f *Flow) { f.Steps = nil }, []string{"steps: is empty"}},
+		"unknown app":        {func(f *Flow) { f.Steps[1].AppID = "c" }, []string{`steps[1]: app "c" is not declared`}},
+		"app twice":          {func(f *Flow) { f.Steps[1].AppID = "a" }, []string{`steps[1]: app "a" is already a step of this flow`}},
+		"position twice":     {func(f *Flow) { f.Steps[1].Position = 0 }, []string{"steps[1]: position 0 is already taken"}},
+		"position of 2^31":   {func(f *Flow) { f.Steps[1].Position = 1 << 31 }, []string{"steps[1]: position 2147483648 is out of range"}},
+		"negative position":  {func(f *Flow) { f.Steps[1].Position = -1 << 31 }, nil},
+		"no subject check":   {func(f *Flow) { f.Steps[0].SubjectCheck = "" }, []string{`steps[0].subject_check: "" is not none, equal or claim:<name>`}},
+		"claim: alone":       {func(f *Flow) { f.Steps[0].SubjectCheck = "claim:" }, []string{`steps[0].subject_check: "claim:" is not`}},
+		"long subject check": {func(f *Flow) { f.Steps[0].SubjectCheck = "claim:" + strings.Repeat("c", 123) }, []string{"steps[0].subject_check: is longer than 128 characters"}},
+		"acr with a space":   {func(f *Flow) { f.ACR = "loa 2" }, []string{`acr: "loa 2" contains a space`}},
+		"long acr":           {func(f *Flow) { f.ACR = strings.Repeat("a", 256) }, []string{"acr: is longer than 255 characters"}},
+		"no acr":             {func(f *Flow) { f.ACR = "" }, nil},
+	} {
+		f := validFlow()
+		tt.change(&f)
+		wants(t, name, violations(func(fail Fail) { f.Check(fail, apps) }), tt.want...)
+	}
+}
+
+func TestAPIClient(t *testing.T) {
+	hash, err := HashSecret("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tt := range map[string]struct {
+		c    APIClient
+		want []string
+	}{
+		"valid":            {APIClient{ID: "c", SecretHash: hash, Scopes: []string{"admin:flows"}}, nil},
+		"Symfony's hash":   {APIClient{ID: "c", SecretHash: symfonyHash, Scopes: []string{}}, nil},
+		"no hash":          {APIClient{ID: "c"}, []string{"secret: is not a bcrypt hash"}},
+		"plain secret":     {APIClient{ID: "c", SecretHash: "s3cret"}, []string{"secret: is not a bcrypt hash"}},
+		"empty scope":      {APIClient{ID: "c", SecretHash: hash, Scopes: []string{""}}, []string{"scopes[0]: is empty"}},
+		"scope with space": {APIClient{ID: "c", SecretHash: hash, Scopes: []string{"a", "admin flows"}}, []string{`scopes[1]: "admin flows" contains a space`}},
+		"bad id":           {APIClient{ID: ".c", SecretHash: hash}, []string{`id: ".c" is not an id`}},
+	} {
+		wants(t, name, violations(tt.c.Check), tt.want...)
+	}
+	if !SecretMatches(hash, "s3cret") || SecretMatches(hash, "s3cre") {
+		t.Error("SecretMatches")
+	}
+}
+
+// symfonyHash is the hash Symfony's NativePasswordHasher (bcrypt, cost 4)
+// gave symfonySecret, 100 bytes long.
+const symfonyHash = "$2y$04$iuml1FnUXrHaDd/Sxqt9UOniJuDi.W.KCQHk3.1uwFwFUwQmLYt5W"
+
+var symfonySecret = strings.Repeat("0123456789", 10)
+
+// A secret past 72 bytes is hashed first, as Symfony does: its first 72 bytes
+// are another secret. A shorter one is hashed as is.
+func TestBcryptInput(t *testing.T) {
+	if err := bcrypt.CompareHashAndPassword([]byte(symfonyHash), BcryptInput(symfonySecret)); err != nil {
+		t.Errorf("Symfony's hash: %v", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(symfonyHash), BcryptInput(symfonySecret[:72])) == nil {
+		t.Error("the first 72 bytes check too")
+	}
+	if got := string(BcryptInput("s3cret")); got != "s3cret" {
+		t.Errorf("short secret: %q", got)
+	}
+	if got := BcryptInput("s3\x00cret"); len(got) != 72 || strings.Contains(string(got), "cret") {
+		t.Errorf("secret with a NUL: %q", got)
+	}
+	if !SecretMatches(symfonyHash, symfonySecret) {
+		t.Error("SecretMatches on Symfony's hash")
+	}
+}
+
+func TestParsePrefixes(t *testing.T) {
+	got, err := ParsePrefixes([]string{"10.1.2.3", "10.1.2.3/16", "::ffff:10.0.0.0/104", "2001:db8::1"})
+	want := []netip.Prefix{
+		netip.MustParsePrefix("10.1.2.3/32"), netip.MustParsePrefix("10.1.0.0/16"),
+		netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::1/128"),
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("ParsePrefixes = %v, %v; want %v", got, err, want)
+	}
+	if _, err := ParsePrefixes([]string{"pod-a"}); err == nil || !strings.Contains(err.Error(), `"pod-a" is neither`) {
+		t.Errorf("pod-a: %v", err)
+	}
+	// What ParsePrefixes gives, App.Check takes.
+	a := validApp()
+	a.AllowedSources = got
+	wants(t, "parsed sources", violations(a.Check))
+}

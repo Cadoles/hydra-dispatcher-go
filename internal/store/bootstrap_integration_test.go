@@ -16,7 +16,14 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
+
+// symfonyHash is the hash Symfony's NativePasswordHasher (bcrypt, cost 4)
+// gave symfonySecret, 100 bytes long (domain.BcryptInput).
+const symfonyHash = "$2y$04$iuml1FnUXrHaDd/Sxqt9UOniJuDi.W.KCQHk3.1uwFwFUwQmLYt5W"
+
+var symfonySecret = strings.Repeat("0123456789", 10)
 
 // actions sums up changes as "action kind id" lines, the fields of an update
 // or a keep after a colon.
@@ -84,7 +91,7 @@ func TestBootstrapHydraDev(t *testing.T) {
 		t.Errorf("snapshot = %+v", s)
 	}
 	sql2fa := s.Flows[slices.IndexFunc(s.Flows, func(f Flow) bool { return f.ID == "hydra-sql-2fa" })]
-	if !reflect.DeepEqual(sql2fa.Steps, []Step{{"hydra-sql", 0, "none"}, {"hydra-2fa", 1, "none"}}) || sql2fa.IconURL != nil ||
+	if !reflect.DeepEqual(sql2fa.Steps, []Step{{AppID: "hydra-sql", Position: 0, SubjectCheck: "none"}, {AppID: "hydra-2fa", Position: 1, SubjectCheck: "none"}}) || sql2fa.IconURL != nil ||
 		sql2fa.Title["fr"] != "Hydra SQL 2FA" || !sql2fa.Enabled {
 		t.Errorf("hydra-sql-2fa = %+v", sql2fa)
 	}
@@ -515,10 +522,10 @@ dispatcher:
 	}
 	want := []Flow{{
 		ID: "f", Title: map[string]string{"": "F"}, Description: map[string]string{"fr": "D"}, IconURL: map[string]string{"": "http://i/f.svg"},
-		ACR: "gold", Steps: []Step{{"a", 0, "equal"}, {"m", 1, "claim:email"}},
+		ACR: "gold", Steps: []Step{{AppID: "a", Position: 0, SubjectCheck: "equal"}, {AppID: "m", Position: 1, SubjectCheck: "claim:email"}},
 	}, {
 		ID: "g", Title: map[string]string{"fr": "G", "en": "G"}, Description: map[string]string{"": "D"},
-		IconURL: map[string]string{"fr": "http://i/fr.svg", "en": "http://i/en.svg"}, Enabled: true, Steps: []Step{{"a", 0, "none"}},
+		IconURL: map[string]string{"fr": "http://i/fr.svg", "en": "http://i/en.svg"}, Enabled: true, Steps: []Step{{AppID: "a", Position: 0, SubjectCheck: "none"}},
 	}}
 	if !reflect.DeepEqual(s.Flows, want) {
 		t.Errorf("flows = %+v\nwant %+v", s.Flows, want)
@@ -578,7 +585,7 @@ dispatcher:
 		t.Errorf("changes = %q\nwant %q", got, want)
 	}
 	s, _ := p.Snapshot(ctx)
-	if !reflect.DeepEqual(s.Flows[0].Steps, []Step{{"b", 0, "none"}, {"a", 1, "none"}}) || !s.Settings.Remember {
+	if !reflect.DeepEqual(s.Flows[0].Steps, []Step{{AppID: "b", Position: 0, SubjectCheck: "none"}, {AppID: "a", Position: 1, SubjectCheck: "none"}}) || !s.Settings.Remember {
 		t.Errorf("steps = %+v, remember = %v", s.Flows[0].Steps, s.Settings.Remember)
 	}
 	if again, scopes := clientHash(t, p, "client"); again != hash || !slices.Equal(scopes, []string{"admin:apps"}) {
@@ -624,7 +631,7 @@ func TestBootstrapLongSecret(t *testing.T) {
 	if _, err := p.Bootstrap(ctx, seed, Missing, true); err != nil {
 		t.Fatal(err)
 	}
-	if hash, _ := clientHash(t, p, "c"); bcrypt.CompareHashAndPassword([]byte(hash), bcryptInput(symfonySecret)) != nil {
+	if hash, _ := clientHash(t, p, "c"); bcrypt.CompareHashAndPassword([]byte(hash), domain.BcryptInput(symfonySecret)) != nil {
 		t.Errorf("hash %q does not check", hash)
 	}
 	exec(t, p, `UPDATE api_client SET secret_hash = $1`, symfonyHash)

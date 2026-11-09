@@ -2,18 +2,15 @@ package config
 
 import (
 	"cmp"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"math"
 	"reflect"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"gopkg.in/yaml.v3"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
 // Seed is the dispatcher: block, read only by bootstrap to initialise the
@@ -237,7 +234,7 @@ func (s *Seed) resolve() {
 	for i := range s.Apps {
 		a := &s.Apps[i]
 		a.AuthMode = cmp.Or(a.AuthMode, "network")
-		a.ClientCertFingerprint = strings.ToLower(strings.ReplaceAll(a.ClientCertFingerprint, ":", ""))
+		a.ClientCertFingerprint = domain.NormalizeFingerprint(a.ClientCertFingerprint)
 	}
 	for i := range s.Flows {
 		if s.Flows[i].Enabled == nil {
@@ -256,96 +253,53 @@ func (s *Seed) resolve() {
 // method, title, description, secret) and what the Go schema forbids:
 // duplicate ids, a flow without steps, a step on an undeclared app, an app or
 // a position twice in a flow, an identification field of the other auth_mode.
-// Messages never quote a client secret.
+// The rules of an entry are those of internal/domain, which the writes of the
+// store follow too; those of the seed as a file stay here. Messages never
+// quote a client secret.
 func (s *Seed) validate(fail func(path, format string, args ...any)) {
+	// in reports the violations of an entry under its path.
+	in := func(path string) domain.Fail {
+		return func(field, format string, args ...any) {
+			if field != "" {
+				fail(path+"."+field, format, args...)
+				return
+			}
+			fail(path, format, args...)
+		}
+	}
 	apps := map[string]bool{}
 	for i, a := range s.Apps {
 		path := fmt.Sprintf("dispatcher.apps[%d]", i)
-		uniqueID(fail, path, a.ID, apps)
-		for _, u := range []struct {
-			key, value string
-		}{{"login_url", a.LoginURL}, {"consent_url", a.ConsentURL}, {"logout_url", a.LogoutURL}} {
-			if u.value == "" && u.key == "logout_url" {
-				continue
-			}
-			if _, err := absoluteURL(u.value); err != nil {
-				fail(path+"."+u.key, "%v", err)
-			}
+		unique(fail, path, a.ID, apps)
+		app, err := a.App()
+		if err != nil {
+			fail(path+".allowed_sources", "%v", err)
 		}
-		if a.Method == "" {
-			fail(path+".method", "is required")
-		}
+		app.Check(in(path))
 		for _, k := range appKeys {
 			if _, ok := a.Options.keys[k]; ok {
 				fail(path+".options."+k, "is a key of the app, not an option")
 			}
-		}
-		// The field of the other mode would pass unread.
-		switch a.AuthMode {
-		case "network":
-			if a.ClientCertFingerprint != "" {
-				fail(path+".client_cert_fingerprint", "only applies to auth_mode: mtls")
-			}
-		case "mtls":
-			if len(a.AllowedSources) > 0 {
-				fail(path+".allowed_sources", "only applies to auth_mode: network")
-			}
-			if b, err := hex.DecodeString(a.ClientCertFingerprint); err != nil || len(b) != sha256.Size {
-				fail(path+".client_cert_fingerprint", "must be the SHA-256 of the app certificate, in hex, for auth_mode: mtls")
-			}
-		default:
-			fail(path+".auth_mode", "%q is not network or mtls", a.AuthMode)
-		}
-		if _, err := a.AllowedSources.Prefixes(); err != nil {
-			fail(path+".allowed_sources", "%v", err)
 		}
 	}
 
 	flows := map[string]bool{}
 	for i, f := range s.Flows {
 		path := fmt.Sprintf("dispatcher.flows[%d]", i)
-		uniqueID(fail, path, f.ID, flows)
-		if len(f.Title) == 0 {
-			fail(path+".title", "is required")
-		}
-		if len(f.Description) == 0 {
-			fail(path+".description", "is required")
-		}
-		if len(f.Steps) == 0 {
-			fail(path+".steps", "is empty")
-		}
-		if strings.ContainsFunc(f.ACR, unicode.IsSpace) {
-			// acr_values is a space-separated list: no value would match.
-			fail(path+".acr", "%q contains a space", f.ACR)
-		}
-		stepApps, positions := map[string]bool{}, map[int]bool{}
-		for j, step := range f.Steps {
-			stepPath := fmt.Sprintf("%s.steps[%d]", path, j)
-			switch {
-			case !apps[step.AppID]:
-				fail(stepPath, "app %q is not declared in dispatcher.apps", step.AppID)
-			case stepApps[step.AppID]:
-				fail(stepPath, "app %q is already a step of this flow", step.AppID)
-			}
-			if positions[step.Position] {
-				fail(stepPath, "position %d is already taken in this flow", step.Position)
-			}
-			if step.Position < math.MinInt32 || step.Position > math.MaxInt32 {
-				fail(stepPath, "position %d is out of range: the database keeps 32-bit integers", step.Position)
-			}
-			stepApps[step.AppID], positions[step.Position] = true, true
-			if c := step.SubjectCheck; c != "" && c != "none" && c != "equal" && (!strings.HasPrefix(c, "claim:") || c == "claim:") {
-				fail(stepPath+".subject_check", "%q is not none, equal or claim:<name>", c)
-			}
-		}
+		unique(fail, path, f.ID, flows)
+		f.Flow().Check(in(path), func(id string) bool { return apps[id] })
 	}
 
 	clients := map[string]bool{}
 	for i, c := range s.OAuth2Clients {
 		path := fmt.Sprintf("dispatcher.oauth2_clients[%d]", i)
-		uniqueID(fail, path, c.ID, clients)
+		domain.CheckID(in(path), c.ID)
+		unique(fail, path, c.ID, clients)
 		if c.Secret == "" {
 			fail(path+".secret", "is required")
+		}
+		if c.Scopes != nil {
+			domain.CheckScopes(in(path), *c.Scopes)
 		}
 	}
 
@@ -370,20 +324,46 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 	}
 }
 
-// resourceID is Symfony's ResourceId: an id is a path segment of the admin
-// API (/admin/v1/apps/{id}).
-var resourceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-
-func uniqueID(fail func(path, format string, args ...any), path, id string, seen map[string]bool) {
-	switch {
-	case id == "":
-		fail(path+".id", "is required")
-	case !resourceID.MatchString(id):
-		fail(path+".id", "%q is not an id: up to 128 letters, digits, '.', '_' or '-', starting with a letter or a digit", id)
-	case seen[id]:
+// unique refuses an id the seed declares twice; domain.Check refuses a
+// missing or malformed one.
+func unique(fail func(path, format string, args ...any), path, id string, seen map[string]bool) {
+	if domain.ValidID(id) && seen[id] {
 		fail(path+".id", "%q is declared twice", id)
 	}
 	seen[id] = true
+}
+
+// App gives the app as the store keeps it: receive_claims nil when the seed
+// has none, absent or ~, which bootstrap tells apart.
+func (a SeedApp) App() (domain.App, error) {
+	sources, err := domain.ParsePrefixes(a.AllowedSources)
+	if len(sources) == 0 {
+		sources = nil
+	}
+	var claims []string
+	if a.ReceiveClaims != nil {
+		claims = *a.ReceiveClaims
+	}
+	return domain.App{
+		ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
+		AuthMode: a.AuthMode, AllowedSources: sources, ClientCertFingerprint: a.ClientCertFingerprint, ReceiveClaims: claims,
+	}, err
+}
+
+// Flow gives the flow as the store keeps it: steps by position, none for
+// subject_check when the seed leaves it out.
+func (f SeedFlow) Flow() domain.Flow {
+	d := domain.Flow{
+		ID: f.ID, Title: f.Title, Description: f.Description, Enabled: f.Enabled == nil || *f.Enabled, ACR: f.ACR,
+	}
+	if len(f.IconURL) > 0 {
+		d.IconURL = f.IconURL
+	}
+	for _, s := range f.Steps {
+		d.Steps = append(d.Steps, domain.Step{AppID: s.AppID, Position: s.Position, SubjectCheck: cmp.Or(s.SubjectCheck, "none")})
+	}
+	slices.SortFunc(d.Steps, func(a, b domain.Step) int { return cmp.Compare(a.Position, b.Position) })
+	return d
 }
 
 // warnings lists the Symfony keys present in the seed, with the reason they

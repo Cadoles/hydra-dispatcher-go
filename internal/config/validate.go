@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
 // HydraMargin is the margin internal/flow takes from the end of L at Hydra
@@ -303,12 +305,12 @@ func (s Secrets) checkSharedKeys(fail func(path, format string, args ...any)) {
 
 // httpURL checks a base URL: absolute, without query or fragment.
 func httpURL(s string) error {
-	u, err := absoluteURL(s)
+	u, err := domain.AbsoluteURL(s)
 	if err != nil {
 		return err
 	}
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return fmt.Errorf("%q has a query or a fragment", redacted(u))
+		return fmt.Errorf("%q has a query or a fragment", domain.Redacted(u))
 	}
 	return nil
 }
@@ -332,13 +334,13 @@ func publicURL(s string) (*url.URL, error) {
 		// No quote: the user part may hold a password.
 		return nil, errors.New("holds a user, which no browser sends in its Origin")
 	case !strings.HasPrefix(s, u.Scheme+"://"):
-		return nil, fmt.Errorf("%q: write its scheme in lowercase, as browsers send their Origin", redacted(u))
+		return nil, fmt.Errorf("%q: write its scheme in lowercase, as browsers send their Origin", domain.Redacted(u))
 	case u.Host != strings.ToLower(u.Host):
-		return nil, fmt.Errorf("%q: write its host in lowercase, as browsers send their Origin", redacted(u))
+		return nil, fmt.Errorf("%q: write its host in lowercase, as browsers send their Origin", domain.Redacted(u))
 	case defaultPort:
-		return nil, fmt.Errorf("%q: leave out the default port of %s, as browsers do in their Origin", redacted(u), u.Scheme)
+		return nil, fmt.Errorf("%q: leave out the default port of %s, as browsers do in their Origin", domain.Redacted(u), u.Scheme)
 	case p != "" && path.Clean(p) != p:
-		return nil, fmt.Errorf("%q: its path is not clean (%q)", redacted(u), path.Clean(p))
+		return nil, fmt.Errorf("%q: its path is not clean (%q)", domain.Redacted(u), path.Clean(p))
 	}
 	return u, nil
 }
@@ -350,56 +352,12 @@ func pathMatch(p, cookiePath string) bool {
 		(strings.HasSuffix(cookiePath, "/") || p[len(cookiePath)] == '/')
 }
 
-// absoluteURL parses an absolute http(s) URL. Errors hide its password,
-// query and fragment: an error ends up in the logs.
-func absoluteURL(s string) (*url.URL, error) {
-	if s == "" {
-		return nil, errors.New("is required")
-	}
-	u, err := url.Parse(s)
-	if err != nil {
-		return nil, errors.New("is not a valid URL") // url.Parse quotes it whole
-	}
-	switch {
-	case u.Host == "":
-		// Without an authority, as in https//user:password@host, the
-		// password stays in the path: no quote.
-		return nil, errors.New("is not an absolute http(s) URL")
-	case u.Scheme != "http" && u.Scheme != "https":
-		return nil, fmt.Errorf("%q is not an absolute http(s) URL", redacted(u))
-	}
-	return u, nil
-}
-
-// redacted writes u for an error, without what may hold a secret: password,
-// query (?token=…) and fragment.
-func redacted(u *url.URL) string {
-	v := *u
-	v.RawQuery, v.ForceQuery, v.Fragment, v.RawFragment = "", false, "", ""
-	return v.Redacted()
-}
-
 // Prefixes parses a list of CIDRs; a bare address stands for itself (/32 or
 // /128). An IPv4-mapped IPv6 network (::ffff:10.0.0.0/104) is its IPv4
 // network, since clients are matched by their IPv4 address. Load has
 // validated the allowlists and trusted proxies already.
 func (l List) Prefixes() ([]netip.Prefix, error) {
-	ps := make([]netip.Prefix, 0, len(l))
-	for _, s := range l {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			a, err := netip.ParseAddr(s)
-			if err != nil {
-				return nil, fmt.Errorf("%q is neither a CIDR nor an IP address", s)
-			}
-			p = netip.PrefixFrom(a, a.BitLen())
-		}
-		if p.Addr().Is4In6() && p.Bits() >= 128-32 {
-			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-(128-32))
-		}
-		ps = append(ps, p.Masked())
-	}
-	return ps, nil
+	return domain.ParsePrefixes(l)
 }
 
 // Covers reports whether ps hold every address of p, however split.

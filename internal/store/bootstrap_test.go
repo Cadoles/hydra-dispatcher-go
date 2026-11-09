@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 )
 
@@ -80,29 +78,6 @@ dispatcher:
 	}
 }
 
-// symfonyHash is the hash Symfony's NativePasswordHasher (bcrypt, cost 4)
-// gave symfonySecret, 100 bytes long.
-const symfonyHash = "$2y$04$iuml1FnUXrHaDd/Sxqt9UOniJuDi.W.KCQHk3.1uwFwFUwQmLYt5W"
-
-var symfonySecret = strings.Repeat("0123456789", 10)
-
-// A secret past 72 bytes is hashed first, as Symfony does: its first 72 bytes
-// are another secret. A shorter one is hashed as is.
-func TestBcryptInput(t *testing.T) {
-	if err := bcrypt.CompareHashAndPassword([]byte(symfonyHash), bcryptInput(symfonySecret)); err != nil {
-		t.Errorf("Symfony's hash: %v", err)
-	}
-	if bcrypt.CompareHashAndPassword([]byte(symfonyHash), bcryptInput(symfonySecret[:72])) == nil {
-		t.Error("the first 72 bytes check too")
-	}
-	if got := string(bcryptInput("s3cret")); got != "s3cret" {
-		t.Errorf("short secret: %q", got)
-	}
-	if got := bcryptInput("s3\x00cret"); len(got) != 72 || strings.Contains(string(got), "cret") {
-		t.Errorf("secret with a NUL: %q", got)
-	}
-}
-
 func TestFlowFromSeed(t *testing.T) {
 	seed := loadSeed(t, `
 dispatcher:
@@ -116,7 +91,7 @@ dispatcher:
       icon_url: http://icons/f.svg
       steps: [{ id: b, order: 1, subject_check: equal }, { id: a, order: 0 }]
 `)
-	f := flowFromSeed(seed.Flows[0])
+	f := seed.Flows[0].Flow()
 	want := Flow{
 		ID: "f", Title: map[string]string{"": "F"}, Description: map[string]string{"": "D"}, // a plain string: any locale
 		IconURL: map[string]string{"": "http://icons/f.svg"}, Enabled: true,

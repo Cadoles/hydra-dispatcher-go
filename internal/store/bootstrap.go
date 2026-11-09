@@ -2,22 +2,18 @@ package store
 
 import (
 	"bytes"
-	"cmp"
 	"context"
-	"crypto/sha512"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"golang.org/x/crypto/bcrypt"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
 // Mode is what bootstrap does with what the database already holds.
@@ -277,9 +273,9 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		return fmt.Errorf("read apps: %w", err)
 	}
 	for _, sa := range seed.Apps {
-		a, err := appFromSeed(sa)
+		a, err := sa.App()
 		if err != nil {
-			return err
+			return fmt.Errorf("app %s: %w", sa.ID, err)
 		}
 		i := slices.IndexFunc(current, func(c App) bool { return c.ID == a.ID })
 		var old App
@@ -328,32 +324,13 @@ func (b *bootstrap) apps(seed config.Seed) error {
 	return nil
 }
 
-// appFromSeed gives a seed app the form readApps reads.
-func appFromSeed(a config.SeedApp) (App, error) {
-	sources, err := a.AllowedSources.Prefixes()
-	if err != nil {
-		return App{}, fmt.Errorf("app %s: %w", a.ID, err)
-	}
-	if len(sources) == 0 {
-		sources = nil
-	}
-	var claims []string // nil: every claim, and NULL in the database
-	if a.ReceiveClaims != nil {
-		claims = *a.ReceiveClaims
-	}
-	return App{
-		ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
-		AuthMode: a.AuthMode, AllowedSources: sources, ClientCertFingerprint: a.ClientCertFingerprint, ReceiveClaims: claims,
-	}, nil
-}
-
 func (b *bootstrap) flows(seed config.Seed) error {
 	current, err := readFlows(b.ctx, b.tx)
 	if err != nil {
 		return fmt.Errorf("read flows: %w", err)
 	}
 	for _, sf := range seed.Flows {
-		f := flowFromSeed(sf)
+		f := sf.Flow()
 		i := slices.IndexFunc(current, func(c Flow) bool { return c.ID == f.ID })
 		var old Flow
 		if i >= 0 {
@@ -404,21 +381,6 @@ func (b *bootstrap) flows(seed config.Seed) error {
 	return nil
 }
 
-// flowFromSeed gives a seed flow the form readFlows reads.
-func flowFromSeed(sf config.SeedFlow) Flow {
-	f := Flow{
-		ID: sf.ID, Title: sf.Title, Description: sf.Description, Enabled: *sf.Enabled, ACR: sf.ACR,
-	}
-	if len(sf.IconURL) > 0 {
-		f.IconURL = sf.IconURL
-	}
-	for _, s := range sf.Steps {
-		f.Steps = append(f.Steps, Step{AppID: s.AppID, Position: s.Position, SubjectCheck: cmp.Or(s.SubjectCheck, "none")})
-	}
-	slices.SortFunc(f.Steps, func(a, b Step) int { return cmp.Compare(a.Position, b.Position) })
-	return f
-}
-
 // apiClient is a client of the admin API, as the table holds it.
 type apiClient struct {
 	id, secretHash string
@@ -441,7 +403,7 @@ func (b *bootstrap) clients(seed config.Seed) error {
 			old = current[i]
 		}
 		// Once: bcrypt is slow on purpose.
-		sameSecret := i >= 0 && bcrypt.CompareHashAndPassword([]byte(old.secretHash), bcryptInput(sc.Secret)) == nil
+		sameSecret := i >= 0 && domain.SecretMatches(old.secretHash, sc.Secret)
 		if !b.decide("api_client", sc.ID, i >= 0, []field{
 			{name: "secret", secret: func() bool { return sameSecret }},
 			{name: "scopes", old: old.scopes, new: scopes},
@@ -451,11 +413,9 @@ func (b *bootstrap) clients(seed config.Seed) error {
 		// An unchanged secret keeps its hash: a new salt would show as a change.
 		hash := old.secretHash
 		if !sameSecret {
-			h, err := bcrypt.GenerateFromPassword(bcryptInput(sc.Secret), bcrypt.DefaultCost)
-			if err != nil {
+			if hash, err = domain.HashSecret(sc.Secret); err != nil {
 				return fmt.Errorf("API client %s: %w", sc.ID, err)
 			}
-			hash = string(h)
 		}
 		if _, err := b.tx.ExecContext(b.ctx, `
 			INSERT INTO api_client (id, secret_hash, scopes) VALUES ($1, $2, $3::text[])
@@ -472,19 +432,6 @@ func (b *bootstrap) clients(seed config.Seed) error {
 		return slices.ContainsFunc(seed.OAuth2Clients, func(c config.SeedClient) bool { return c.ID == id })
 	})
 	return nil
-}
-
-// bcryptInput is what bcrypt hashes of a client secret, the secret itself up
-// to the 72 bytes bcrypt reads. A longer one, or one holding a NUL, is hashed
-// first, as Symfony's NativePasswordHasher does: SHA-512 in base64, of which
-// bcrypt reads 72 bytes too. Whatever checks a secret against its hash goes
-// through it.
-func bcryptInput(secret string) []byte {
-	if len(secret) <= 72 && !strings.ContainsRune(secret, 0) {
-		return []byte(secret)
-	}
-	sum := sha512.Sum512([]byte(secret))
-	return []byte(base64.StdEncoding.EncodeToString(sum[:])[:72])
 }
 
 func readAPIClients(ctx context.Context, q querier) ([]apiClient, error) {
