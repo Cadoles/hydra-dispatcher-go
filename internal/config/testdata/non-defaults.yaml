@@ -6,6 +6,7 @@ server:
   trusted_proxies: ["10.1.0.0/16"]
   cookie_path: "/auth"
   replicas_hint: 3
+  drain_delay: 5s
 hydra:
   admin_url: "https://hydra-admin.example.org"
   timeout: 7s

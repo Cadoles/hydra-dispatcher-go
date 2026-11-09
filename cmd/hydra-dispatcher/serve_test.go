@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -86,51 +87,78 @@ func TestHandler(t *testing.T) {
 
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	newServer := func() *httptest.Server {
+	newServer := func() (*httptest.Server, services) {
 		services := testServices(t, database)
 		services.states = pinged{services.states, &stateErr}
 		h, err := newHandler(testConfig(t, hydra.URL), logger, logger, services)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return httptest.NewServer(h)
+		return httptest.NewServer(h), services
 	}
-	srv := newServer()
+	srv, _ := newServer()
 
 	if err := healthcheck(context.Background(), []string{"-url", srv.URL + "/health"}); err != nil {
 		t.Errorf("healthcheck: %v", err)
 	}
 
+	// /ready says the state of the instance, whatever its dependencies (Q83): theirs
+	// is in its body and in the gauge.
 	for _, tt := range []struct {
-		hydraStatus, want               int
+		hydraStatus                     int
 		dbErr, stateErr                 error
 		hydraState, dbState, redisState string
 	}{
-		{http.StatusOK, http.StatusOK, nil, nil, "ok", "ok", "ok"},
-		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, nil, nil, "unavailable", "ok", "ok"},
-		{http.StatusOK, http.StatusServiceUnavailable, errors.New("database: connection refused"), nil, "ok", "unavailable", "ok"},
+		{http.StatusOK, nil, nil, "ok", "ok", "ok"},
+		{http.StatusServiceUnavailable, nil, nil, "unavailable", "ok", "ok"},
+		{http.StatusOK, errors.New("database: connection refused"), nil, "ok", "unavailable", "ok"},
 		// The state store's PING (P8).
-		{http.StatusOK, http.StatusServiceUnavailable, nil, errors.New("dial tcp redis:6379: connection refused"), "ok", "ok", "unavailable"},
+		{http.StatusOK, nil, errors.New("dial tcp redis:6379: connection refused"), "ok", "ok", "unavailable"},
 	} {
 		hydraStatus, dbErr, stateErr = tt.hydraStatus, tt.dbErr, tt.stateErr
 		// One instance per case: the Hydra client reuses its readiness for a second.
-		probed := newServer()
+		probed, services := newServer()
 		resp, err := http.Get(probed.URL + "/ready")
 		if err != nil {
 			t.Fatal(err)
 		}
 		var body struct {
+			Status string            `json:"status"`
 			Checks map[string]string `json:"checks"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		_ = resp.Body.Close()
 		probed.Close()
-		if resp.StatusCode != tt.want || body.Checks["hydra"] != tt.hydraState || body.Checks["database"] != tt.dbState || body.Checks["state"] != tt.redisState {
-			t.Errorf("Hydra %d, database %v, state %v: /ready = %d %v, want %d with hydra %s, database %s, state %s",
-				tt.hydraStatus, tt.dbErr, tt.stateErr, resp.StatusCode, body.Checks, tt.want, tt.hydraState, tt.dbState, tt.redisState)
+		if resp.StatusCode != http.StatusOK || body.Status != "ready" || body.Checks["hydra"] != tt.hydraState || body.Checks["database"] != tt.dbState || body.Checks["state"] != tt.redisState {
+			t.Errorf("Hydra %d, database %v, state %v: /ready = %d %s %v, want 200 ready with hydra %s, database %s, state %s",
+				tt.hydraStatus, tt.dbErr, tt.stateErr, resp.StatusCode, body.Status, body.Checks, tt.hydraState, tt.dbState, tt.redisState)
 		}
 		if resp.Header.Get("X-Trace-ID") == "" {
 			t.Error("no X-Trace-ID on /ready")
+		}
+		rec := httptest.NewRecorder()
+		services.metrics.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		for check, state := range map[string]string{"hydra": tt.hydraState, "database": tt.dbState, "state": tt.redisState} {
+			want := fmt.Sprintf("hydra_dispatcher_ready_check_up{check=%q} %d", check, map[string]int{"ok": 1, "unavailable": 0}[state])
+			if !strings.Contains(rec.Body.String(), want) {
+				t.Errorf("no %s in /metrics", want)
+			}
+		}
+	}
+
+	// While the instance drains, /ready answers 503, the rest is served.
+	draining := testServices(t, database)
+	draining.draining = func() bool { return true }
+	hydraStatus, dbErr, stateErr = http.StatusOK, nil, nil
+	h, err := newHandler(testConfig(t, hydra.URL), logger, logger, draining)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]int{"/ready": http.StatusServiceUnavailable, "/health": http.StatusOK, "/": http.StatusBadRequest} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Errorf("draining: %s = %d, want %d", path, rec.Code, want)
 		}
 	}
 
@@ -647,7 +675,7 @@ func TestMetricsListen(t *testing.T) {
 		t.Errorf("/metrics still on the main port: %d", rec.Code)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	wait, err := serveMetrics(ctx, cfg, services.metrics, services.audit, logger, logger)
+	wait, err := serveMetrics(ctx, cancel, cfg, services.metrics, services.audit, logger, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +689,9 @@ func TestMetricsListen(t *testing.T) {
 		t.Errorf("dedicated port: %d %s", resp.StatusCode, body)
 	}
 	cancel()
-	wait()
+	if err := wait(); err != nil {
+		t.Error(err)
+	}
 }
 
 // A login app passes on the login_challenge of the URL a browser opened: the challenges a

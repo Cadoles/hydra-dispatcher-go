@@ -86,6 +86,7 @@ func TestCatalogue(t *testing.T) {
 		"build_info":                            {"gauge", []string{"go_version", "hydra_mode", "state_backend", "version"}},
 		"logout_propagations_total":             {"counter", []string{"app", "result"}},
 		"failure_rate_limited_total":            {"counter", []string{"surface"}},
+		"ready_check_up":                        {"gauge", []string{"check"}},
 	}
 	families, err := m.registry.Gather()
 	if err != nil {
@@ -138,6 +139,9 @@ func exercise(m *Metrics, flows, apps []string) {
 	m.SetBuild("v1", "redis", "decrypt")
 	m.ConfigRefreshed(nil)
 	m.ConfigRefreshed(errors.New("down"))
+	for _, check := range append(slices.Clone(readyChecks), "unknown") {
+		m.ReadyCheck(check, false)
+	}
 	for _, id := range flows {
 		f := &flow.Flow{FlowID: id}
 		for _, ev := range []flow.Event{flow.Entry{}, flow.Consent{}, flow.Consent{Post: true}} {

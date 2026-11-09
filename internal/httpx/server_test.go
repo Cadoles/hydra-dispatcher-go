@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -27,33 +28,52 @@ func TestReady(t *testing.T) {
 	deaf := func(context.Context) error { time.Sleep(time.Second); return nil } // ignores its deadline
 	panicking := func(context.Context) error { panic("kaboom") }
 
+	// A check that fails leaves the instance ready (Q83): its state is in the
+	// body, the log and the gauge. Only the drain answers 503.
 	tests := []struct {
 		name       string
 		checks     map[string]Check
+		draining   bool
 		wantStatus int
 		wantBody   map[string]any
 		wantLog    string
+		wantGauge  map[string]bool
 	}{
-		{"all ok", map[string]Check{"hydra": ok, "state": ok}, 200,
-			map[string]any{"status": "ready", "checks": map[string]any{"hydra": "ok", "state": "ok"}}, ""},
-		{"one failing", map[string]Check{"hydra": failing, "state": ok}, 503,
-			map[string]any{"status": "unavailable", "checks": map[string]any{"hydra": "unavailable", "state": "ok"}}, "connection refused"},
-		{"one too slow", map[string]Check{"hydra": slow}, 503,
-			map[string]any{"status": "unavailable", "checks": map[string]any{"hydra": "unavailable"}}, "deadline exceeded"},
-		{"one ignoring its deadline", map[string]Check{"hydra": deaf, "state": ok}, 503,
-			map[string]any{"status": "unavailable", "checks": map[string]any{"hydra": "unavailable", "state": "ok"}}, "no answer within 50ms"},
+		{"all ok", map[string]Check{"hydra": ok, "state": ok}, false, 200,
+			map[string]any{"status": "ready", "checks": map[string]any{"hydra": "ok", "state": "ok"}}, "", map[string]bool{"hydra": true, "state": true}},
+		{"one failing", map[string]Check{"hydra": failing, "state": ok}, false, 200,
+			map[string]any{"status": "ready", "checks": map[string]any{"hydra": "unavailable", "state": "ok"}}, "connection refused", map[string]bool{"hydra": false, "state": true}},
+		{"one too slow", map[string]Check{"hydra": slow}, false, 200,
+			map[string]any{"status": "ready", "checks": map[string]any{"hydra": "unavailable"}}, "deadline exceeded", map[string]bool{"hydra": false}},
+		{"one ignoring its deadline", map[string]Check{"hydra": deaf, "state": ok}, false, 200,
+			map[string]any{"status": "ready", "checks": map[string]any{"hydra": "unavailable", "state": "ok"}}, "no answer within 50ms", map[string]bool{"hydra": false, "state": true}},
 		// Out of Recover's reach: the check fails, not the process.
-		{"one panicking", map[string]Check{"hydra": panicking}, 503,
-			map[string]any{"status": "unavailable", "checks": map[string]any{"hydra": "unavailable"}}, "http.panic"},
-		{"no check", nil, 200, map[string]any{"status": "ready", "checks": map[string]any{}}, ""},
+		{"one panicking", map[string]Check{"hydra": panicking}, false, 200,
+			map[string]any{"status": "ready", "checks": map[string]any{"hydra": "unavailable"}}, "http.panic", map[string]bool{"hydra": false}},
+		{"no check", nil, false, 200, map[string]any{"status": "ready", "checks": map[string]any{}}, "", map[string]bool{}},
+		{"draining", map[string]Check{"hydra": ok}, true, 503,
+			map[string]any{"status": "unavailable", "checks": map[string]any{"hydra": "ok"}}, "", map[string]bool{"hydra": true}},
+		{"draining, one failing", map[string]Check{"hydra": failing}, true, 503,
+			map[string]any{"status": "unavailable", "checks": map[string]any{"hydra": "unavailable"}}, "connection refused", map[string]bool{"hydra": false}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			w := httptest.NewRecorder()
 			start := time.Now()
-			Ready(tt.checks, 50*time.Millisecond, slog.New(slog.NewJSONHandler(&logs, nil))).
-				ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
+			var mu sync.Mutex
+			gauge := map[string]bool{}
+			Ready(tt.checks, 50*time.Millisecond, slog.New(slog.NewJSONHandler(&logs, nil)), ReadyOptions{
+				Draining: func() bool { return tt.draining },
+				Observe: func(check string, ok bool) {
+					mu.Lock()
+					defer mu.Unlock()
+					gauge[check] = ok
+				},
+			}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ready", nil))
+			if !maps.Equal(gauge, tt.wantGauge) {
+				t.Errorf("gauge = %v, want %v", gauge, tt.wantGauge)
+			}
 			if d := time.Since(start); d > 500*time.Millisecond {
 				t.Errorf("answered in %s, want within the timeout", d)
 			}
@@ -86,7 +106,7 @@ func TestReadyLogsChanges(t *testing.T) {
 		}
 		return nil
 	}
-	ready := Ready(map[string]Check{"hydra": check}, time.Second, slog.New(slog.NewJSONHandler(&logs, nil)))
+	ready := Ready(map[string]Check{"hydra": check}, time.Second, slog.New(slog.NewJSONHandler(&logs, nil)), ReadyOptions{})
 	probe := func() { ready.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/ready", nil)) }
 
 	probe() // ok from the start: nothing to say

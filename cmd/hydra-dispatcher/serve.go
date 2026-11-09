@@ -16,6 +16,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
@@ -65,7 +67,9 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return fmt.Errorf("observability.sentry.dsn: %w", err)
 	}
-	defer tracker.Flush()
+	// What the observers keep is flushed at the end, all at once (Q82).
+	flushes := []func(){tracker.Flush}
+	defer func() { flushTogether(flushes...) }()
 	instance, _ := os.Hostname()
 	stopTracing, err := tracing.Setup(ctx, tracing.Options{Enabled: cfg.Observability.Tracing.Enabled, Endpoint: cfg.Observability.Tracing.Endpoint,
 		Protocol: cfg.Observability.Tracing.Protocol, SamplerRatio: cfg.Observability.Tracing.SamplerRatio, Version: version,
@@ -73,7 +77,7 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	defer stopTracing()
+	flushes = append(flushes, stopTracing)
 	logs.app = slog.New(tracker.Handler(logs.app.Handler()))
 	slog.SetDefault(logs.app)
 	httpx.StandardLog(logs.app)
@@ -129,7 +133,9 @@ func serve(ctx context.Context, args []string) error {
 		live.Run(refreshCtx, store.RefreshEvery)
 	}()
 
-	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker})
+	var draining atomic.Bool
+	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker,
+		draining: draining.Load})
 	if err != nil {
 		stop()
 		return err
@@ -139,19 +145,26 @@ func serve(ctx context.Context, args []string) error {
 		stop()
 		return err
 	}
-	stopMetrics, err := serveMetrics(ctx, cfg, watch, audited, logger, logs.access)
+	// stopping ends both servers: after the drain that follows SIGTERM, or as soon as
+	// one stops on its own, on an accept error say. A server that stops stops the
+	// process, which would otherwise wait for the other one forever (R29).
+	stopping, stopServers := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopServers()
+	go drain(ctx, stopping, stopServers, &draining, cfg.Server.DrainDelay.Std())
+	stopMetrics, err := serveMetrics(stopping, stopServers, cfg, watch, audited, logger, logs.access)
 	if err != nil {
 		_ = ln.Close()
 		stop()
 		return err
 	}
-	defer stopMetrics()
 	logger.Info("server.started", "addr", ln.Addr().String())
-	err = httpx.Serve(ctx, httpx.NewServer(inFlight.Track(handler), logger, cfg.Observability.LogIP), ln, shutdownGrace)
+	err = httpx.Serve(stopping, httpx.NewServer(inFlight.Track(handler), logger, cfg.Observability.LogIP), ln, shutdownGrace)
+	stopServers()
 	if errors.Is(err, context.DeadlineExceeded) {
 		logger.Warn("server.shutdown_timeout", "grace", shutdownGrace.String())
 		err = nil
 	}
+	err = errors.Join(err, stopMetrics())
 	stop()
 	if err != nil {
 		return err
@@ -160,13 +173,46 @@ func serve(ctx context.Context, args []string) error {
 	return nil
 }
 
+// drain answers the first SIGTERM (ctx done): /ready says 503 for delay, the requests
+// still served, while an orchestrator stops routing to the instance, then the servers
+// stop (Q82). Distroless has no sleep for a preStop hook: the delay is here. A
+// server that stops on its own ends it at once.
+func drain(ctx, stopping context.Context, stopServers func(), draining *atomic.Bool, delay time.Duration) {
+	select {
+	case <-stopping.Done():
+		return
+	case <-ctx.Done():
+	}
+	draining.Store(true)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-stopping.Done():
+	}
+	stopServers()
+}
+
+// flushTogether runs the flushes of what the observers keep, traces and Sentry, at
+// the same time: each is bounded by its own delay, 2 s, and together they take 2 s
+// at most, not the sum (Q82).
+func flushTogether(flushes ...func()) {
+	var wg sync.WaitGroup
+	for _, f := range flushes {
+		wg.Go(f)
+	}
+	wg.Wait()
+}
+
 // serveMetrics serves /metrics on observability.metrics.listen, a port of its own that
 // the ingress does not expose, filtered as on the main one; without that key, it does
-// nothing and newHandler routes /metrics. The function it returns waits for its end.
-func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metrics, audited *audit.Log, logger, accessLogger *slog.Logger) (func(), error) {
+// nothing and newHandler routes /metrics. It stops with stopping, and stops the main
+// server through stopServers when it stops on its own. The function it returns waits
+// for its end, and returns its error.
+func serveMetrics(stopping context.Context, stopServers func(), cfg *config.Config, watch *metrics.Metrics, audited *audit.Log, logger, accessLogger *slog.Logger) (func() error, error) {
 	addr := cfg.Observability.Metrics.Listen
 	if addr == "" {
-		return func() {}, nil
+		return func() error { return nil }, nil
 	}
 	trusted, err := cfg.Server.TrustedProxies.Prefixes()
 	if err != nil {
@@ -186,13 +232,15 @@ func serveMetrics(ctx context.Context, cfg *config.Config, watch *metrics.Metric
 	}
 	logger.Info("metrics.started", "addr", ln.Addr().String())
 	done := make(chan struct{})
+	var served error
 	go func() {
 		defer close(done)
-		if err := httpx.Serve(ctx, httpx.NewServer(handler, logger, cfg.Observability.LogIP), ln, shutdownGrace); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			logger.Error("metrics.stopped", "err", err)
+		if err := httpx.Serve(stopping, httpx.NewServer(handler, logger, cfg.Observability.LogIP), ln, shutdownGrace); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			served = fmt.Errorf("observability.metrics.listen: %w", err)
+			stopServers()
 		}
 	}()
-	return func() { <-done }, nil
+	return func() error { <-done; return served }, nil
 }
 
 // configuredHydraMode is the mode hydraSource chooses, for what is set before it.
@@ -296,12 +344,14 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	return &c, nil
 }
 
-// shutdownGrace is how long in-flight requests may run after SIGTERM, and
-// handlersGrace how long the handlers of the requests cut then may still run
-// before the stores close. Both stay under the 10 s docker stop waits before
-// SIGKILL, so the dispatcher cuts them and says so.
+// shutdownGrace is how long in-flight requests may run once the drain is over,
+// and handlersGrace how long the handlers of the requests cut then may still run
+// before the stores close. With the 2 s that traces and Sentry take together
+// at most, the stop holds in the 10 s docker stop waits before SIGKILL, the
+// dispatcher cutting the requests and saying so; server.drain_delay comes on
+// top (Q82).
 const (
-	shutdownGrace = 8 * time.Second
+	shutdownGrace = 6 * time.Second
 	handlersGrace = time.Second
 )
 
@@ -348,6 +398,8 @@ type services struct {
 	audit   *audit.Log
 	// sentry is nil without a DSN.
 	sentry *sentrylog.Tracker
+	// draining tells that the instance stops, /ready answering 503; nil: never.
+	draining func() bool
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -447,7 +499,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		"hydra":    hydraClient.Ready,
 		"database": s.database,
 		"state":    s.states.Ping, // a PING to Redis
-	}, 2*time.Second, logger))
+	}, 2*time.Second, logger, httpx.ReadyOptions{Draining: s.draining, Observe: watch.ReadyCheck}))
 	emulated.Register(mux, emulated.Options{
 		Engine:          engine,
 		AuthorizedHosts: loginApps,

@@ -161,12 +161,28 @@ func (f *InFlight) Wait(ctx context.Context) (int, error) {
 // Check tells whether a dependency is usable.
 type Check func(ctx context.Context) error
 
-// Ready answers 200 when every check passes within timeout, 503 otherwise.
-// Checks run in parallel; one still running at timeout counts as failed, and
-// a panic fails its check. The body only names each check's state: /ready is
-// open to the orchestrator, so error details go to the log, once per change
-// of state, since anyone can call it in a loop.
-func Ready(checks map[string]Check, timeout time.Duration, logger *slog.Logger) http.Handler {
+// ReadyOptions are what /ready knows of the instance besides its checks.
+type ReadyOptions struct {
+	// Draining tells that the instance stops: /ready answers 503 while the
+	// requests are still served (server.drain_delay). Nil: never.
+	Draining func() bool
+	// Observe gets the result of each check, for a gauge. Nil: none.
+	Observe func(check string, ok bool)
+}
+
+// Ready answers the state of the instance, not that of its dependencies (Q83):
+// 200 once it serves, after the first read of its configuration, 503 while it
+// drains. A dependency every instance shares, Hydra, the database or the state
+// store, would otherwise take them all out at once: the balancer would answer
+// 503 without a page, where Hydra down gives page E1004 and its trace_id, and a
+// database down stops nothing, the snapshot in memory serving on.
+//
+// The checks still run, in parallel within timeout; one still running at
+// timeout counts as failed, and a panic fails its check. The body only names
+// each check's state: /ready is open to the orchestrator, so error details go
+// to the log, once per change of state, since anyone can call it in a loop;
+// o.Observe gets each result.
+func Ready(checks map[string]Check, timeout time.Duration, logger *slog.Logger, o ReadyOptions) http.Handler {
 	var mu sync.Mutex
 	failing := make(map[string]bool, len(checks)) // the last answer of each check
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,11 +214,10 @@ func Ready(checks map[string]Check, timeout time.Duration, logger *slog.Logger) 
 		}
 
 		states := make(map[string]string, len(checks))
-		ready := true
 		for name, err := range errs {
 			states[name] = "ok"
 			if err != nil {
-				states[name], ready = "unavailable", false
+				states[name] = "unavailable"
 			}
 		}
 		// A client gone before the answer says nothing of the dependencies;
@@ -217,12 +232,15 @@ func Ready(checks map[string]Check, timeout time.Duration, logger *slog.Logger) 
 					logger.InfoContext(r.Context(), "ready.check_recovered", "check", name)
 				}
 				failing[name] = err != nil
+				if o.Observe != nil {
+					o.Observe(name, err == nil)
+				}
 			}
 			mu.Unlock()
 		}
 
 		status, body := http.StatusOK, "ready"
-		if !ready {
+		if o.Draining != nil && o.Draining() {
 			status, body = http.StatusServiceUnavailable, "unavailable"
 		}
 		w.Header().Set("Content-Type", "application/json")

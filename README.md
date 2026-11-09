@@ -78,9 +78,19 @@ of the instance, a scrape touching neither Redis nor the database, behind
 `security.metrics_authorized_hosts`; or on a port of its own with
 `observability.metrics.listen`, gone from the main one.
 
-`serve` exposes `/health` (liveness) and `/ready` (Hydra, the database and
-the state store reachable, within 2 s, Redis by a `PING`; 503 otherwise,
-details in the log). It reads the
+`serve` exposes `/health` (liveness) and `/ready`, the state of the instance:
+200 once it serves, 503 while it drains. Its checks (Hydra, the database and the
+state store, within 2 s, Redis by a `PING`) are in its body, in the log at each
+change and in `hydra_dispatcher_ready_check_up`, without changing its status: a
+dependency every instance shares would otherwise take them all out at once, where
+Hydra down gives page E1004. A readiness probe needs a timeout over 2 s.
+
+On SIGTERM, `serve` answers 503 on `/ready` for `server.drain_delay` (0 by
+default; 5s under Kubernetes, with a `terminationGracePeriodSeconds` of at least
+`drain_delay` + 10 s) while still serving, then lets the requests in flight end
+for 6 s, cuts the others, and flushes traces and Sentry in 2 s at most: within
+the 10 s of `docker stop` without a drain. A server that stops on its own, the
+main one or that of `observability.metrics.listen`, stops the process. It reads the
 configuration from the database at startup, then every 60 s. Logs are JSON
 lines on stdout, `log_type` `app` or `access`, with the request's
 `trace_id`; `log_level` applies to the application log only.

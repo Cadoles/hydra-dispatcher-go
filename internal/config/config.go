@@ -43,6 +43,11 @@ type Server struct {
 	CookiePath     string `yaml:"cookie_path"`
 	// ReplicasHint > 1 refuses the in-memory state store.
 	ReplicasHint int `yaml:"replicas_hint"`
+	// DrainDelay is how long, after SIGTERM, /ready answers 503 while the
+	// requests are still served, before the shutdown: an orchestrator still
+	// routes to the instance for a few seconds (Q82). Distroless has no sleep
+	// for a preStop hook.
+	DrainDelay Duration `yaml:"drain_delay"`
 }
 
 type Hydra struct {

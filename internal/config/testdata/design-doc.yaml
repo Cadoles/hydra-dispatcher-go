@@ -6,6 +6,7 @@ server:
   trusted_proxies: ["10.0.0.10"]  # obligatoire : les reverse proxies seulement, [] sans proxy
   cookie_path: "/"              # doit couvrir le chemin de base_url
   replicas_hint: 1              # > 1 refuse le store d'état en mémoire
+  drain_delay: 0s               # après SIGTERM, /ready à 503 et les requêtes servies encore ; 5s sous Kubernetes
 hydra:
   admin_url: "http://hydra:4445"
   timeout: 5s

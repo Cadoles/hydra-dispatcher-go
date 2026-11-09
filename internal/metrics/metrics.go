@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,6 +75,7 @@ type Metrics struct {
 	propagations                  *prometheus.CounterVec
 
 	rateLimited *prometheus.CounterVec
+	readyChecks *prometheus.GaugeVec
 
 	flows, apps, routes bounded
 
@@ -133,6 +135,11 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 		configRefreshErrors: single("config_refresh_errors_total", "Refreshes of the configuration that failed."),
 		propagations:        counter("logout_propagations_total", "Propagation of the logout to the login apps.", "app", "result"),
 		rateLimited:         counter("failure_rate_limited_total", "Requests refused by the failure limiter.", "surface"),
+		readyChecks: func() *prometheus.GaugeVec {
+			g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "ready_check_up", Help: "Last answer of each check of /ready, 1 for ok; /ready itself does not follow them (Q83)."}, []string{"check"})
+			reg.MustRegister(g)
+			return g
+		}(),
 		buildInfo: func() *prometheus.GaugeVec {
 			g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "build_info", Help: "The instance deployed."}, []string{"version", "go_version", "state_backend", "hydra_mode"})
 			reg.MustRegister(g)
@@ -218,6 +225,22 @@ func (m *Metrics) Refused(surface string) { m.ipRejections.WithLabelValues(surfa
 // RateLimited counts a request the failure limiter refused on surface: front, the pages
 // (Q80).
 func (m *Metrics) RateLimited(surface string) { m.rateLimited.WithLabelValues(surface).Inc() }
+
+// readyChecks are the checks of /ready, the values of the label check.
+var readyChecks = []string{"hydra", "database", "state"}
+
+// ReadyCheck sets the gauge of a check of /ready, which /ready runs at each call
+// without answering by it (Q83): an alert reads it.
+func (m *Metrics) ReadyCheck(check string, ok bool) {
+	if !slices.Contains(readyChecks, check) {
+		check = LabelOther
+	}
+	v := 0.0
+	if ok {
+		v = 1
+	}
+	m.readyChecks.WithLabelValues(check).Set(v)
+}
 
 // SkipUnavailable counts a memory of the skip too big to write (WRT-2).
 func (m *Metrics) SkipUnavailable() { m.skips.WithLabelValues("login", "unavailable").Inc() }
