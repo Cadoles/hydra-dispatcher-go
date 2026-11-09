@@ -107,7 +107,15 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 	}
 	ctx, stop := r.loginHook(f, &body, withoutDispatcher(c.Ctx))
 	if stop != nil {
-		return *stop // SKP-9: nothing written, a reload replays the webhook
+		// SKP-9: nothing written, a reload replays the webhook. The page gives Hydra's
+		// logout, as E1003 does (Q88): a webhook that refuses the subject it rewrote
+		// already, or that fails, would hold the user until the end of the session.
+		// The full authentication that follows calls the webhook again: the link only
+		// gets past a refusal tied to the rewritten subject.
+		if stop.Call == nil && stop.Response.Code == E1006 {
+			stop.Response.SignOut = signOutURL(f.Hydra.RequestURL)
+		}
+		return *stop
 	}
 	if body.Subject != f.Hydra.Subject {
 		// SKP-7: Hydra 2.1 would refuse the accept, 2.2 start a login again. The page

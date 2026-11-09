@@ -1290,6 +1290,32 @@ func TestLogSample(t *testing.T) {
 	}
 }
 
+// An observer that panics is caught: the answer goes, the panic is logged, and the
+// other observers see the request (revue R29).
+func TestObserverPanic(t *testing.T) {
+	var buf bytes.Buffer
+	seen := 0
+	o := &Orchestrator{Log: slog.New(slog.NewJSONHandler(&buf, nil)), Observers: []Observer{
+		observerFunc(func(context.Context, Observation) { panic("label value \"\\xff\" is not valid UTF-8") }),
+		observerFunc(func(context.Context, Observation) { seen++ }),
+	}}
+	res := o.result(context.Background(), Input{}, Outcome{Response: Response{Kind: Redirect, URL: "http://hydra/verifier"}}, nil)
+	if res.Response.Kind != Redirect || res.Response.URL != "http://hydra/verifier" {
+		t.Errorf("response %+v", res.Response)
+	}
+	if seen != 1 {
+		t.Errorf("%d observations after the panic", seen)
+	}
+	var line map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
+		t.Fatalf("%q: %v", buf.String(), err)
+	}
+	if line["level"] != "ERROR" || line["msg"] != "observer.panic" || line["observer"] != "flow.observerFunc" ||
+		!strings.Contains(line["panic"].(string), "not valid UTF-8") || !strings.Contains(line["stack"].(string), "observe") {
+		t.Errorf("line %v", line)
+	}
+}
+
 type observerFunc func(context.Context, Observation)
 
 func (f observerFunc) Observe(ctx context.Context, o Observation) { f(ctx, o) }

@@ -87,6 +87,7 @@ func TestCatalogue(t *testing.T) {
 		"logout_propagations_total":             {"counter", []string{"app", "result"}},
 		"failure_rate_limited_total":            {"counter", []string{"surface"}},
 		"ready_check_up":                        {"gauge", []string{"check"}},
+		"audit_dropped_total":                   {"counter", nil},
 	}
 	families, err := m.registry.Gather()
 	if err != nil {
@@ -139,6 +140,7 @@ func exercise(m *Metrics, flows, apps []string) {
 	m.SetBuild("v1", "redis", "decrypt")
 	m.ConfigRefreshed(nil)
 	m.ConfigRefreshed(errors.New("down"))
+	m.AuditDropped()
 	for _, check := range append(slices.Clone(readyChecks), "unknown") {
 		m.ReadyCheck(check, false)
 	}
@@ -324,6 +326,18 @@ func TestLabelsBounded(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "metrics.label_overflow"); n != 1 {
 		t.Errorf("%d warnings: %s", n, logs.String())
+	}
+}
+
+// A value that is not valid UTF-8, an id of a database not in UTF-8, is other: Prometheus
+// panics on it (revue R29).
+func TestLabelNotUTF8(t *testing.T) {
+	m := New(200, nil)
+	bad := "fl\xffow"
+	snap := store.NewSnapshot(nil, []store.Flow{{ID: bad}}, store.DefaultSettings())
+	m.Observe(context.Background(), flow.Observation{After: &flow.Flow{FlowID: bad}, Config: snap, Reports: []flow.Report{{Event: "hydra.login_accepted"}}})
+	if got := series(scrape(t, m), `login_requests_total{flow="other",outcome="accepted"}`); got != "1" {
+		t.Errorf("login_requests_total of other = %q", got)
 	}
 }
 

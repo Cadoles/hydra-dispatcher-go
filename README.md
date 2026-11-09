@@ -50,7 +50,10 @@ under `log_type` `audit`, `file:<path>`, or `syslog`) is for a SIEM: authenticat
 that succeed or fail, skips, a subject that changes between steps, logouts, IP refusals,
 with the full IP. Its subjects are an HMAC by `secrets.audit_key`, or without it by a
 key derived from `secrets.challenge_key`, whose rotation then changes the pseudonyms;
-`observability.audit.pseudonymize_subject: false` writes them in clear.
+`observability.audit.pseudonymize_subject: false` writes them in clear. Its lines go
+through a bounded queue: an output that blocks, a syslog whose daemon reads no more,
+loses lines, counted by `hydra_dispatcher_audit_dropped_total` and told by
+`audit.dropped`, rather than hold the requests; the queue is emptied at the stop.
 
 With `observability.sentry.dsn`, Sentry gets what demands an action: the pages E1000,
 E1004 to E1007, a panic, an error line of the log, at most
@@ -120,6 +123,13 @@ environment are used.
   host in lowercase, no default port, no user. A path in it is a prefix the
   reverse proxy removes before the dispatcher; the pages put it back before
   their URLs, and `server.cookie_path` must cover it.
+- Every secret may come from a file instead, its key followed by `_file`:
+  `secrets.cookie_key_file`, the other keys of `secrets` and their previous ones
+  (one key per line), `store.dsn_file`, `state.redis_dsn_file`,
+  `admin.api.private_key_file`, as `hydra.system_secrets_file`; the key and its file
+  together are an error. A local program of the webhooks reads the environment of
+  the dispatcher in `/proc/1/environ`: with one configured, a secret given by the
+  environment is warned of.
 - `store.dsn` loses the parameters of a Doctrine `DATABASE_URL`
   (`serverVersion`, `charset`…), which Postgres refuses, with a warning.
 
@@ -174,7 +184,10 @@ X-Dispatcher-Signature: hex(HMAC-SHA256(key, timestamp + "." + body))
 ```
 
 A program gets the payload and a newline on stdin, answers on stdout and exits 0,
-within `webhooks.process_timeout`, at most `webhooks.max_processes` at a time. It
+within `webhooks.process_timeout`, at most `webhooks.max_processes` at a time. It runs
+in a process group of its own, killed at its end as at the timeout: what it leaves
+behind dies with it, a daemon included. In the image, `tini` is PID 1 and reaps the
+orphans; an image built from it without `tini` takes `docker run --init`. It
 sees `PATH`, `HOME`, `LANG`, `LC_ALL` and `TZ` of the environment, nothing else,
 and what it writes on stderr goes nowhere. Nothing on stdout changes nothing.
 

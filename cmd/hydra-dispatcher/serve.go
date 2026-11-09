@@ -104,13 +104,14 @@ func serve(ctx context.Context, args []string) error {
 	}
 	var inFlight httpx.InFlight
 	watch := metrics.New(cfg.Observability.Metrics.MaxLabelValues, logger)
-	audited, closeAudit, err := newAudit(cfg, os.Stdout)
+	audited, closeAudit, err := newAudit(cfg, os.Stdout, logger, watch.AuditDropped)
 	if err != nil {
 		_ = states.Close()
 		_ = db.Close()
 		return err
 	}
-	defer closeAudit()
+	// Its queue is emptied at the end, beside the traces and Sentry (Q89).
+	flushes = append(flushes, closeAudit)
 	refreshCtx, stopRefresh := context.WithCancel(ctx)
 	refreshed := make(chan struct{})
 	// The stores close once the configuration is no longer refreshed and no
@@ -254,8 +255,11 @@ func configuredHydraMode(cfg *config.Config) string {
 // newAudit opens the audit log where observability.audit.output says: stdout beside the
 // other two streams, told apart by log_type, a file it appends to, or syslog, the
 // failure to open it stopping serve: an audit log must not vanish in silence. Its level
-// and format do not follow log_level or log_format: a SIEM reads it, in JSON.
-func newAudit(cfg *config.Config, stdout io.Writer) (*audit.Log, func(), error) {
+// and format do not follow log_level or log_format: a SIEM reads it, in JSON. Its lines
+// go through a bounded queue (Q89): an output that blocks loses lines, counted by
+// dropped and told by logger, instead of holding the requests. The function it returns
+// empties the queue within auditDrain, then closes the output.
+func newAudit(cfg *config.Config, stdout io.Writer, logger *slog.Logger, dropped func()) (*audit.Log, func(), error) {
 	w, closer := stdout, func() {}
 	switch out := cfg.Observability.Audit.Output; {
 	case out == "syslog":
@@ -277,9 +281,20 @@ func newAudit(cfg *config.Config, stdout io.Writer) (*audit.Log, func(), error) 
 		mac.Write([]byte("dispatcher-audit-key"))
 		key = mac.Sum(nil)
 	}
-	logger := slog.New(newLogHandler(w, "json", slog.LevelInfo)).With("log_type", "audit")
-	return audit.New(logger, key, !cfg.Observability.Audit.PseudonymizeSubject), closer, nil
+	queue := audit.NewQueue(w, audit.QueueSize, logger, dropped)
+	drain := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), auditDrain)
+		defer cancel()
+		queue.Close(ctx)
+		closer()
+	}
+	auditLogger := slog.New(newLogHandler(queue, "json", slog.LevelInfo)).With("log_type", "audit")
+	return audit.New(auditLogger, key, !cfg.Observability.Audit.PseudonymizeSubject), drain, nil
 }
+
+// auditDrain is how long the stop gives the lines of the audit still queued, with the
+// traces and Sentry (Q82, Q89).
+const auditDrain = 2 * time.Second
 
 // loggers are the application, access and warnings loggers of newLoggers.
 type loggers struct{ app, access, warnings *slog.Logger }
@@ -316,18 +331,22 @@ func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs l
 	}
 	readCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	return store.NewLive(readCtx, identified{Source: db, hosts: hosts, allowHTTP: cfg.TLS.AllowHTTP, signed: cfg.Secrets.WebhookSigningKey != nil}, logs.app, logs.warnings)
+	return store.NewLive(readCtx, identified{Source: db, hosts: hosts, allowHTTP: cfg.TLS.AllowHTTP, signed: cfg.Secrets.WebhookSigningKey != nil,
+		secrets: cfg.EnvironmentSecrets()}, logs.app, logs.warnings)
 }
 
 // identified refuses a snapshot whose webhooks cannot be called (webhook.Check), and
 // adds to each one the warnings of the apps'
 // identification against security.emulated_api_authorized_hosts, which the
-// store does not know (emulated.Warnings).
+// store does not know (emulated.Warnings), and that of a webhook run as a local
+// program while secrets come from the environment (webhook.ProgramWarnings).
 type identified struct {
 	store.Source
 	hosts     []netip.Prefix
 	allowHTTP bool
 	signed    bool
+	// secrets are the secret keys the environment gave.
+	secrets []string
 }
 
 func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
@@ -341,6 +360,7 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	// A copy: a source may give the same snapshot twice.
 	c := *s
 	c.Warnings = append(slices.Clip(s.Warnings), emulated.Warnings(s.Apps, i.hosts)...)
+	c.Warnings = append(c.Warnings, webhook.ProgramWarnings(s.Settings, i.secrets)...)
 	return &c, nil
 }
 

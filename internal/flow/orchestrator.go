@@ -7,7 +7,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"slices"
 	"time"
 
@@ -352,10 +354,23 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 		seen := Observation{Event: in.Event, Surface: surface, Before: in.Flow, After: after, Response: out.Response,
 			Reports: reports, Answers: in.Answers, Validations: in.Answers.validations(reports), Config: in.Env.Config, Now: o.now()}
 		for _, w := range o.Observers {
-			w.Observe(ctx, seen)
+			o.observe(ctx, w, seen)
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}
+}
+
+// observe gives seen to w. A panic of w is caught and logged, observer.panic, which goes
+// to Sentry by its name, and the answer goes all the same (revue R29): it gave 500 after
+// an accept, which a reload then resumed without a second one. The other observers still
+// see the request.
+func (o *Orchestrator) observe(ctx context.Context, w Observer, seen Observation) {
+	defer func() {
+		if p := recover(); p != nil && o.Log != nil {
+			o.Log.ErrorContext(ctx, "observer.panic", "observer", fmt.Sprintf("%T", w), "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+		}
+	}()
+	w.Observe(ctx, seen)
 }
 
 // sampled tells whether a line goes: by client for what a client makes endless

@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -32,7 +33,16 @@ type Config struct {
 
 	// Seed is only read by bootstrap; DISPATCHER_* variables do not reach it.
 	Seed Seed `yaml:"dispatcher"`
+
+	// fromEnvironment are the secret keys whose value the environment gave, for
+	// EnvironmentSecrets.
+	fromEnvironment []string
 }
+
+// EnvironmentSecrets names the secret keys whose value came from the environment,
+// by a DISPATCHER_* variable, a ${VAR} of the file or a variable of the Symfony
+// dispatcher: a program of the same uid reads them in /proc/1/environ (Q87).
+func (c *Config) EnvironmentSecrets() []string { return c.fromEnvironment }
 
 type Server struct {
 	Listen  string `yaml:"listen"`
@@ -86,17 +96,30 @@ type FailureRateLimit struct {
 // Secrets the dispatcher reads back are keyrings: the active key encrypts or
 // signs, the previous ones only decrypt or verify, for rotation without
 // downtime. The webhook key only signs, receivers verify.
+//
+// Each one may be given by a file instead, its key followed by _file, as every
+// secret of the configuration (Q87): a local program of the same uid reads the
+// environment of the dispatcher in /proc/1/environ. The file holds the key, or one
+// previous key per line; giving both the key and its file is an error.
 type Secrets struct {
-	CookieKey              Key  `yaml:"cookie_key"`
-	CookieKeysPrevious     Keys `yaml:"cookie_keys_previous"`
-	EncryptionKey          Key  `yaml:"encryption_key"`
-	EncryptionKeysPrevious Keys `yaml:"encryption_keys_previous"`
-	ChallengeKey           Key  `yaml:"challenge_key"`
-	ChallengeKeysPrevious  Keys `yaml:"challenge_keys_previous"`
-	WebhookSigningKey      Key  `yaml:"webhook_signing_key"`
+	CookieKey                  Key    `yaml:"cookie_key"`
+	CookieKeyFile              string `yaml:"cookie_key_file"`
+	CookieKeysPrevious         Keys   `yaml:"cookie_keys_previous"`
+	CookieKeysPreviousFile     string `yaml:"cookie_keys_previous_file"`
+	EncryptionKey              Key    `yaml:"encryption_key"`
+	EncryptionKeyFile          string `yaml:"encryption_key_file"`
+	EncryptionKeysPrevious     Keys   `yaml:"encryption_keys_previous"`
+	EncryptionKeysPreviousFile string `yaml:"encryption_keys_previous_file"`
+	ChallengeKey               Key    `yaml:"challenge_key"`
+	ChallengeKeyFile           string `yaml:"challenge_key_file"`
+	ChallengeKeysPrevious      Keys   `yaml:"challenge_keys_previous"`
+	ChallengeKeysPreviousFile  string `yaml:"challenge_keys_previous_file"`
+	WebhookSigningKey          Key    `yaml:"webhook_signing_key"`
+	WebhookSigningKeyFile      string `yaml:"webhook_signing_key_file"`
 	// AuditKey pseudonymises the subjects of the audit log; empty, a key derived from
 	// ChallengeKey, whose rotation then changes the pseudonyms (Q75).
-	AuditKey Key `yaml:"audit_key"`
+	AuditKey     Key    `yaml:"audit_key"`
+	AuditKeyFile string `yaml:"audit_key_file"`
 }
 
 type TLS struct {
@@ -113,9 +136,11 @@ type TLS struct {
 }
 
 type State struct {
-	// RedisDSN set selects Redis; empty selects the in-memory store.
-	RedisDSN  string `yaml:"redis_dsn"`
-	KeyPrefix string `yaml:"key_prefix"`
+	// RedisDSN set selects Redis; empty selects the in-memory store. RedisDSNFile
+	// gives it by a file, as a secret (Q87).
+	RedisDSN     string `yaml:"redis_dsn"`
+	RedisDSNFile string `yaml:"redis_dsn_file"`
+	KeyPrefix    string `yaml:"key_prefix"`
 	// RedisPoolSize 0 lets the client size the pool (10 per CPU).
 	RedisPoolSize int `yaml:"redis_pool_size"`
 }
@@ -130,6 +155,8 @@ type Remember struct {
 type Store struct {
 	Backend string `yaml:"backend"`
 	DSN     string `yaml:"dsn"`
+	// DSNFile gives DSN by a file, as a secret (Q87).
+	DSNFile string `yaml:"dsn_file"`
 }
 
 type Admin struct {
@@ -139,7 +166,9 @@ type Admin struct {
 	API struct {
 		Enabled    bool   `yaml:"enabled"`
 		PrivateKey string `yaml:"private_key"`
-		PublicKey  string `yaml:"public_key"`
+		// PrivateKeyFile gives PrivateKey by a file, as a secret (Q87).
+		PrivateKeyFile string `yaml:"private_key_file"`
+		PublicKey      string `yaml:"public_key"`
 		// PublicKeysPrevious verify the tokens signed before a rotation of
 		// PrivateKey, until they expire.
 		PublicKeysPrevious List     `yaml:"public_keys_previous"`
@@ -304,7 +333,8 @@ func Load(path string, environ []string) (*Config, []string, error) {
 	lookupEnv := lookupIn(environ)
 	c := defaults()
 	referenced := map[string]bool{}
-	set := map[string]bool{}
+	// The keys the file sets, and the values a ${VAR} of it wrote.
+	set, expanded := map[string]bool{}, map[string]bool{}
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -314,10 +344,11 @@ func Load(path string, environ []string) (*Config, []string, error) {
 			referenced[name] = true
 			return lookupEnv(name)
 		}
-		if set, err = decodeFile(data, c, lookupRef); err != nil {
+		if set, expanded, err = decodeFile(data, c, lookupRef); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
+	fileSet := maps.Clone(set)
 	warnings := unknownOverrides(environ, referenced)
 	if err := applyEnv(c, lookupEnv, set); err != nil {
 		return nil, warnings, err
@@ -327,11 +358,25 @@ func Load(path string, environ []string) (*Config, []string, error) {
 	if err != nil {
 		return nil, warnings, err
 	}
+	// A key the file did not set took its value from a variable; one it set, from a
+	// ${VAR} it holds, in it or in an item of its list.
+	fromEnv := func(path string) bool {
+		if !fileSet[path] {
+			return set[path]
+		}
+		for p := range expanded {
+			if p == path || strings.HasPrefix(p, path+"[") {
+				return true
+			}
+		}
+		return false
+	}
 	resolveWarnings, err := c.resolve()
 	warnings = append(warnings, resolveWarnings...)
 	if err != nil {
 		return nil, warnings, err
 	}
+	c.fromEnvironment = c.environmentSecrets(fromEnv)
 	warnings = append(warnings, c.Seed.warnings()...)
 	validationWarnings, err := c.validate()
 	return c, append(warnings, validationWarnings...), err
@@ -342,6 +387,9 @@ func Load(path string, environ []string) (*Config, []string, error) {
 // DATABASE_URL holds and Postgres refuses.
 func (c *Config) resolve() (warnings []string, err error) {
 	c.Seed.resolve()
+	if err := c.readSecretFiles(); err != nil {
+		return warnings, err
+	}
 	var dropped []string
 	if c.Store.DSN, dropped = withoutDoctrine(c.Store.DSN); len(dropped) > 0 {
 		warnings = append(warnings, fmt.Sprintf("store.dsn: %s dropped, parameters of Doctrine that Postgres refuses", strings.Join(dropped, ", ")))

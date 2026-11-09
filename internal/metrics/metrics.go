@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -74,8 +75,9 @@ type Metrics struct {
 	buildInfo                     *prometheus.GaugeVec
 	propagations                  *prometheus.CounterVec
 
-	rateLimited *prometheus.CounterVec
-	readyChecks *prometheus.GaugeVec
+	rateLimited  *prometheus.CounterVec
+	readyChecks  *prometheus.GaugeVec
+	auditDropped prometheus.Counter
 
 	flows, apps, routes bounded
 
@@ -135,6 +137,7 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 		configRefreshErrors: single("config_refresh_errors_total", "Refreshes of the configuration that failed."),
 		propagations:        counter("logout_propagations_total", "Propagation of the logout to the login apps.", "app", "result"),
 		rateLimited:         counter("failure_rate_limited_total", "Requests refused by the failure limiter.", "surface"),
+		auditDropped:        single("audit_dropped_total", "Lines of the audit log lost, its output blocked or failing (Q89)."),
 		readyChecks: func() *prometheus.GaugeVec {
 			g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "ready_check_up", Help: "Last answer of each check of /ready, 1 for ok; /ready itself does not follow them (Q83)."}, []string{"check"})
 			reg.MustRegister(g)
@@ -154,7 +157,7 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 }
 
 // bounded keeps the distinct values of a label under max: past it, the new ones count
-// as other, and the log says so once.
+// as other, and the log says so once. A value that is not valid UTF-8 is other too.
 type bounded struct {
 	name   string
 	max    int
@@ -165,6 +168,10 @@ type bounded struct {
 }
 
 func (b *bounded) value(v string) string {
+	if !utf8.ValidString(v) {
+		// Prometheus refuses it with a panic: an id of a database not in UTF-8 (R29).
+		return LabelOther
+	}
 	if _, ok := b.seen.Load(v); ok {
 		return v
 	}
@@ -241,6 +248,10 @@ func (m *Metrics) ReadyCheck(check string, ok bool) {
 	}
 	m.readyChecks.WithLabelValues(check).Set(v)
 }
+
+// AuditDropped counts a line of the audit log lost: its queue full, an output that
+// blocks (Q89).
+func (m *Metrics) AuditDropped() { m.auditDropped.Inc() }
 
 // SkipUnavailable counts a memory of the skip too big to write (WRT-2).
 func (m *Metrics) SkipUnavailable() { m.skips.WithLabelValues("login", "unavailable").Inc() }

@@ -12,9 +12,12 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 )
 
-// Sentinels in a whole authentication, a skip and a logout: none reaches the application
-// log, the access log or the audit log, whose subject is pseudonymised (Journalisation,
-// Données personnelles).
+// Sentinels in a whole authentication, then the pages after its end and a challenge
+// unknown to Hydra: none reaches the application log, the access log or the audit log,
+// whose subject is pseudonymised (Journalisation, Données personnelles). The skip, the
+// logout, a webhook and Hydra failing, a panic, Sentry, the spans, /metrics and the
+// headers sent are played on the whole handler: TestSentinelsOnTheWholeHandler, in
+// cmd/hydra-dispatcher (revue R29, P12d).
 func TestSentinelsInTheThreeStreams(t *testing.T) {
 	const (
 		subject = "sentinel.subject@example.org"

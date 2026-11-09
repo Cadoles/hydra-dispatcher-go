@@ -131,6 +131,36 @@ func Check(s store.Settings, allowHTTP, signed bool) error {
 	return errors.Join(errs...)
 }
 
+// ProgramWarnings warns of a webhook run as a local program while secret keys come
+// from the environment, which it names (Q87): a program of the same uid reads them in
+// /proc/1/environ, which no os.Unsetenv changes, whatever the reduced environment it
+// is given. Nothing sends them to it: it must go and read them.
+func ProgramWarnings(s store.Settings, fromEnv []string) []string {
+	if len(fromEnv) == 0 {
+		return nil
+	}
+	var programs []string
+	for _, hook := range []struct{ key, location string }{
+		{"login_accept_webhook_url", s.LoginAcceptWebhookURL},
+		{"consent_accept_webhook_url", s.ConsentAcceptWebhookURL},
+	} {
+		if scheme := store.WebhookScheme(hook.location); hook.location != "" && (scheme == "" || scheme == "file") {
+			programs = append(programs, hook.key)
+		}
+	}
+	what := ""
+	switch len(programs) {
+	case 0:
+		return nil
+	case 1:
+		what = "setting " + programs[0] + " runs a local program"
+	default:
+		what = "settings " + strings.Join(programs, " and ") + " run local programs"
+	}
+	return []string{fmt.Sprintf("%s, which can read the environment of the dispatcher in /proc/1/environ: "+
+		"give %s by a file (the key followed by _file) rather than by the environment", what, strings.Join(fromEnv, ", "))}
+}
+
 // browser is what a webhook is told of the browser: null for what is unknown.
 type browser struct {
 	IP        *string `json:"ip"`
@@ -396,7 +426,8 @@ func (b *bounded) Write(p []byte) (int, error) {
 // run lets the program argv answer: the payload on stdin, a line of JSON in the end,
 // the answer on stdout, exit code 0. It waits for one of webhooks.max_processes at most
 // webhooks.process_timeout, then runs at most as long, under a process group of its own:
-// a timeout or a client gone kills what it started too. Its environment is reduced, no
+// a timeout or a client gone kills what it started too, and so does its end (Q86). Its
+// environment is reduced, no
 // secret of the dispatcher reaching it, and what it says on stderr goes nowhere, a free
 // text that may quote a subject (Q64). Empty stdout changes nothing, as Symfony.
 func (c *Client) run(ctx context.Context, argv []string, host string, body []byte) ([]byte, error) {
@@ -427,7 +458,7 @@ func (c *Client) run(ctx context.Context, argv []string, host string, body []byt
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = waitDelay
-	err := cmd.Run()
+	err := runToEnd(cmd)
 	var exit *exec.ExitError
 	switch {
 	case out.full:
@@ -441,7 +472,8 @@ func (c *Client) run(ctx context.Context, argv []string, host string, body []byt
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, exec.ErrNotFound):
 		return fail(0, "the program does not exist", err)
 	case err != nil && !errors.Is(err, exec.ErrWaitDelay):
-		// A program that exited 0 and left a child on its stdout keeps its answer.
+		// A program that exited 0 and left a child on its stdout keeps its answer, the
+		// child killed with its group.
 		return fail(0, "the program did not start", err)
 	}
 	return out.buf.Bytes(), nil

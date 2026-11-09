@@ -536,6 +536,20 @@ func TestIdentifiedWebhooks(t *testing.T) {
 	if _, err := (identified{Source: src, allowHTTP: true, signed: true}).Snapshot(context.Background()); err != nil {
 		t.Error(err)
 	}
+
+	// A local program with secrets in the environment is warned of at each read that
+	// changes, as the other warnings of a snapshot (Q87).
+	settings.LoginAcceptWebhookURL = "/opt/hooks/login --strict"
+	src = snapshotSource{store.NewSnapshot(nil, nil, settings)}
+	s, err := (identified{Source: src, secrets: []string{"secrets.cookie_key", "store.dsn"}}).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(s.Warnings, func(w string) bool {
+		return strings.Contains(w, "setting login_accept_webhook_url runs a local program") && strings.Contains(w, "give secrets.cookie_key, store.dsn by a file")
+	}) {
+		t.Errorf("warnings %q", s.Warnings)
+	}
 }
 
 // keepLoggers restores the default loggers, which serve replaces.
@@ -744,12 +758,12 @@ func TestNewAudit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	cfg.Observability.Audit.Output = "file:" + path
 	write := func() string {
-		log, closer, err := newAudit(cfg, io.Discard)
+		log, closer, err := newAudit(cfg, io.Discard, slog.New(slog.DiscardHandler), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer closer()
 		log.Refused(context.Background(), "metrics")
+		closer() // the queue emptied
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
@@ -765,17 +779,17 @@ func TestNewAudit(t *testing.T) {
 		t.Errorf("mode %v, err %v", info.Mode(), err)
 	}
 	cfg.Observability.Audit.Output = "file:" + filepath.Join(t.TempDir(), "missing", "audit.log")
-	if _, _, err := newAudit(cfg, io.Discard); err == nil || !strings.Contains(err.Error(), "observability.audit.output") {
+	if _, _, err := newAudit(cfg, io.Discard, slog.New(slog.DiscardHandler), nil); err == nil || !strings.Contains(err.Error(), "observability.audit.output") {
 		t.Errorf("err = %v", err)
 	}
 	var out bytes.Buffer
 	cfg.Observability.Audit.Output = "stdout"
-	log, closer, err := newAudit(cfg, &out)
+	log, closer, err := newAudit(cfg, &out, slog.New(slog.DiscardHandler), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	closer()
 	log.Refused(context.Background(), "metrics")
+	closer()
 	if !strings.Contains(out.String(), `"log_type":"audit"`) {
 		t.Errorf("stdout: %s", out.String())
 	}

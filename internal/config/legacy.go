@@ -76,8 +76,8 @@ var legacyUseless = []string{
 }
 
 // applyLegacy gives the keys neither the file nor a DISPATCHER_* variable set (set)
-// the values of the Symfony variables, and warns of every Symfony variable present
-// that the file does not reference.
+// the values of the Symfony variables, noting them in set too, and warns of every
+// Symfony variable present that the file does not reference.
 func applyLegacy(c *Config, environ []string, lookupEnv func(string) (string, bool), set, referenced map[string]bool) ([]string, error) {
 	keys := map[string]envKey{}
 	for _, k := range envKeys(c) {
@@ -118,6 +118,7 @@ func applyLegacy(c *Config, environ []string, lookupEnv func(string) (string, bo
 			errs = append(errs, fmt.Errorf("%s (%s): %w", strings.Join(vars, ", "), l.path, err))
 			continue
 		}
+		set[l.path] = true
 		w := fmt.Sprintf("%s read as %s until 1.0: set %s, or %s, instead", symfony(vars), l.path, l.path, k.name)
 		if note != "" {
 			w += "; " + note

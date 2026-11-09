@@ -33,16 +33,17 @@ var (
 // schema (an unknown key is an error, so typos do not pass silently) and
 // refuses null outside the seed, then decodes. It works on the parsed tree,
 // so errors give the lines of the file. set holds the infrastructure keys the
-// file sets, for the variables of the Symfony dispatcher (applyLegacy).
-func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) (set map[string]bool, err error) {
-	set = map[string]bool{}
+// file sets, for the variables of the Symfony dispatcher (applyLegacy);
+// expanded the paths of the values a ${VAR} wrote, for EnvironmentSecrets.
+func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) (set, expanded map[string]bool, err error) {
+	set, expanded = map[string]bool{}, map[string]bool{}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
 	if err := dec.Decode(&doc); err != nil {
 		if errors.Is(err, io.EOF) { // empty file
-			return set, nil
+			return set, expanded, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	for {
 		// An empty document, such as a trailing ---, holds nothing to lose.
@@ -52,25 +53,26 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) (
 			break
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(next.Content) > 0 && next.Content[0].ShortTag() != nullTag {
-			return nil, fmt.Errorf("line %d: a second YAML document would be ignored, remove it", next.Content[0].Line)
+			return nil, nil, fmt.Errorf("line %d: a second YAML document would be ignored, remove it", next.Content[0].Line)
 		}
 	}
 
 	p := prepare{
 		lookupEnv: lookupEnv,
+		expanded:  expanded,
 		done:      map[*yaml.Node]bool{},
 		walking:   map[*yaml.Node]bool{},
 		walked:    map[visit]bool{},
 	}
 	p.walk(&doc, reflect.TypeFor[Config](), "")
 	if err := errors.Join(p.errs...); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := doc.Decode(c); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c.Seed.NullSettings = nullSettings(&doc)
 	seed := mappingValue(&doc, "dispatcher")
@@ -88,12 +90,13 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) (
 		}
 		set[k.path] = n != nil
 	}
-	return set, nil
+	return set, expanded, nil
 }
 
 // prepare expands and checks a parsed file, collecting every error.
 type prepare struct {
 	lookupEnv func(string) (string, bool)
+	expanded  map[string]bool     // paths of the values a ${VAR} wrote
 	done      map[*yaml.Node]bool // expanded once, even when aliased
 	walking   map[*yaml.Node]bool // anchored nodes being walked, to refuse a cycle
 	walked    map[visit]bool      // anchors walked through an alias
@@ -246,6 +249,7 @@ func (p *prepare) scalar(n *yaml.Node, path string) {
 		return
 	}
 	if v != n.Value {
+		p.expanded[path] = true
 		n.Value, n.Style = v, n.Style&yaml.TaggedStyle
 		if n.Style == 0 {
 			// The parser tagged the reference itself (!!str): let the value decide.

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
 // The transport of the HTTP calls: no proxy, an idle connection closed after 30 s
@@ -181,4 +183,27 @@ func frozenProxy(t *testing.T, target string) (addr string, freeze func(), accep
 			defer mu.Unlock()
 			return len(frozen)
 		}
+}
+
+// A webhook run as a local program is warned of when secrets come from the environment
+// (Q87), never otherwise.
+func TestProgramWarnings(t *testing.T) {
+	for _, tt := range []struct {
+		login, consent string
+		fromEnv        []string
+		want           string
+	}{
+		{"/opt/hook", "", []string{"secrets.cookie_key"}, "setting login_accept_webhook_url runs a local program"},
+		{"file:///opt/hook", "/opt/other", []string{"store.dsn"}, "settings login_accept_webhook_url and consent_accept_webhook_url run local programs"},
+		{"https://hooks/login", "https://hooks/consent", []string{"secrets.cookie_key"}, ""},
+		{"/opt/hook", "", nil, ""},
+		{"", "", []string{"secrets.cookie_key"}, ""},
+	} {
+		s := store.DefaultSettings()
+		s.LoginAcceptWebhookURL, s.ConsentAcceptWebhookURL = tt.login, tt.consent
+		w := ProgramWarnings(s, tt.fromEnv)
+		if tt.want == "" && len(w) > 0 || tt.want != "" && (len(w) != 1 || !strings.Contains(w[0], tt.want)) {
+			t.Errorf("%q %q %q: %q", tt.login, tt.consent, tt.fromEnv, w)
+		}
+	}
 }

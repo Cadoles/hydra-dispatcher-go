@@ -320,11 +320,12 @@ func TestSkipLogin(t *testing.T) {
 		{name: "SKP-7 EXP-4, Hydra unavailable on the reject: not created", env: hook, ev: entry,
 			says: hydraSays{GetLogin: read(nil), LoginHook: {loginHook: &LoginHookAnswer{Subject: ory.PtrString("bob")}}, RejectLogin: {err: errDown}},
 			kind: ErrorPage, code: E1004, calls: []Op{GetLogin, LoginHook, RejectLogin}},
+		// Q88: the page gives Hydra's logout, as E1003.
 		{name: "SKP-9, the webhook fails", env: hook, ev: entry, says: hydraSays{GetLogin: read(nil), LoginHook: {hookErr: errDown}},
-			kind: ErrorPage, code: E1006, calls: []Op{GetLogin, LoginHook}},
+			kind: ErrorPage, code: E1006, calls: []Op{GetLogin, LoginHook}, check: signOut("http://public.hydra.test/oauth2/sessions/logout")},
 		{name: "SKP-9 A9, a context that is no object", env: hook, ev: entry,
 			says: hydraSays{GetLogin: read(nil), LoginHook: {loginHook: &LoginHookAnswer{Context: json.RawMessage(`[]`)}}},
-			kind: ErrorPage, code: E1006, calls: []Op{GetLogin, LoginHook}},
+			kind: ErrorPage, code: E1006, calls: []Op{GetLogin, LoginHook}, check: signOut("http://public.hydra.test/oauth2/sessions/logout")},
 		// SKP-10: L read in its last moment, hx reached before the write
 		// (ECR-8); the accept is made, its redirect_to never followed.
 		{name: "SKP-10, hx reached before the write", ev: entry,
@@ -919,5 +920,15 @@ func TestSkipFactCarriedOver(t *testing.T) {
 				t.Errorf("answer %+v, write %v", out.Response, out.Write != nil)
 			}
 		})
+	}
+}
+
+// signOut checks the link to Hydra's logout of an error page.
+func signOut(want string) func(*testing.T, played) {
+	return func(t *testing.T, p played) {
+		t.Helper()
+		if p.Response.SignOut != want {
+			t.Errorf("the way out: %q, want %q", p.Response.SignOut, want)
+		}
 	}
 }

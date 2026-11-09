@@ -570,8 +570,37 @@ sleep 30 &`)
 		if a.Err != nil || *a.Subject != "bob" {
 			t.Errorf("answer %+v", a)
 		}
-		if took := time.Since(start); took > waitDelay+2*time.Second {
+		// The child dies with its group at the end of the program: no WaitDelay (Q86).
+		if took := time.Since(start); took > waitDelay/2 {
 			t.Errorf("took %v", took)
+		}
+	})
+	// Q86: what a program leaves behind dies with it, rather than live on, then end a
+	// zombie under a PID 1 that does not reap (revue R28). Detached from stdout, the
+	// child held nothing: it used to outlive the program.
+	t.Run("exit 0, a child detached", func(t *testing.T) {
+		pidFile := filepath.Join(t.TempDir(), "pid")
+		path := script(t, `sleep 30 >/dev/null 2>&1 &
+echo $! > `+pidFile+`
+echo '{"subject":"bob"}'`)
+		a := newClient(t).Login(context.Background(), loginCall(path))
+		if a.Err != nil || *a.Subject != "bob" {
+			t.Fatalf("answer %+v", a)
+		}
+		data, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for childAlive(pid) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the child %d outlived the program", pid)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	})
 	t.Run("client gone", func(t *testing.T) {
