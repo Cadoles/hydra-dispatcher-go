@@ -109,6 +109,22 @@ func TestReload(t *testing.T) {
 	}
 }
 
+// A file written between serve's reading of the theme and the pages' start,
+// the stores' start in between, is served at the first page (revue R32): the
+// stamp taken at New counted it as read, until another change.
+func TestReloadChangeDuringStart(t *testing.T) {
+	dir := writeTheme(t, map[string]string{"translations/en.json": `{"choice.title": "Before"}`})
+	th, err := LoadTheme(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rewrite(t, dir, "translations/en.json", `{"choice.title": "After"}`)
+	w := newWorld(t, worldOptions{base: base, theme: th, reload: true})
+	if body := text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL+"&_locale=en", nil)); !strings.Contains(body, "After") {
+		t.Errorf("first page:\n%s", body)
+	}
+}
+
 // Without ui.reload, the theme is read once: a file written on the disk after the
 // start changes nothing, theme.css served the one hashed.
 func TestNoReload(t *testing.T) {

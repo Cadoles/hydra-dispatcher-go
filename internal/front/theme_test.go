@@ -221,6 +221,70 @@ func TestCheckTheme(t *testing.T) {
 	}
 }
 
+// The check reads the fields in the form that posts them, as a browser sends
+// them (revue R32): a form in GET, the default of HTML, fields out of the form,
+// in another one, or a form posted to another URL passed, and broke the page.
+func TestCheckForms(t *testing.T) {
+	page := func(file, title, content string) map[string]string {
+		return map[string]string{"templates/" + file + ".html.tmpl": `{{define "title"}}{{.T "` + title + `"}}{{end}}{{define "content"}}` + content + `{{end}}`}
+	}
+	choice := func(form string) map[string]string {
+		return page("select", "choice.title", `{{if .Flows}}`+form+`{{end}}`)
+	}
+	const (
+		choiceFields  = `{{template "csrf" .}}<input type="hidden" name="login_challenge" value="{{.Form.LoginChallenge}}">{{range .Flows}}{{template "flow_card" .}}{{end}}`
+		consentHidden = `{{template "csrf" .}}<input type="hidden" name="consent_challenge" value="{{.Form.ConsentChallenge}}">{{if .Form.Print}}<input type="hidden" name="claims_print" value="{{.Form.Print}}">{{end}}`
+		accept        = `<button name="action" value="accept">{{.T "consent.accept"}}</button>`
+		reject        = `<button name="action" value="reject">{{.T "consent.reject"}}</button>`
+	)
+	consent := func(content string) map[string]string { return page("consent", "consent.title", content) }
+	logout := func(form string) map[string]string {
+		return page("logout", "logout.title", `{{if .Form.LogoutChallenge}}`+form+`{{end}}`)
+	}
+	for name, tc := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"choice in GET": {choice(`<form action="{{.Form.Action}}">` + choiceFields + `<button>Go</button></form>`),
+			`page select (flows, one refused) in en: no <form method="post" action="/?login_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">`},
+		"fields out of the form": {choice(`{{template "csrf" .}}<form method="post" action="{{.Form.Action}}"><input type="hidden" name="login_challenge" value="{{.Form.LoginChallenge}}">{{range .Flows}}{{template "flow_card" .}}{{end}}<button>Go</button></form>`),
+			"page select (flows, one refused) in en: no field csrf_token in the form"},
+		"field disabled": {choice(`<form method="post" action="{{.Form.Action}}"><input type="hidden" name="csrf_token" value="{{.Form.CSRF}}" disabled><input type="hidden" name="login_challenge" value="{{.Form.LoginChallenge}}">{{range .Flows}}{{template "flow_card" .}}{{end}}<button>Go</button></form>`),
+			"page select (flow selected) in fr: no field csrf_token in the form"},
+		"field of another form": {choice(`<form method="post" action="{{.Form.Action}}">` + choiceFields + `<input type="hidden" name="login_challenge" value="x" form="other"><button>Go</button></form>`),
+			""},
+		"accept without the challenge": {consent(`<form method="post" action="{{.Form.Action}}">{{template "csrf" .}}` + accept + `</form><form method="post" action="{{.Form.Action}}">` + consentHidden + reject + `</form>`),
+			"page consent (scopes, claims, audience) in en: no field consent_challenge in the form"},
+		"posted to another URL": {consent(`<form method="post" action="/consent">` + consentHidden + accept + reject + `</form>`),
+			`page consent (scopes, claims, audience) in en: no <form method="post" action="/consent?consent_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">`},
+		"action hidden and a button": {consent(`<form method="post" action="{{.Form.Action}}">` + consentHidden + `<input type="hidden" name="action" value="reject">` + accept + reject + `</form>`),
+			"page consent (scopes, claims, audience) in en: field action is both a field always sent and a button or a choice"},
+		"hidden field posted twice": {consent(`<form method="post" action="{{.Form.Action}}"><input type="hidden" name="consent_challenge" value="x">` + consentHidden + accept + reject + `</form>`),
+			`page consent (nothing asked) in fr: field consent_challenge posts "x" first, which the handlers read, before "c2FtcGxlX2NoYWxsZW5nZQ=="`},
+		"accept posted elsewhere": {logout(`<form method="post" action="{{.Form.Action}}">{{template "csrf" .}}<input type="hidden" name="logout_challenge" value="{{.Form.LogoutChallenge}}"><button name="action" value="accept" formaction="/logout">Yes</button><button name="action" value="reject">No</button></form>`),
+			`page logout (confirm) in en: field action without the value "accept"`},
+		"accept of type button": {logout(`<form method="post" action="{{.Form.Action}}">{{template "csrf" .}}<input type="hidden" name="logout_challenge" value="{{.Form.LogoutChallenge}}"><button type="button" name="action" value="accept">Yes</button><button name="action" value="reject">No</button></form>`),
+			`page logout (other session) in fr: field action without the value "accept"`},
+		// What a browser posts as the handlers read it.
+		"two whole forms": {consent(`<form method="POST" action="{{.Form.Action}}">` + consentHidden + accept + `</form><form method="post" action="{{.Form.Action}}">` + consentHidden + reject + `</form>`), ""},
+		"formaction of the page": {logout(`<form method="post">{{template "csrf" .}}<input type="hidden" name="logout_challenge" value="{{.Form.LogoutChallenge}}"><button name="action" value="accept" formaction="{{.Form.Action}}">Yes</button></form>`),
+			`page logout (confirm) in en: no <form method="post" action="/logout?logout_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">`},
+		"within a form, a form ignored": {choice(`<form method="post" action="{{.Form.Action}}">` + choiceFields + `<form method="get"></form><button>Go</button></form>`), ""},
+	} {
+		th, err := LoadTheme(writeTheme(t, tc.files))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		err = Check(th)
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
 // The locales of the settings the theme has no catalog for are named, each
 // with what the pages do without it (Q92).
 func TestLocaleWarnings(t *testing.T) {

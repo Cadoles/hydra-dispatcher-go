@@ -5,10 +5,8 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"mime"
 	"net/http"
@@ -389,8 +387,8 @@ const (
 
 // check renders each page of th in each locale with sample data, through each
 // branch of the templates (Thèmes, validation). A template that fails, a
-// key a catalog lacks, a form without the fields the handlers read, or code
-// the CSP would block stops the start, not a login.
+// key a catalog lacks, a form that does not post the fields the handlers
+// read, or code the CSP would block stops the start, not a login.
 func (h *Handler) check(th *Theme) error {
 	cfg := sampleConfig(th)
 	missing := map[[2]string]bool{}
@@ -403,7 +401,7 @@ func (h *Handler) check(th *Theme) error {
 			var buf bytes.Buffer
 			err := th.templates[s.name].ExecuteTemplate(&buf, "layout", s.page)
 			if err == nil {
-				err = formFields(buf.Bytes(), s.fields)
+				err = formFields(buf.Bytes(), s.page.Form.Action, s.fields)
 				for _, b := range inlineCode(buf.Bytes()) {
 					blocked[fmt.Sprintf("page %s: %s", s.name, b)] = true
 				}
@@ -522,43 +520,117 @@ func inlineCode(page []byte) []string {
 	}
 }
 
-// formFields checks that the page's form fields (input, button, select,
-// textarea) carry each name of want, with its value when one is given.
-func formFields(page []byte, want map[string]string) error {
-	got := map[string][]string{}
-	d := xml.NewDecoder(bytes.NewReader(page))
-	d.Strict, d.AutoClose, d.Entity = false, xml.HTMLAutoClose, xml.HTMLEntity
+// postedFields are the fields a form posts, by name: the values a field sends
+// whatever the button (hidden, text, select, textarea), and those a button, a
+// radio or a checkbox sends when it is the one clicked or checked.
+type postedFields struct{ always, chosen map[string][]string }
+
+// formFields checks that a form of the page posts each name of want, with its
+// value when one is given ("" for any): a <form method="post"> whose action
+// is action, the page's .Form.Action, the fields between its tags. A field
+// elsewhere on the page, a form in GET, the default of HTML, or one posted to
+// another URL would not reach the handlers (revue R32). What a browser does
+// not send is not counted: a field disabled or tied to another form by form=,
+// a button of type button or reset, a submit button that posts elsewhere by
+// formaction or formmethod. A name both a field and a button would post two
+// values, the handlers reading the first.
+func formFields(page []byte, action string, want map[string]string) error {
+	if len(want) == 0 {
+		return nil
+	}
+	var forms []*postedFields
+	// inForm: a form is open, which open holds when it posts to action. A
+	// form within a form is ignored, as browsers do.
+	inForm, open := false, (*postedFields)(nil)
+	post := func(method string) bool { return strings.EqualFold(strings.TrimSpace(method), "post") }
+	z := html.NewTokenizer(bytes.NewReader(page))
 	for {
-		tok, err := d.Token()
-		if err == io.EOF {
+		tt := z.Next()
+		if tt == html.ErrorToken {
 			break
 		}
-		if err != nil {
-			return fmt.Errorf("unreadable HTML: %w", err)
-		}
-		if e, ok := tok.(xml.StartElement); ok && slices.Contains([]string{"input", "button", "select", "textarea"}, e.Name.Local) {
-			var name, value string
-			for _, a := range e.Attr {
-				switch a.Name.Local {
-				case "name":
-					name = a.Value
-				case "value":
-					value = a.Value
-				}
+		if tt == html.EndTagToken {
+			if name, _ := z.TagName(); string(name) == "form" {
+				inForm, open = false, nil
 			}
-			got[name] = append(got[name], value)
+			continue
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+		t := z.Token()
+		attrs := map[string]string{}
+		for _, a := range t.Attr {
+			if _, ok := attrs[a.Key]; !ok { // the first of two, as browsers read them
+				attrs[a.Key] = a.Val
+			}
+		}
+		switch t.Data {
+		case "form":
+			if inForm {
+				continue
+			}
+			inForm, open = true, nil
+			if post(attrs["method"]) && attrs["action"] == action {
+				open = &postedFields{always: map[string][]string{}, chosen: map[string][]string{}}
+				forms = append(forms, open)
+			}
+		case "input", "button", "select", "textarea":
+			name := attrs["name"]
+			_, disabled := attrs["disabled"]
+			_, elsewhere := attrs["form"]
+			if open == nil || name == "" || disabled || elsewhere {
+				continue
+			}
+			kind := strings.ToLower(strings.TrimSpace(attrs["type"]))
+			if t.Data == "button" && kind == "" {
+				kind = "submit"
+			}
+			switch {
+			case t.Data == "button" && kind != "submit", t.Data == "input" && (kind == "button" || kind == "reset"):
+			case kind == "submit" || t.Data == "input" && kind == "image":
+				formAction, hasAction := attrs["formaction"]
+				formMethod, hasMethod := attrs["formmethod"]
+				if hasAction && formAction != action || hasMethod && !post(formMethod) {
+					continue
+				}
+				open.chosen[name] = append(open.chosen[name], attrs["value"])
+			case t.Data == "input" && (kind == "radio" || kind == "checkbox"):
+				open.chosen[name] = append(open.chosen[name], attrs["value"])
+			default:
+				open.always[name] = append(open.always[name], attrs["value"])
+			}
 		}
 	}
-	var errs []error
-	for _, name := range slices.Sorted(maps.Keys(want)) {
-		switch values, ok := got[name]; {
-		case !ok:
-			errs = append(errs, fmt.Errorf("no field %s", name))
-		case want[name] != "" && !slices.Contains(values, want[name]):
-			errs = append(errs, fmt.Errorf("field %s without the value %q", name, want[name]))
+	if len(forms) == 0 {
+		return fmt.Errorf(`no <form method="post" action="%s">: the handlers read the fields it posts, and only them`, action)
+	}
+	// The form that comes closest: one form must carry them all.
+	var best []error
+	for i, f := range forms {
+		var errs []error
+		for _, name := range slices.Sorted(maps.Keys(want)) {
+			always, chosen := f.always[name], f.chosen[name]
+			switch value := want[name]; {
+			case len(always) == 0 && len(chosen) == 0:
+				errs = append(errs, fmt.Errorf("no field %s in the form", name))
+			case len(always) > 0 && len(chosen) > 0:
+				errs = append(errs, fmt.Errorf("field %s is both a field always sent and a button or a choice: the form posts two values, the handlers read the first", name))
+			case value == "":
+			case len(always) > 0 && always[0] != value && slices.Contains(always, value):
+				errs = append(errs, fmt.Errorf("field %s posts %q first, which the handlers read, before %q", name, always[0], value))
+			case len(always) > 0 && always[0] != value, len(always) == 0 && !slices.Contains(chosen, value):
+				errs = append(errs, fmt.Errorf("field %s without the value %q", name, value))
+			}
+		}
+		if len(errs) == 0 {
+			return nil
+		}
+		if i == 0 || len(errs) < len(best) {
+			best = errs
 		}
 	}
-	return errors.Join(errs...)
+	return errors.Join(best...)
 }
 
 // static serves a static file of the theme, cached for a year when its URL

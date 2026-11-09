@@ -1364,8 +1364,8 @@ func TestCheck(t *testing.T) {
 			delete(h.theme.catalogs["fr"], "error.E1006")
 		}, []string{"catalog en: no text for consent.accept", "catalog fr: no text for claim.email", "catalog en: no text for locale.en", "catalog fr: no text for error.E1006"}},
 		{"fields lacking", func(h *Handler) {
-			h.theme.templates["select"] = template.Must(template.New("layout").Parse(`<form><input name="login_challenge" value="{{.Form.LoginChallenge}}"><input name="csrf_token" value="x"></form>`))
-		}, []string{"page select (flows, one refused) in en: ", "no field flow", `field csrf_token without the value "` + sampleCSRF + `"`}},
+			h.theme.templates["select"] = template.Must(template.New("layout").Parse(`<form method="post" action="{{.Form.Action}}"><input name="login_challenge" value="{{.Form.LoginChallenge}}"><input name="csrf_token" value="x"></form>`))
+		}, []string{"page select (flows, one refused) in en: ", "no field flow in the form", `field csrf_token without the value "` + sampleCSRF + `"`}},
 		{"template failing", func(h *Handler) {
 			h.theme.templates["consent"] = template.Must(template.New("layout").Parse(`{{.Nope}}`))
 		}, []string{"page consent (nothing asked) in fr"}},

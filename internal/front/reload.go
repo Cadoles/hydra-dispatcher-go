@@ -32,9 +32,11 @@ type reloader struct {
 	err   error
 }
 
+// newReloader starts without a stamp: th was read at serve's start, before the
+// stores, and a file written since would otherwise count as read, never served
+// before another change (revue R32). The first page reads the theme again.
 func newReloader(th *Theme, check func(*Theme) error, logger *slog.Logger) *reloader {
-	stamp, _ := stampOf(th.Dir) // a failure reads it again at the first page
-	return &reloader{dir: th.Dir, check: check, logger: logger, stamp: stamp, theme: th}
+	return &reloader{dir: th.Dir, check: check, logger: logger, theme: th}
 }
 
 // current returns the theme, read again when a file changed; the error of the

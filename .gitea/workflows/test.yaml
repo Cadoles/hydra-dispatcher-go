@@ -110,7 +110,10 @@ jobs:
       - name: Theme check
         run: go run ./cmd/hydra-dispatcher theme check examples/theme-demo
 
+      # theme.css committed, and as build.sh writes it: git diff alone passes an
+      # untracked file, one a commit removed and build.sh wrote again (revue R32).
       - name: theme.css built
         run: |
           examples/theme-demo/build.sh
+          git ls-files --error-unmatch examples/theme-demo/static/theme.css
           git diff --exit-code -- examples/theme-demo/static/theme.css

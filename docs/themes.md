@@ -127,7 +127,7 @@ N'écrivez jamais une URL du dispatcher en dur (`/static/…`, `/locale/…`, `/
 
 ### Ce que les gestionnaires lisent
 
-Les formulaires postent des champs que le dispatcher lit ; le contrôle les relit dans le HTML rendu, avec leurs valeurs.
+Les formulaires postent des champs que le dispatcher lit ; le contrôle les relit dans le HTML rendu, avec leurs valeurs, comme un navigateur les envoie : dans un même `<form method="post">` dont l'`action` est `{{.Form.Action}}`, entre ses balises. Il refuse un formulaire sans `method` (un navigateur l'envoie en `GET`, et la page revient sans fin), une `action` écrite à la main, un champ hors du formulaire ou dans un autre, un champ `disabled` ou rattaché ailleurs par `form=`, un bouton `accept` de `type="button"` ou qui poste ailleurs par `formaction`, et un nom porté à la fois par un champ caché et par un bouton : le formulaire posterait deux valeurs, et les gestionnaires lisent la première. Deux formulaires complets, l'un pour accepter, l'autre pour refuser, sont acceptés.
 
 - Choix : `<form method="post" action="{{.Form.Action}}">`, un `<input type="radio" name="flow" value="{{.ID}}" required>` par mode, coché si `.Selected`, un champ caché `login_challenge` valant `{{.Form.LoginChallenge}}`, et le partiel `csrf`. Un bouton de validation, qui peut porter `autofocus` : le dernier mode est présélectionné, l'utilisateur confirme d'Entrée.
 - Consent : `<form method="post" action="{{.Form.Action}}">`, un champ caché `consent_challenge` valant `{{.Form.ConsentChallenge}}`, le partiel `csrf`, `{{if .Form.Print}}<input type="hidden" name="claims_print" value="{{.Form.Print}}">{{end}}`, un bouton `name="action" value="accept"` et un bouton `name="action" value="reject"` ; toute autre valeur refuse. Aucun des deux n'a `autofocus` : une touche gardée appuyée depuis la page précédente n'accepte rien.
@@ -185,7 +185,7 @@ Au démarrage, à chaque relecture de `ui.reload`, et par `theme check`, chaque 
 
 - un gabarit qui ne s'analyse pas ou qui échoue au rendu ;
 - une clé de traduction qu'un catalogue n'a pas, même quand `fallback_locale` la fournirait ;
-- un formulaire sans les champs que les gestionnaires lisent, ou avec d'autres valeurs ;
+- un formulaire qui ne poste pas les champs que les gestionnaires lisent, avec leurs valeurs : `method="post"`, `action="{{.Form.Action}}"`, les champs entre ses balises (plus haut) ;
 - le code que la CSP bloque (plus haut), dit une fois par page.
 
 ## Accessibilité
