@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -46,8 +47,9 @@ type fakeStore struct {
 	// written are the changes of a write when they differ from those of a
 	// dry run: the database changed in between.
 	written []store.Change
-	// check is that of SetCheck.
-	check func(*store.Snapshot) error
+	// check is that of SetCheck, committed that of OnCommit.
+	check     func(*store.Snapshot) error
+	committed func(context.Context)
 }
 
 func (f *fakeStore) record(call string) {
@@ -124,6 +126,19 @@ func (f *fakeStore) SetCheck(check func(*store.Snapshot) error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.check = check
+}
+
+// OnCommit keeps committed, which the fake never calls.
+func (f *fakeStore) OnCommit(committed func(context.Context)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.committed = committed
+}
+
+// Listen records that serve listens, then waits for the end of ctx.
+func (f *fakeStore) Listen(ctx context.Context, _ func(), _ *slog.Logger) {
+	f.record("listen")
+	<-ctx.Done()
 }
 
 // useStore makes openStore give f for the length of t.
@@ -481,8 +496,11 @@ func TestServePreparesStore(t *testing.T) {
 	cancel()
 	var err error
 	logs := stdoutOf(t, func() { err = serve(ctx, nil) })
-	if err != nil || !slices.Equal(f.Calls(), []string{"migrate", "bootstrap force write", "close"}) {
+	if err != nil || !slices.Equal(f.Calls(), []string{"migrate", "bootstrap force write", "listen", "close"}) {
 		t.Fatalf("err = %v, calls = %q", err, f.Calls())
+	}
+	if f.committed == nil || f.check == nil {
+		t.Error("serve gave the store no hook of commit, or no check")
 	}
 	for _, want := range []string{
 		`"msg":"bootstrap.change"`, `"kind":"app","id":"hydra-sql","action":"update","fields":["login_url","receive_claims"]`,

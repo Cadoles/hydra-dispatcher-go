@@ -40,6 +40,8 @@ const (
 // Postgres is the database of the configuration.
 type Postgres struct {
 	db *sql.DB
+	// cfg is that of the connection of Listen, outside the pool.
+	cfg *pgx.ConnConfig
 	// check and committed are those of SetCheck and OnCommit.
 	check     func(*Snapshot) error
 	committed func(context.Context)
@@ -59,7 +61,7 @@ func Open(ctx context.Context, dsn string) (*Postgres, error) {
 	// admin: a few connections are plenty.
 	db.SetMaxOpenConns(4)
 	db.SetConnMaxIdleTime(5 * time.Minute)
-	p := &Postgres{db: db}
+	p := &Postgres{db: db, cfg: cfg}
 	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := p.Ping(pingCtx); err != nil {

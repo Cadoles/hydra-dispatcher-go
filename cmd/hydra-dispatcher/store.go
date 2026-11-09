@@ -28,6 +28,8 @@ type configStore interface {
 	LastMigration(ctx context.Context) (string, error)
 	Bootstrap(ctx context.Context, seed config.Seed, mode store.Mode, write bool) ([]store.Change, error)
 	SetCheck(check func(*store.Snapshot) error)
+	OnCommit(committed func(context.Context))
+	Listen(ctx context.Context, changed func(), logger *slog.Logger)
 }
 
 // openStore opens the configuration store at dsn. The tests replace it:

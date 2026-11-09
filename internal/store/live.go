@@ -22,8 +22,8 @@ type Source interface {
 	Snapshot(ctx context.Context) (*Snapshot, error)
 }
 
-// Live holds the snapshot the handlers read. It is replaced whole, by Refresh
-// or every RefreshEvery while Run runs.
+// Live holds the snapshot the handlers read. It is replaced whole, by Refresh,
+// or by Run every RefreshEvery and at each Changed.
 type Live struct {
 	source   Source
 	logger   *slog.Logger
@@ -36,6 +36,9 @@ type Live struct {
 	warned []string // the warnings last logged
 	failed bool     // the last refresh failed
 
+	// changed holds a refresh Changed asked for, one at most.
+	changed chan struct{}
+
 	// OnRefresh, nil for none, is told of each refresh that ended, nil for one that
 	// succeeded; not of one the caller canceled. It is set before Run.
 	OnRefresh func(err error)
@@ -45,7 +48,7 @@ type Live struct {
 // warnings of the snapshots go to warnings, which writes them whatever the
 // level of logger: config.warning, as the startup ones.
 func NewLive(ctx context.Context, source Source, logger, warnings *slog.Logger) (*Live, error) {
-	l := &Live{source: source, logger: logger, warnings: warnings}
+	l := &Live{source: source, logger: logger, warnings: warnings, changed: make(chan struct{}, 1)}
 	if err := l.Refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -97,7 +100,17 @@ func (l *Live) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// Run refreshes every interval until ctx ends.
+// Changed asks Run for a refresh now: another instance wrote
+// (Postgres.Listen). It never waits; the requests made before the refresh
+// starts make one refresh, those made during it one more.
+func (l *Live) Changed() {
+	select {
+	case l.changed <- struct{}{}:
+	default:
+	}
+}
+
+// Run refreshes every interval, and at each Changed, until ctx ends.
 func (l *Live) Run(ctx context.Context, every time.Duration) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
@@ -106,9 +119,10 @@ func (l *Live) Run(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			refreshCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
-			_ = l.Refresh(refreshCtx) // logged by Refresh
-			cancel()
+		case <-l.changed:
 		}
+		refreshCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
+		_ = l.Refresh(refreshCtx) // logged by Refresh
+		cancel()
 	}
 }

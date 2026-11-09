@@ -134,9 +134,16 @@ func serve(ctx context.Context, args []string) error {
 	}
 	watch.ConfigRefreshed(nil)
 	live.OnRefresh = watch.ConfigRefreshed
+	// A write reads back at once on the instance that made it; those of the
+	// other instances show as soon as Listen hears of them (Q99), every
+	// RefreshEvery at worst.
+	db.OnCommit(func(ctx context.Context) { _ = live.Refresh(ctx) }) // logged by Refresh
 	go func() {
 		defer close(refreshed)
+		var listening sync.WaitGroup
+		listening.Go(func() { db.Listen(refreshCtx, live.Changed, logger) })
 		live.Run(refreshCtx, store.RefreshEvery)
+		listening.Wait()
 	}()
 
 	var draining atomic.Bool

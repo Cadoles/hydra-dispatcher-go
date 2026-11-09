@@ -213,6 +213,59 @@ func TestLiveRun(t *testing.T) {
 	<-done
 }
 
+// countingSource counts its reads; release, when set, holds each read until
+// it receives.
+type countingSource struct {
+	reads   atomic.Int32
+	release chan struct{}
+}
+
+func (c *countingSource) Snapshot(context.Context) (*Snapshot, error) {
+	if c.reads.Add(1) > 1 && c.release != nil {
+		<-c.release
+	}
+	return &Snapshot{}, nil
+}
+
+// Changed refreshes without waiting for the tick; the requests made before a
+// refresh starts make one, those made during it one more.
+func TestLiveChanged(t *testing.T) {
+	src := &countingSource{release: make(chan struct{})}
+	live, err := NewLive(context.Background(), src, slog.New(slog.DiscardHandler), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		live.Changed() // before Run: one refresh
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { live.Run(ctx, time.Hour); close(done) }()
+	waitReads := func(n int32) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for src.reads.Load() < n {
+			if time.Now().After(deadline) {
+				t.Fatalf("%d reads, want %d", src.reads.Load(), n)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitReads(2) // the refresh, held
+	for range 3 {
+		live.Changed() // during it: one more
+	}
+	src.release <- struct{}{}
+	waitReads(3)
+	src.release <- struct{}{}
+	time.Sleep(50 * time.Millisecond)
+	if n := src.reads.Load(); n != 3 {
+		t.Errorf("%d reads, want 3", n)
+	}
+	cancel()
+	<-done
+}
+
 // stuckSource answers NewLive, then holds every read until its context ends,
 // and sends that context's deadline.
 type stuckSource struct {
