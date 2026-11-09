@@ -296,6 +296,30 @@ The full stack (Hydra, login apps, Postgres, Redis) runs from the sibling
 `hydra-dev` repository: `make up-go` there serves this dispatcher, built from
 this checkout, on Hydra 2.1 (`make up-go-hydra22` on 2.2).
 
+## Releases
+
+A tag `v*` runs `.gitea/workflows/release.yaml`: the image is pushed to
+`reg.cadoles.com/cadoles/hydra-dispatcher-go`, its CycloneDX SBOM (syft) attested, both
+signed with cosign by the key pair of the dispatcher, and the release of the forge gets
+the changelog and the SBOM. Nothing goes to the public services of Sigstore
+(`.gitea/cosign-signing-config.json` names none): a deployment checks the digest with
+the public key alone, `cosign.pub` at the root of this repository:
+
+```sh
+cosign verify --key cosign.pub --insecure-ignore-tlog=true reg.cadoles.com/cadoles/hydra-dispatcher-go@sha256:<digest>
+cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true --type cyclonedx reg.cadoles.com/cadoles/hydra-dispatcher-go@sha256:<digest>
+```
+
+Not ready yet: the owner creates the secrets of the repository, `REGISTRY_USERNAME` and
+`REGISTRY_PASSWORD` (a robot account of the project cadoles), `COSIGN_PRIVATE_KEY` and
+`COSIGN_PASSWORD` (the pair of `cosign generate-key-pair`), `RELEASE_TOKEN`, and commits
+`cosign.pub`; without it, the workflow stops before building.
+
+Dependencies follow `renovate.json`: minor and patch updates grouped each week and
+merged once the CI passes, a pull request of its own for a major, `ory/hydra-client-go`
+and BuildKit; actions and images pinned by digest. The scheduled run is the platform's.
+`tini` (Dockerfile) is updated by hand, its checksums with it.
+
 ## End-to-end run
 
 `examples/hydra-dev/e2e` is the browser and the OAuth2 client on hydra-dev's

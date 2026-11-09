@@ -1,0 +1,156 @@
+name: Release
+
+# Push a semver tag to release, e.g.:
+#   git tag v1.2.3 && git push origin v1.2.3
+#
+# The image goes to reg.cadoles.com/cadoles/hydra-dispatcher-go, with its
+# CycloneDX SBOM attested and both signed by the key pair of the dispatcher
+# (Q90); the release of the forge gets the changelog and the SBOM. Secrets of
+# the repository, which the owner creates:
+#   REGISTRY_USERNAME, REGISTRY_PASSWORD  a robot account of the project cadoles
+#                                         of reg.cadoles.com
+#   COSIGN_PRIVATE_KEY, COSIGN_PASSWORD   the private key of the pair, as
+#                                         cosign generate-key-pair writes it,
+#                                         and its password; the public key is
+#                                         cosign.pub, at the root of the
+#                                         repository
+#   RELEASE_TOKEN                         a token of the forge that may create
+#                                         a release, as for hydra-sql-go
+#
+# Actions and images are pinned by digest, bumped by Renovate (renovate.json).
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  IMAGE: reg.cadoles.com/cadoles/hydra-dispatcher-go
+  SBOM: hydra-dispatcher-go.cdx.json
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0 # full history so we can build a changelog
+
+      # Nothing could verify a signature made without it.
+      - name: Public key
+        run: |
+          test -s cosign.pub || { echo "cosign.pub is missing: commit the public key of the pair before releasing"; exit 1; }
+
+      # Pinned: the BuildKit the runner picks by default fails to mask
+      # /proc/acpi ("runc run failed ... invalid argument"), so every RUN dies
+      # at container init. The same pin as the other projects built on that runner.
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.23.2@sha256:ddd1ca44b21eda906e81ab14a3d467fa6c39cd73b9a39df1196210edcb8db59e
+
+      - name: Log in to reg.cadoles.com
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: reg.cadoles.com
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # The SBOM of the image pushed, read from the registry: the Go modules of
+      # the binary and the packages of distroless. tini, a static binary without
+      # metadata, is not in it: its version and checksum are in the Dockerfile.
+      - name: SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ env.SBOM }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.4
+
+      # Signed by the key pair alone: .gitea/cosign-signing-config.json names no
+      # transparency log nor timestamp authority, so nothing goes to the public
+      # services of Sigstore, and a verification ignores the log
+      # (--insecure-ignore-tlog), the key being what proves. Cosign 3 refuses
+      # --tlog-upload=false beside its default signing config. The digest is
+      # signed, never a tag.
+      - name: Sign the image, attest its SBOM
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
+            --signing-config .gitea/cosign-signing-config.json "$REF"
+          cosign attest --yes --key env://COSIGN_PRIVATE_KEY \
+            --signing-config .gitea/cosign-signing-config.json \
+            --type cyclonedx --predicate "$SBOM" "$REF"
+
+      - name: Verify the signature and the attestation
+        env:
+          REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+        run: |
+          cosign verify --key cosign.pub --insecure-ignore-tlog=true "$REF" >/dev/null
+          cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true \
+            --type cyclonedx "$REF" >/dev/null
+
+      - name: Build changelog
+        id: changelog
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          prev="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            range="${prev}..${GITHUB_REF_NAME}"
+          else
+            range="${GITHUB_REF_NAME}"
+          fi
+          {
+            echo "body<<EOF"
+            echo "## ${GITHUB_REF_NAME}"
+            echo
+            echo "Image: \`${IMAGE}@${DIGEST}\`, signed: \`cosign verify --key cosign.pub --insecure-ignore-tlog=true ${IMAGE}@${DIGEST}\`."
+            echo
+            git log --no-merges --pretty='- %s' "$range"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create Gitea release, with the SBOM
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          BODY: ${{ steps.changelog.outputs.body }}
+        run: |
+          id="$(curl -sSf -X POST \
+            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg tag "$GITHUB_REF_NAME" \
+              --arg body "$BODY" \
+              '{tag_name: $tag, name: $tag, body: $body, draft: false, prerelease: false}')" | jq -r .id)"
+          curl -sSf -X POST \
+            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${id}/assets?name=hydra-dispatcher-go-${GITHUB_REF_NAME}.cdx.json" \
+            -H "Authorization: token ${RELEASE_TOKEN}" \
+            -F "attachment=@${SBOM}" >/dev/null

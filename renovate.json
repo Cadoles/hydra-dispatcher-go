@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Weekly minor and patch updates, merged once the CI passes; majors, ory/hydra-client-go and BuildKit in pull requests of their own, reviewed. The scheduled run is the platform's, on Tekton.",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests"
+  ],
+  "timezone": "Europe/Paris",
+  "schedule": ["* 0-5 * * 1"],
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "description": "Minor and patch updates and new digests, grouped each week, merged once the CI passes (tests, govulncheck).",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "groupName": "weekly updates",
+      "automerge": true
+    },
+    {
+      "description": "The Go toolchain of go.mod and the golang image of the Dockerfile move together: the image sets GOTOOLCHAIN=local.",
+      "matchDepNames": ["go", "golang"],
+      "groupName": "go toolchain",
+      "automerge": true
+    },
+    {
+      "description": "A major version: a pull request of its own, reviewed.",
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "automerge": false
+    },
+    {
+      "description": "ory/hydra-client-go follows the version of Hydra the dispatcher is played against: a pull request of its own, reviewed.",
+      "matchPackageNames": ["/^github\\.com/ory/hydra-client-go(/|$)/"],
+      "groupName": null,
+      "automerge": false
+    },
+    {
+      "description": "BuildKit is pinned for the runner of the forge, whose default fails to mask /proc/acpi: reviewed.",
+      "matchDepNames": ["moby/buildkit"],
+      "groupName": null,
+      "automerge": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The BuildKit of docker/setup-buildx-action, pinned by digest in the workflows.",
+      "managerFilePatterns": ["/(^|/)\\.gitea/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["image=(?<depName>moby/buildkit):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})"],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}
