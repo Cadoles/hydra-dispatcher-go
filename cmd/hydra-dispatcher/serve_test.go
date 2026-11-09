@@ -26,6 +26,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
@@ -550,6 +551,59 @@ func TestIdentifiedWebhooks(t *testing.T) {
 		return strings.Contains(w, "setting login_accept_webhook_url runs a local program") && strings.Contains(w, "give secrets.cookie_key, store.dsn by a file")
 	}) {
 		t.Errorf("warnings %q", s.Warnings)
+	}
+}
+
+// A locale of the settings the theme has no catalog for is warned of, as the
+// other warnings of a snapshot, at each read that changes them (Q92).
+func TestIdentifiedLocales(t *testing.T) {
+	theme, err := front.LoadTheme("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := store.DefaultSettings()
+	settings.SupportedLocales = []string{"fr", "en", "de"}
+	s, err := (identified{Source: snapshotSource{store.NewSnapshot(nil, nil, settings)}, theme: theme}).Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(s.Warnings, []string{`setting supported_locales: "de" has no catalog in the theme (en, fr): the pages do not offer it`}) {
+		t.Errorf("warnings %q", s.Warnings)
+	}
+}
+
+// A theme that fails stops serve before the stores, named by its key; one that
+// loads is logged with its name and version.
+func TestLoadTheme(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	if _, err := loadTheme(filepath.Join(t.TempDir(), "nope"), logger); err == nil || !strings.HasPrefix(err.Error(), "ui.theme_dir ") {
+		t.Errorf("no directory: %v", err)
+	}
+	dir := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("theme.yaml", "name: demo\nversion: 2.1.0\napi: 1\n")
+	write("templates/error.html.tmpl", `{{define "content"}}<p style="color: red">{{.Error.Code}}</p>{{end}}`)
+	if _, err := loadTheme(dir, logger); err == nil || !strings.Contains(err.Error(), "page error: attribute style on <p>") {
+		t.Errorf("the check: %v", err)
+	}
+	write("templates/error.html.tmpl", `{{define "content"}}<p class="code">{{.T .Error.MessageKey}} {{.Error.Code}} {{.Error.TraceID}}</p>{{end}}`)
+	if _, err := loadTheme(dir, logger); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), `"msg":"theme.loaded","dir":"`+dir+`","name":"demo","version":"2.1.0","api":1,"locales":["en","fr"]`) {
+		t.Errorf("logs: %s", logs.String())
+	}
+	if theme, err := loadTheme("", logger); err != nil || theme.Dir != "" {
+		t.Errorf("embedded theme: %v", err)
 	}
 }
 

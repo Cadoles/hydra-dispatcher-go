@@ -49,9 +49,6 @@ func DefaultSettings() Settings {
 	}
 }
 
-// catalogLocales are the locales the pages have a catalog for.
-var catalogLocales = i18n.Locales()
-
 // setting is a key of the registry. Its value is the JSON of the field,
 // durations in seconds as Symfony stored them.
 type setting struct {
@@ -170,52 +167,15 @@ func (st setting) encode(s *Settings) []byte {
 
 // settingsFrom assembles the rows of the setting table, by key, over the
 // defaults, and validates them. An unknown key is a warning, so that an older
-// version still starts on the table of a newer one, and so is a locale it has
-// no catalog for (tolerate); a value of the wrong type is an error.
+// version still starts on the table of a newer one; a value of the wrong type
+// is an error. The locales are not those of a catalog: the theme brings its
+// own, which the pages know, not the store (Q92).
 func settingsFrom(rows map[string][]byte) (Settings, []string, error) {
 	s, warnings, err := decodeSettings(rows)
 	if err != nil {
 		return Settings{}, warnings, err
 	}
-	warnings = append(warnings, s.tolerate()...)
 	return s, warnings, s.Validate()
-}
-
-// tolerate sets aside the locales this version has no catalog for, which a
-// newer one may have written: they leave supported_locales, and
-// default_locale and fallback_locale fall back to a locale this version has.
-// Each is a warning, as an unknown key is, so that a rollback starts without
-// cleaning the table. What writes the table validates without it.
-func (s *Settings) tolerate() []string {
-	var warnings []string
-	unknown := func(l string) bool { return l != "" && !slices.Contains(catalogLocales, l) }
-	defaults := DefaultSettings()
-	var kept []string
-	for _, l := range s.SupportedLocales {
-		if unknown(l) {
-			warnings = append(warnings, fmt.Sprintf("setting supported_locales: %q has no catalog in this version: ignored", l))
-			continue
-		}
-		kept = append(kept, l)
-	}
-	if len(kept) == 0 && len(s.SupportedLocales) > 0 {
-		kept = defaults.SupportedLocales
-		warnings = append(warnings, fmt.Sprintf("setting supported_locales: no locale left, %q used", kept))
-	}
-	s.SupportedLocales = kept
-	if unknown(s.DefaultLocale) && len(s.SupportedLocales) > 0 {
-		l := defaults.DefaultLocale
-		if !slices.Contains(s.SupportedLocales, l) {
-			l = s.SupportedLocales[0]
-		}
-		warnings = append(warnings, fmt.Sprintf("setting default_locale: %q has no catalog in this version: %q used", s.DefaultLocale, l))
-		s.DefaultLocale = l
-	}
-	if unknown(s.FallbackLocale) {
-		warnings = append(warnings, fmt.Sprintf("setting fallback_locale: %q has no catalog in this version: %q used", s.FallbackLocale, defaults.FallbackLocale))
-		s.FallbackLocale = defaults.FallbackLocale
-	}
-	return warnings
 }
 
 // decodeSettings is settingsFrom without the validation.
@@ -240,7 +200,8 @@ func decodeSettings(rows map[string][]byte) (Settings, []string, error) {
 }
 
 // Validate checks the settings as a whole: durations in whole positive
-// seconds, webhook locations, locales that have a catalog.
+// seconds, webhook locations, locales well formed, whether a catalog holds
+// them or not (Q92).
 func (s Settings) Validate() error {
 	var errs []error
 	fail := func(key, format string, args ...any) {
@@ -279,8 +240,8 @@ func (s Settings) Validate() error {
 		switch {
 		case l == "":
 			fail("supported_locales", "holds an empty locale")
-		case !slices.Contains(catalogLocales, l):
-			fail("supported_locales", "%q has no catalog, only %v do", l, catalogLocales)
+		case !i18n.WellFormed(l):
+			fail("supported_locales", "%q is not a locale in lowercase (fr, pt-br)", l)
 		case slices.Contains(s.SupportedLocales[:i], l):
 			fail("supported_locales", "%q is listed twice", l)
 		}
@@ -288,8 +249,8 @@ func (s Settings) Validate() error {
 	if !slices.Contains(s.SupportedLocales, s.DefaultLocale) {
 		fail("default_locale", "%q is not in supported_locales", s.DefaultLocale)
 	}
-	if !slices.Contains(catalogLocales, s.FallbackLocale) {
-		fail("fallback_locale", "%q has no catalog, only %v do", s.FallbackLocale, catalogLocales)
+	if !i18n.WellFormed(s.FallbackLocale) {
+		fail("fallback_locale", "%q is not a locale in lowercase (fr, pt-br)", s.FallbackLocale)
 	}
 	return errors.Join(errs...)
 }

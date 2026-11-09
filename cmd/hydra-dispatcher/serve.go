@@ -82,6 +82,11 @@ func serve(ctx context.Context, args []string) error {
 	slog.SetDefault(logs.app)
 	httpx.StandardLog(logs.app)
 	logger := logs.app
+	// A theme that fails stops the start before the stores are touched.
+	theme, err := loadTheme(cfg.UI.ThemeDir, logger)
+	if err != nil {
+		return err
+	}
 	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
 	// given by -config alone may listen where the probe does not look.
 	if *configPath != os.Getenv(configEnv) {
@@ -121,7 +126,7 @@ func serve(ctx context.Context, args []string) error {
 		<-refreshed
 		closeStores(logger, &inFlight, states, db)
 	}
-	live, err := startConfig(ctx, cfg, db, logs)
+	live, err := startConfig(ctx, cfg, db, logs, theme)
 	if err != nil {
 		close(refreshed)
 		stop()
@@ -136,7 +141,7 @@ func serve(ctx context.Context, args []string) error {
 
 	var draining atomic.Bool
 	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker,
-		draining: draining.Load})
+		draining: draining.Load, theme: theme})
 	if err != nil {
 		stop()
 		return err
@@ -329,9 +334,28 @@ func loadConfig(path string, w io.Writer) (*config.Config, loggers, error) {
 	return cfg, l, nil
 }
 
+// loadTheme reads and checks the theme of ui.theme_dir, the embedded one for
+// "" (Thèmes).
+func loadTheme(dir string, logger *slog.Logger) (*front.Theme, error) {
+	theme, err := front.LoadTheme(dir)
+	if err == nil {
+		err = front.Check(theme)
+	}
+	if err != nil {
+		if dir == "" {
+			return nil, fmt.Errorf("pages: %w", err)
+		}
+		return nil, fmt.Errorf("ui.theme_dir %s: %w", dir, err)
+	}
+	if dir != "" {
+		logger.Info("theme.loaded", "dir", dir, "name", theme.Manifest.Name, "version", theme.Manifest.Version, "api", theme.Manifest.API, "locales", theme.Locales())
+	}
+	return theme, nil
+}
+
 // startConfig applies serve.migrate and serve.bootstrap, then reads the first
 // snapshot of the configuration.
-func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs loggers) (*store.Live, error) {
+func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs loggers, theme *front.Theme) (*store.Live, error) {
 	if err := prepareStore(ctx, cfg, db, logs.app); err != nil {
 		return nil, err
 	}
@@ -342,14 +366,15 @@ func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs l
 	readCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
 	return store.NewLive(readCtx, identified{Source: db, hosts: hosts, allowHTTP: cfg.TLS.AllowHTTP, signed: cfg.Secrets.WebhookSigningKey != nil,
-		secrets: cfg.EnvironmentSecrets()}, logs.app, logs.warnings)
+		secrets: cfg.EnvironmentSecrets(), theme: theme}, logs.app, logs.warnings)
 }
 
 // identified refuses a snapshot whose webhooks cannot be called (webhook.Check), and
 // adds to each one the warnings of the apps'
 // identification against security.emulated_api_authorized_hosts, which the
-// store does not know (emulated.Warnings), and that of a webhook run as a local
-// program while secrets come from the environment (webhook.ProgramWarnings).
+// store does not know (emulated.Warnings), that of a webhook run as a local
+// program while secrets come from the environment (webhook.ProgramWarnings),
+// and those of the locales the theme has no catalog for (Q92).
 type identified struct {
 	store.Source
 	hosts     []netip.Prefix
@@ -357,6 +382,8 @@ type identified struct {
 	signed    bool
 	// secrets are the secret keys the environment gave.
 	secrets []string
+	// theme is that of the pages; nil, no warning on the locales.
+	theme *front.Theme
 }
 
 func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
@@ -371,6 +398,9 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	c := *s
 	c.Warnings = append(slices.Clip(s.Warnings), emulated.Warnings(s.Apps, i.hosts)...)
 	c.Warnings = append(c.Warnings, webhook.ProgramWarnings(s.Settings, i.secrets)...)
+	if i.theme != nil {
+		c.Warnings = append(c.Warnings, front.LocaleWarnings(i.theme, s.Settings)...)
+	}
 	return &c, nil
 }
 
@@ -430,6 +460,8 @@ type services struct {
 	sentry *sentrylog.Tracker
 	// draining tells that the instance stops, /ready answering 503; nil: never.
 	draining func() bool
+	// theme is that of the pages; nil for the embedded one.
+	theme *front.Theme
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -518,6 +550,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 
 		RememberLastFlow: cfg.UI.RememberLastFlow,
 		Guard:            limit.Guard("front"),
+		Theme:            s.theme,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)

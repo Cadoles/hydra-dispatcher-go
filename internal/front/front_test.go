@@ -220,6 +220,8 @@ type worldOptions struct {
 	// lastFlow is ui.remember_last_flow, guard the failure limiter.
 	lastFlow bool
 	guard    func(http.Handler) http.Handler
+	// theme is that of ui.theme_dir, nil for the embedded one.
+	theme *Theme
 }
 
 func (o worldOptions) cookiePath() string {
@@ -251,7 +253,8 @@ func newWorld(t *testing.T, opts ...worldOptions) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, err := New(Options{RememberLastFlow: opt.lastFlow, Guard: opt.guard, Engine: w.o, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger})
+	h, err := New(Options{RememberLastFlow: opt.lastFlow, Guard: opt.guard, Engine: w.o, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger,
+		Theme: opt.theme})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1332,7 +1335,7 @@ func TestLogoutHydra(t *testing.T) {
 // never half a page.
 func TestRenderFailure(t *testing.T) {
 	w := newWorld(t)
-	w.front.pages.templates["error"] = template.Must(template.New("layout").Parse(`<p>half{{.Nope}}</p>`))
+	w.front.theme.templates["error"] = template.Must(template.New("layout").Parse(`<p>half{{.Nope}}</p>`))
 	resp := w.do(http.MethodGet, "/consent", nil)
 	body, trace := text(t, resp), resp.Header.Get("X-Trace-ID")
 	if resp.StatusCode != http.StatusInternalServerError || strings.Contains(body, "half") || !strings.Contains(body, trace) ||
@@ -1344,7 +1347,7 @@ func TestRenderFailure(t *testing.T) {
 // The start check stops a template that fails, a key a catalog lacks, a
 // form without the fields the handlers read (Thèmes, validation).
 func TestCheck(t *testing.T) {
-	if err := newWorld(t).front.check(); err != nil {
+	if err := Check(newWorld(t).front.theme); err != nil {
 		t.Fatalf("embedded pages: %v", err)
 	}
 	for _, tc := range []struct {
@@ -1353,21 +1356,21 @@ func TestCheck(t *testing.T) {
 		want []string
 	}{
 		{"keys lacking", func(h *Handler) {
-			delete(h.catalogs["en"], "consent.accept")
-			delete(h.catalogs["fr"], "claim.email")
-			delete(h.catalogs["en"], "locale.en")
-			delete(h.catalogs["fr"], "error.E1006")
+			delete(h.theme.catalogs["en"], "consent.accept")
+			delete(h.theme.catalogs["fr"], "claim.email")
+			delete(h.theme.catalogs["en"], "locale.en")
+			delete(h.theme.catalogs["fr"], "error.E1006")
 		}, []string{"catalog en: no text for consent.accept", "catalog fr: no text for claim.email", "catalog en: no text for locale.en", "catalog fr: no text for error.E1006"}},
 		{"fields lacking", func(h *Handler) {
-			h.pages.templates["select"] = template.Must(template.New("layout").Parse(`<form><input name="login_challenge" value="{{.Form.LoginChallenge}}"><input name="csrf_token" value="x"></form>`))
+			h.theme.templates["select"] = template.Must(template.New("layout").Parse(`<form><input name="login_challenge" value="{{.Form.LoginChallenge}}"><input name="csrf_token" value="x"></form>`))
 		}, []string{"page select (flows, one refused) in en: ", "no field flow", `field csrf_token without the value "` + sampleCSRF + `"`}},
 		{"template failing", func(h *Handler) {
-			h.pages.templates["consent"] = template.Must(template.New("layout").Parse(`{{.Nope}}`))
+			h.theme.templates["consent"] = template.Must(template.New("layout").Parse(`{{.Nope}}`))
 		}, []string{"page consent (nothing asked) in fr"}},
 	} {
 		w := newWorld(t)
 		tc.mod(w.front)
-		err := w.front.check()
+		err := w.front.check(w.front.theme)
 		for _, want := range tc.want {
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Errorf("%s: %v, want %q", tc.name, err, want)
@@ -1400,9 +1403,9 @@ func TestThemeContract(t *testing.T) {
 		t.Errorf("a flag in the embedded theme: %d", resp.StatusCode)
 	}
 	// A theme's files and blocks.
-	w.front.pages.hashes["theme.js"], w.front.pages.hashes["flags/fr.svg"] = "0123456789ab", "ba9876543210"
+	w.front.theme.statics["theme.js"], w.front.theme.statics["flags/fr.svg"] = staticFile{hash: "0123456789ab"}, staticFile{hash: "ba9876543210"}
 	tpl := template.Must(template.ParseFS(web.FS, "templates/layout.html.tmpl", "templates/partials/*.html.tmpl", "templates/select.html.tmpl"))
-	w.front.pages.templates["select"] = template.Must(tpl.Parse(`{{define "head"}}<meta name="theme" content="demo">{{end}}` +
+	w.front.theme.templates["select"] = template.Must(tpl.Parse(`{{define "head"}}<meta name="theme" content="demo">{{end}}` +
 		`{{define "header"}}<p>logo</p>{{end}}{{define "footer"}}<p>{{.LocaleURL "en"}} {{.Flag "fr"}} {{.Asset "nope.css"}}</p>{{end}}`))
 	body = text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil))
 	for _, want := range []string{
@@ -1414,7 +1417,7 @@ func TestThemeContract(t *testing.T) {
 		}
 	}
 	// The default footer shows the flags a theme has.
-	w.front.pages.templates["select"] = template.Must(template.ParseFS(web.FS, "templates/layout.html.tmpl", "templates/partials/*.html.tmpl", "templates/select.html.tmpl"))
+	w.front.theme.templates["select"] = template.Must(template.ParseFS(web.FS, "templates/layout.html.tmpl", "templates/partials/*.html.tmpl", "templates/select.html.tmpl"))
 	if body := text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)); !strings.Contains(body, `<img class="flag" src="/static/flags/fr.svg?v=ba9876543210" alt="">Français`) {
 		t.Errorf("no flag in the switcher:\n%s", body)
 	}
@@ -1427,17 +1430,17 @@ var update = flag.Bool("update", false, "rewrite the golden pages of testdata/pa
 // -update rewrites them; the diff then shows what a change did to the pages.
 func TestGoldenPages(t *testing.T) {
 	h := newWorld(t).front
-	cfg := h.sampleConfig()
+	cfg := sampleConfig(h.theme)
 	slug := regexp.MustCompile(`[^a-z0-9]+`)
 	n := 0
 	for _, l := range cfg.Settings.SupportedLocales {
 		r := httptest.NewRequest(http.MethodGet, "/?_locale="+l, nil)
-		for _, s := range h.samples(r, cfg) {
+		for _, s := range h.samples(r, h.theme, cfg) {
 			if s.name == "error" && !(s.what == "E1002" && s.page.Error.Link != "" || s.what == "E1004" && s.page.Error.Link == "" || s.what == "sign out") {
 				continue
 			}
 			var buf bytes.Buffer
-			if err := h.pages.templates[s.name].ExecuteTemplate(&buf, "layout", s.page); err != nil {
+			if err := h.theme.templates[s.name].ExecuteTemplate(&buf, "layout", s.page); err != nil {
 				t.Fatal(err)
 			}
 			path := filepath.Join("testdata", "pages", s.name+"-"+strings.Trim(slug.ReplaceAllString(strings.ToLower(s.what), "-"), "-")+"."+l+".html")
@@ -1464,8 +1467,8 @@ func TestGoldenPages(t *testing.T) {
 			n++
 		}
 	}
-	if n != 26 {
-		t.Errorf("%d golden pages, want 26", n)
+	if n != 30 {
+		t.Errorf("%d golden pages, want 30", n)
 	}
 }
 

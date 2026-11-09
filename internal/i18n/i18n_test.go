@@ -5,17 +5,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
-// Each locale has every key of the others, and Locales, which the settings'
-// registry reads (internal/store), names the catalogs.
+// Each locale has every key of the others.
 func TestCatalogs(t *testing.T) {
 	c, err := Embedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(c.Locales(), []string{"en", "fr"}) || !slices.Equal(Locales(), c.Locales()) {
-		t.Fatalf("locales %v, Locales %v", c.Locales(), Locales())
+	if !slices.Equal(c.Locales(), []string{"en", "fr"}) {
+		t.Fatalf("locales %v", c.Locales())
 	}
 	if !c.Has("fr", "choice.title") || c.Has("fr", "nope") || c.Has("de", "choice.title") {
 		t.Error("Has")
@@ -67,6 +67,55 @@ func TestNegotiate(t *testing.T) {
 	} {
 		if got := Negotiate(tc.param, tc.cookie, tc.ui, supported, "fr"); got != tc.want {
 			t.Errorf("%+v: %s", tc, got)
+		}
+	}
+}
+
+// The catalogs of a theme's translations/: a <locale>.json of texts for each
+// locale; anything else is refused rather than left unread.
+func TestRead(t *testing.T) {
+	c, err := Read(fstest.MapFS{"fr.json": {Data: []byte(`{"a": "A"}`)}, "pt-br.json": {Data: []byte(`{}`)}})
+	if err != nil || !slices.Equal(c.Locales(), []string{"fr", "pt-br"}) || c["fr"]["a"] != "A" {
+		t.Fatalf("Read = %v, %v", c, err)
+	}
+	for name, tc := range map[string]struct {
+		fsys fstest.MapFS
+		want string
+	}{
+		"another file":   {fstest.MapFS{"README.md": {}}, "README.md: not a <locale>.json"},
+		"a directory":    {fstest.MapFS{"de/fr.json": {}}, "de: not a <locale>.json"},
+		"capitals":       {fstest.MapFS{"pt-BR.json": {Data: []byte(`{}`)}}, `pt-BR.json: "pt-BR" is not a locale in lowercase`},
+		"underscore":     {fstest.MapFS{"pt_br.json": {Data: []byte(`{}`)}}, `pt_br.json: "pt_br" is not a locale`},
+		"not JSON":       {fstest.MapFS{"de.json": {Data: []byte(`{"a": `)}}, "de.json: unexpected end of JSON input"},
+		"not a text":     {fstest.MapFS{"de.json": {Data: []byte(`{"a": 1}`)}}, "de.json: json: cannot unmarshal number"},
+		"nested objects": {fstest.MapFS{"de.json": {Data: []byte(`{"a": {"b": "c"}}`)}}, "de.json: json: cannot unmarshal object"},
+	} {
+		if _, err := Read(tc.fsys); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+// A theme's texts replace those of the same key, the others stay, and a locale
+// it brings is added; the catalogs merged are left as they were.
+func TestMerge(t *testing.T) {
+	base := Catalogs{"fr": {"a": "A", "b": "B"}, "en": {"a": "A"}}
+	got := base.Merge(Catalogs{"fr": {"b": "Bé"}, "de": {"a": "Ä"}})
+	if got["fr"]["a"] != "A" || got["fr"]["b"] != "Bé" || got["en"]["a"] != "A" || got["de"]["a"] != "Ä" {
+		t.Errorf("Merge = %v", got)
+	}
+	if base["fr"]["b"] != "B" || base["de"] != nil {
+		t.Errorf("the base changed: %v", base)
+	}
+}
+
+func TestWellFormed(t *testing.T) {
+	for l, want := range map[string]bool{
+		"fr": true, "de": true, "pt-br": true, "zh-hant-tw": true, "gsw": true, "es-419": true,
+		"": false, "f": false, "FR": false, "pt-BR": false, "pt_br": false, "fr-": false, "-fr": false, "fr--ca": false, "français": false, "../fr": false,
+	} {
+		if WellFormed(l) != want {
+			t.Errorf("WellFormed(%q) = %v", l, !want)
 		}
 	}
 }

@@ -220,11 +220,8 @@ func (b *bootstrap) settings(seed config.Seed) error {
 		_, set := values[key]
 		return set || slices.Contains(seed.NullSettings, key)
 	})
-	// What the seed sets is validated as it is; what the table keeps is
-	// tolerated as Snapshot tolerates it, so that the locales a newer
-	// version wrote do not refuse the bootstrap of an older one.
+	// What the seed sets, over what the table keeps.
 	check := current
-	check.tolerate()
 	for _, st := range changed {
 		reflect.ValueOf(st.field(&check)).Elem().Set(reflect.ValueOf(st.field(&next)).Elem())
 	}

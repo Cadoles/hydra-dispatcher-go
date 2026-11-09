@@ -18,7 +18,6 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -58,13 +57,14 @@ type Options struct {
 	// Guard, nil for none, runs first on each page: the failure limiter. Not on the
 	// static files, nor the change of language, which no challenge reaches.
 	Guard func(http.Handler) http.Handler
+	// Theme is that of ui.theme_dir (LoadTheme); nil for the embedded one.
+	Theme *Theme
 }
 
 // Handler serves the pages.
 type Handler struct {
-	o        Options
-	pages    *pages
-	catalogs i18n.Catalogs
+	o     Options
+	theme *Theme
 	// origin is the scheme and host of BaseURL, for the forms' origin check;
 	// internal/config has them written as browsers serialize an Origin.
 	origin string
@@ -90,32 +90,39 @@ const (
 	lastFlowLifetime = 365 * 24 * time.Hour
 )
 
-// New parses the templates and the catalogs, and renders each page in each
-// locale: a template that fails stops the start, not a login.
+// New renders each page of the theme in each locale: a template that fails
+// stops the start, not a login.
 func New(o Options) (*Handler, error) {
 	if o.Remember == nil {
 		return nil, errors.New("front: no codec for the remember cookie")
-	}
-	catalogs, err := i18n.Embedded()
-	if err != nil {
-		return nil, err
 	}
 	u, err := url.Parse(o.BaseURL)
 	if err != nil {
 		return nil, err
 	}
-	h := &Handler{o: o, catalogs: catalogs, origin: u.Scheme + "://" + u.Host, path: strings.TrimSuffix(u.EscapedPath(), "/"), secure: u.Scheme == "https"}
+	h := &Handler{o: o, theme: o.Theme, origin: u.Scheme + "://" + u.Host, path: strings.TrimSuffix(u.EscapedPath(), "/"), secure: u.Scheme == "https"}
 	if h.secure && o.CookiePath == "/" {
 		h.prefix = "__Host-"
 	}
-	if h.pages, err = parsePages(); err != nil {
-		return nil, err
+	if h.theme == nil {
+		if h.theme, err = LoadTheme(""); err != nil {
+			return nil, err
+		}
 	}
-	if err := h.check(); err != nil {
+	if err := h.check(h.theme); err != nil {
 		return nil, err
 	}
 	return h, nil
 }
+
+// Check renders each page of th in each locale, as New does, without a
+// configuration: theme check.
+func Check(th *Theme) error {
+	return (&Handler{origin: "https://dispatcher.example"}).check(th)
+}
+
+// current is the theme a request renders its page with.
+func (h *Handler) current() *Theme { return h.theme }
 
 // Register adds the routes to mux.
 func (h *Handler) Register(mux *http.ServeMux) {
@@ -306,11 +313,11 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, res flow.Resul
 	case flow.Redirect:
 		http.Redirect(w, r, resp.URL, http.StatusSeeOther)
 	case flow.ChoicePage:
-		h.render(w, r, http.StatusOK, "select", h.choicePage(r, cfg, resp.Choice))
+		h.render(w, r, http.StatusOK, "select", h.choicePage(r, h.current(), cfg, resp.Choice))
 	case flow.ConsentPage:
-		h.render(w, r, http.StatusOK, "consent", h.consentPage(r, cfg, resp.Consent))
+		h.render(w, r, http.StatusOK, "consent", h.consentPage(r, h.current(), cfg, resp.Consent, h.o.ShowValues))
 	case flow.LogoutPage:
-		h.render(w, r, http.StatusOK, "logout", h.logoutPage(r, cfg, resp.Logout))
+		h.render(w, r, http.StatusOK, "logout", h.logoutPage(r, h.current(), cfg, resp.Logout))
 	case flow.ErrorPage:
 		h.fail(w, r, resp, cfg)
 	default:
@@ -344,7 +351,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Respons
 		status = http.StatusServiceUnavailable
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	p := h.page(r, cfg, nil)
+	p := h.page(r, h.current(), cfg, nil)
 	p.Error = &pageError{Code: string(resp.Code), MessageKey: "error." + string(resp.Code), TraceID: httpx.TraceID(r.Context()), Link: resp.Link, SignOut: resp.SignOut}
 	h.render(w, r, status, "error", p)
 }
@@ -471,7 +478,7 @@ func (h *Handler) locale(w http.ResponseWriter, r *http.Request) {
 	if !h.form(w, r) {
 		return
 	}
-	if code := r.PathValue("code"); h.supported(cfg, code) {
+	if code := r.PathValue("code"); slices.Contains(supportedLocales(h.current(), cfg), code) {
 		h.setCookie(w, localeCookie, code, 365*24*time.Hour, false)
 	}
 	to := h.path + "/"

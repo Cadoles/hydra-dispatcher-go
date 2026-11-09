@@ -498,16 +498,21 @@ func TestSnapshotRefused(t *testing.T) {
 	}
 }
 
-// The locales a newer version has a catalog for are set aside with a
-// warning: an older one still starts on its table.
-func TestSnapshotNewerLocales(t *testing.T) {
+// The locales are read as the table holds them, a theme's or a newer
+// version's: the pages, which know the catalogs, set aside those without one
+// (Q92). One not well formed stays an error.
+func TestSnapshotLocales(t *testing.T) {
 	p := migrated(t)
 	exec(t, p, `INSERT INTO setting (key, value) VALUES ('supported_locales', '["fr", "en", "de"]'), ('default_locale', '"de"')`)
 	s, err := p.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(s.Settings.SupportedLocales, []string{"fr", "en"}) || s.Settings.DefaultLocale != "fr" || len(s.Warnings) != 2 {
+	if !slices.Equal(s.Settings.SupportedLocales, []string{"fr", "en", "de"}) || s.Settings.DefaultLocale != "de" || len(s.Warnings) != 0 {
 		t.Errorf("locales %q, default %q, warnings %q", s.Settings.SupportedLocales, s.Settings.DefaultLocale, s.Warnings)
+	}
+	exec(t, p, `UPDATE setting SET value = '["fr", "de_DE"]' WHERE key = 'supported_locales'`)
+	if _, err := p.Snapshot(context.Background()); err == nil || !strings.Contains(err.Error(), `setting supported_locales: "de_DE" is not a locale in lowercase`) {
+		t.Errorf("Snapshot = %v", err)
 	}
 }

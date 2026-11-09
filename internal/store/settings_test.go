@@ -147,10 +147,12 @@ func TestSettingsValidate(t *testing.T) {
 		"blank command":        {func(s *Settings) { s.LoginAcceptWebhookURL = "   " }, "setting login_accept_webhook_url: is a blank command"},
 		"no locale":            {func(s *Settings) { s.SupportedLocales = nil }, "setting supported_locales: is empty"},
 		"empty locale":         {func(s *Settings) { s.SupportedLocales = []string{"fr", ""} }, "setting supported_locales: holds an empty locale"},
-		"locale without texts": {func(s *Settings) { s.SupportedLocales = []string{"fr", "de"} }, `setting supported_locales: "de" has no catalog`},
+		"locale in capitals":   {func(s *Settings) { s.SupportedLocales = []string{"fr", "pt-BR"} }, `setting supported_locales: "pt-BR" is not a locale in lowercase`},
+		"locale with _":        {func(s *Settings) { s.SupportedLocales = []string{"fr", "pt_br"} }, `setting supported_locales: "pt_br" is not a locale`},
 		"locale twice":         {func(s *Settings) { s.SupportedLocales = []string{"fr", "fr"} }, `"fr" is listed twice`},
 		"default unsupported":  {func(s *Settings) { s.SupportedLocales = []string{"en"} }, `setting default_locale: "fr" is not in supported_locales`},
-		"fallback":             {func(s *Settings) { s.FallbackLocale = "de" }, `setting fallback_locale: "de" has no catalog`},
+		"fallback":             {func(s *Settings) { s.FallbackLocale = "EN" }, `setting fallback_locale: "EN" is not a locale in lowercase`},
+		"no fallback":          {func(s *Settings) { s.FallbackLocale = "" }, `setting fallback_locale: "" is not a locale`},
 	} {
 		s := DefaultSettings()
 		tt.change(&s)
@@ -179,59 +181,17 @@ func TestWebhookLocations(t *testing.T) {
 	}
 }
 
-// A locale this version has no catalog for, which a newer one may have
-// written, is set aside with a warning, so that a rollback starts on its
-// table. Validate, what writers call, still refuses it.
-func TestSettingsTolerate(t *testing.T) {
-	for name, tt := range map[string]struct {
-		rows     map[string]string
-		want     func(*Settings)
-		warnings []string
-	}{
-		"newer locales": {
-			rows: map[string]string{"supported_locales": `["fr", "de", "en"]`, "default_locale": `"de"`, "fallback_locale": `"es"`},
-			warnings: []string{
-				`setting supported_locales: "de" has no catalog in this version: ignored`,
-				`setting default_locale: "de" has no catalog in this version: "fr" used`,
-				`setting fallback_locale: "es" has no catalog in this version: "en" used`,
-			},
-		},
-		"none left": {
-			rows: map[string]string{"supported_locales": `["de"]`, "default_locale": `"de"`},
-			warnings: []string{
-				`setting supported_locales: "de" has no catalog in this version: ignored`,
-				`setting supported_locales: no locale left, ["fr" "en"] used`,
-				`setting default_locale: "de" has no catalog in this version: "fr" used`,
-			},
-		},
-		"default not supported": {
-			rows: map[string]string{"supported_locales": `["en", "de"]`, "default_locale": `"de"`},
-			want: func(s *Settings) { s.SupportedLocales, s.DefaultLocale = []string{"en"}, "en" },
-			warnings: []string{
-				`setting supported_locales: "de" has no catalog in this version: ignored`,
-				`setting default_locale: "de" has no catalog in this version: "en" used`,
-			},
-		},
-	} {
-		rows := map[string][]byte{}
-		for k, v := range tt.rows {
-			rows[k] = []byte(v)
-		}
-		got, warnings, err := settingsFrom(rows)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		want := DefaultSettings()
-		if tt.want != nil {
-			tt.want(&want)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("%s: settings = %+v\nwant %+v", name, got, want)
-		}
-		if !slices.Equal(warnings, tt.warnings) {
-			t.Errorf("%s: warnings = %q\nwant %q", name, warnings, tt.warnings)
-		}
+// A locale is any well-formed one, whether a catalog holds it or not: a theme
+// brings its own, which the pages know, not the store (Q92). A table a newer
+// version wrote, or that names a theme's locale, is read as it is.
+func TestSettingsLocales(t *testing.T) {
+	rows := map[string][]byte{"supported_locales": []byte(`["fr", "de", "pt-br"]`), "default_locale": []byte(`"de"`), "fallback_locale": []byte(`"es"`)}
+	got, warnings, err := settingsFrom(rows)
+	if err != nil || len(warnings) != 0 {
+		t.Fatalf("settingsFrom = %v, warnings %q", err, warnings)
+	}
+	if !slices.Equal(got.SupportedLocales, []string{"fr", "de", "pt-br"}) || got.DefaultLocale != "de" || got.FallbackLocale != "es" {
+		t.Errorf("settings = %+v", got)
 	}
 	// What no version would write stays an error.
 	if _, _, err := settingsFrom(map[string][]byte{"supported_locales": []byte(`["fr", "de", "fr"]`)}); err == nil || !strings.Contains(err.Error(), "listed twice") {

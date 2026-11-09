@@ -4,15 +4,11 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
-	"io/fs"
 	"maps"
 	"mime"
 	"net/http"
@@ -22,58 +18,23 @@ import (
 	"strings"
 
 	ory "github.com/ory/hydra-client-go/v26"
+	"golang.org/x/net/html"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/web"
 )
-
-// pageNames are the pages, each parsed with the layout and the partials.
-var pageNames = []string{"select", "consent", "error", "logout"}
-
-type pages struct {
-	templates map[string]*template.Template
-	// hashes are those of the static files, for their URLs.
-	hashes map[string]string
-}
-
-func parsePages() (*pages, error) {
-	p := &pages{templates: map[string]*template.Template{}, hashes: map[string]string{}}
-	for _, name := range pageNames {
-		t, err := template.ParseFS(web.FS, "templates/layout.html.tmpl", "templates/partials/*.html.tmpl", "templates/"+name+".html.tmpl")
-		if err != nil {
-			return nil, fmt.Errorf("template %s: %w", name, err)
-		}
-		p.templates[name] = t
-	}
-	// The static files and those of its directories (flags/, images/,
-	// fonts/ of the theme's tree), by their path under static/.
-	err := fs.WalkDir(web.FS, "static", func(name string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		data, err := fs.ReadFile(web.FS, name)
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256(data)
-		p.hashes[strings.TrimPrefix(name, "static/")] = hex.EncodeToString(sum[:])[:12]
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return p, nil
-}
 
 // page is the data of every page (Thèmes, contrat de données, api: 1). Its
 // methods are the functions of the templates: T, Asset, Flag and LocaleURL
 // depend on the page's locale or base path, which html/template's
 // functions, bound at parse time, would not see.
 type page struct {
-	h        *Handler
+	h *Handler
+	// th is the theme the page is rendered with, from its texts to its
+	// template.
+	th       *Theme
 	Locale   string
 	fallback string
 	// Return is the page the change of language goes back to, "" on a page
@@ -129,14 +90,14 @@ type logoutData struct {
 // T translates key in the page's locale.
 func (p page) T(key string, args ...any) string {
 	p.note(p.Locale, key)
-	return p.h.catalogs.T(p.Locale, p.fallback, key, args...)
+	return p.th.catalogs.T(p.Locale, p.fallback, key, args...)
 }
 
 // note records key when the catalog of locale lacks it, while check renders
 // the pages: the page would show it in the fallback locale, or the key
 // itself.
 func (p page) note(locale, key string) {
-	if p.missing != nil && !p.h.catalogs.Has(locale, key) {
+	if p.missing != nil && !p.th.catalogs.Has(locale, key) {
 		p.missing[[2]string{locale, key}] = true
 	}
 }
@@ -144,17 +105,17 @@ func (p page) note(locale, key string) {
 // labelled tells whether key has a text, in the page's locale or in the
 // fallback one.
 func (p page) labelled(key string) bool {
-	return p.h.catalogs.Has(p.Locale, key) || p.h.catalogs.Has(p.fallback, key)
+	return p.th.catalogs.Has(p.Locale, key) || p.th.catalogs.Has(p.fallback, key)
 }
 
 // Asset is the URL of a static file, its hash in the query; "" when there is
 // no such file, for the optional ones (theme.js, a flag).
 func (p page) Asset(name string) string {
-	hash, ok := p.h.pages.hashes[name]
+	f, ok := p.th.statics[name]
 	if !ok {
 		return ""
 	}
-	return p.h.path + "/static/" + name + "?v=" + hash
+	return p.h.path + "/static/" + name + "?v=" + f.hash
 }
 
 // Flag is the URL of the flag of locale, flags/<locale>.svg; "" without it,
@@ -164,39 +125,54 @@ func (p page) Flag(locale string) string { return p.Asset("flags/" + locale + ".
 // LocaleURL is where the form of the change of language to locale posts.
 func (p page) LocaleURL(locale string) string { return p.h.path + "/locale/" + locale }
 
-// supported are the locales of the settings the catalogs hold.
-func (h *Handler) supportedLocales(cfg *store.Snapshot) []string {
+// supportedLocales are the locales of the settings the theme has a catalog
+// for, all of its own when it has none of them (Q92).
+func supportedLocales(th *Theme, cfg *store.Snapshot) []string {
 	var out []string
 	for _, l := range cfg.Settings.SupportedLocales {
-		if _, ok := h.catalogs[l]; ok {
+		if _, ok := th.catalogs[l]; ok {
 			out = append(out, l)
 		}
 	}
 	if len(out) == 0 {
-		out = h.catalogs.Locales()
+		out = th.catalogs.Locales()
 	}
 	return out
 }
 
-func (h *Handler) supported(cfg *store.Snapshot, code string) bool {
-	return slices.Contains(h.supportedLocales(cfg), code)
+// LocaleWarnings name the locales of settings the theme has no catalog for:
+// the pages set them aside (Q92).
+func LocaleWarnings(th *Theme, settings store.Settings) []string {
+	var out []string
+	missing := func(key, l, then string) {
+		if _, ok := th.catalogs[l]; !ok {
+			out = append(out, fmt.Sprintf("setting %s: %q has no catalog in the theme (%s): %s", key, l, strings.Join(th.Locales(), ", "), then))
+		}
+	}
+	for _, l := range settings.SupportedLocales {
+		missing("supported_locales", l, "the pages do not offer it")
+	}
+	missing("default_locale", settings.DefaultLocale, "the pages take the first locale they offer")
+	missing("fallback_locale", settings.FallbackLocale, "a text missing from a page's locale shows its key")
+	return out
 }
 
-// page returns the data shared by the pages, in the locale negotiated.
-func (h *Handler) page(r *http.Request, cfg *store.Snapshot, uiLocales []string) page {
-	supported := h.supportedLocales(cfg)
+// page returns the data shared by the pages, in the locale negotiated, with
+// the theme th.
+func (h *Handler) page(r *http.Request, th *Theme, cfg *store.Snapshot, uiLocales []string) page {
+	supported := supportedLocales(th, cfg)
 	def := cfg.Settings.DefaultLocale
 	if !slices.Contains(supported, def) {
 		def = supported[0]
 	}
-	p := page{h: h, fallback: cfg.Settings.FallbackLocale}
+	p := page{h: h, th: th, fallback: cfg.Settings.FallbackLocale}
 	p.missing, _ = r.Context().Value(checking{}).(map[[2]string]bool)
 	p.Locale = i18n.Negotiate(r.URL.Query().Get("_locale"), h.cookie(r, localeCookie), uiLocales, supported, def)
 	// The URL the browser shows, the proxy's prefix put back.
 	p.Return, _ = h.back(h.path + r.URL.RequestURI())
 	for _, l := range supported {
 		p.note(l, "locale."+l)
-		p.Locales = append(p.Locales, localeChoice{Code: l, Label: h.catalogs.T(l, p.fallback, "locale."+l), Action: p.LocaleURL(l), Flag: p.Flag(l), Current: l == p.Locale})
+		p.Locales = append(p.Locales, localeChoice{Code: l, Label: th.catalogs.T(l, p.fallback, "locale."+l), Action: p.LocaleURL(l), Flag: p.Flag(l), Current: l == p.Locale})
 	}
 	return p
 }
@@ -204,8 +180,8 @@ func (h *Handler) page(r *http.Request, cfg *store.Snapshot, uiLocales []string)
 // choicePage is the page of the choice of the flow (CHX-5, POS-2). Its form
 // posts to the URL of GET /, which the browser keeps for the page a POST
 // shows again (POS-2, POS-3): the change of language goes back to it.
-func (h *Handler) choicePage(r *http.Request, cfg *store.Snapshot, c *flow.ChoiceScreen) page {
-	p := h.page(r, cfg, c.UILocales)
+func (h *Handler) choicePage(r *http.Request, th *Theme, cfg *store.Snapshot, c *flow.ChoiceScreen) page {
+	p := h.page(r, th, cfg, c.UILocales)
 	p.Client = clientOf(c.Client)
 	p.Form = form{Action: h.path + "/?login_challenge=" + url.QueryEscape(c.LoginChallenge), LoginChallenge: c.LoginChallenge, CSRF: c.CSRF}
 	if c.Invalid {
@@ -274,10 +250,11 @@ var standardScopes = map[string][]string{
 // consentPage is the consent screen (CST-13): the scopes asked with the
 // claims of the flow they cover, then the other claims, sent too
 // (claims_filter permissive). What is shown is what is sent: the claims of
-// the id_token and of the access token, and the subject, sub of both. Its
-// form posts to the URL of GET /consent, as the choice page does.
-func (h *Handler) consentPage(r *http.Request, cfg *store.Snapshot, c *flow.ConsentScreen) page {
-	p := h.page(r, cfg, c.UILocales)
+// the id_token and of the access token, and the subject, sub of both; their
+// values with show, consent.show_values. Its form posts to the URL of GET
+// /consent, as the choice page does.
+func (h *Handler) consentPage(r *http.Request, th *Theme, cfg *store.Snapshot, c *flow.ConsentScreen, show bool) page {
+	p := h.page(r, th, cfg, c.UILocales)
 	if c.Client != nil {
 		data, _ := json.Marshal(c.Client)
 		p.Client = clientOf(data)
@@ -297,7 +274,7 @@ func (h *Handler) consentPage(r *http.Request, cfg *store.Snapshot, c *flow.Cons
 		for _, name := range claims {
 			if values, ok := sent[name]; ok {
 				covered[name] = true
-				g.Claims = append(g.Claims, h.claim(p, name, values))
+				g.Claims = append(g.Claims, claim(p, name, values, show))
 			}
 		}
 		p.Scopes = append(p.Scopes, g)
@@ -305,7 +282,7 @@ func (h *Handler) consentPage(r *http.Request, cfg *store.Snapshot, c *flow.Cons
 	other := scopeGroup{Label: p.T("consent.other")}
 	for _, name := range slices.Sorted(maps.Keys(sent)) {
 		if !covered[name] {
-			other.Claims = append(other.Claims, h.claim(p, name, sent[name]))
+			other.Claims = append(other.Claims, claim(p, name, sent[name], show))
 		}
 	}
 	if len(other.Claims) > 0 {
@@ -326,8 +303,8 @@ var logoutStates = map[flow.LogoutState]string{
 // /logout, for an error page to keep its way back to the language; after a
 // refusal, an answer to a POST, the same template has no form nor switcher, for
 // it has no URL to go back to.
-func (h *Handler) logoutPage(r *http.Request, cfg *store.Snapshot, l *flow.LogoutScreen) page {
-	p := h.page(r, cfg, nil)
+func (h *Handler) logoutPage(r *http.Request, th *Theme, cfg *store.Snapshot, l *flow.LogoutScreen) page {
+	p := h.page(r, th, cfg, nil)
 	if l.Client != nil {
 		data, _ := json.Marshal(l.Client)
 		p.Client = clientOf(data)
@@ -364,14 +341,14 @@ func sentClaims(c *flow.ConsentScreen) map[string][]json.RawMessage {
 }
 
 // claim is the line of a claim: its label, or its name when the catalogs
-// have none, and with consent.show_values its values, a string as it is,
-// anything else in JSON.
-func (h *Handler) claim(p page, name string, values []json.RawMessage) claimLine {
+// have none, and with show its values, a string as it is, anything else in
+// JSON.
+func claim(p page, name string, values []json.RawMessage, show bool) claimLine {
 	l := claimLine{Label: name}
 	if key := "claim." + name; p.labelled(key) {
 		l.Label = p.T(key)
 	}
-	if h.o.ShowValues {
+	if show {
 		shown := make([]string, 0, len(values))
 		for _, v := range values {
 			var s string
@@ -389,7 +366,7 @@ func (h *Handler) claim(p page, name string, values []json.RawMessage) claimLine
 // 500, never half a page.
 func (h *Handler) render(w http.ResponseWriter, r *http.Request, status int, name string, p page) {
 	var buf bytes.Buffer
-	if err := h.pages.templates[name].ExecuteTemplate(&buf, "layout", p); err != nil {
+	if err := p.th.templates[name].ExecuteTemplate(&buf, "layout", p); err != nil {
 		h.o.Logger.ErrorContext(r.Context(), "http.render_failed", "page", name, "err", err)
 		http.Error(w, "internal error, trace id "+httpx.TraceID(r.Context()), http.StatusInternalServerError)
 		return
@@ -410,27 +387,34 @@ const (
 	samplePrint     = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 )
 
-// check renders each page in each locale with sample data, through each
+// check renders each page of th in each locale with sample data, through each
 // branch of the templates (Thèmes, validation). A template that fails, a
-// key a catalog lacks, or a form without the fields the handlers read stops
-// the start, not a login.
-func (h *Handler) check() error {
-	cfg := h.sampleConfig()
-	settings := cfg.Settings
+// key a catalog lacks, a form without the fields the handlers read, or code
+// the CSP would block stops the start, not a login.
+func (h *Handler) check(th *Theme) error {
+	cfg := sampleConfig(th)
 	missing := map[[2]string]bool{}
 	var errs []error
-	for _, l := range settings.SupportedLocales {
+	// The code the CSP blocks, once a page, whatever its locales and branches.
+	blocked := map[string]bool{}
+	for _, l := range cfg.Settings.SupportedLocales {
 		r, _ := http.NewRequestWithContext(context.WithValue(context.Background(), checking{}, missing), http.MethodGet, "/?_locale="+url.QueryEscape(l), nil)
-		for _, s := range h.samples(r, cfg) {
+		for _, s := range h.samples(r, th, cfg) {
 			var buf bytes.Buffer
-			err := h.pages.templates[s.name].ExecuteTemplate(&buf, "layout", s.page)
+			err := th.templates[s.name].ExecuteTemplate(&buf, "layout", s.page)
 			if err == nil {
 				err = formFields(buf.Bytes(), s.fields)
+				for _, b := range inlineCode(buf.Bytes()) {
+					blocked[fmt.Sprintf("page %s: %s", s.name, b)] = true
+				}
 			}
 			if err != nil {
 				errs = append(errs, fmt.Errorf("page %s (%s) in %s: %w", s.name, s.what, l, err))
 			}
 		}
+	}
+	for _, b := range slices.Sorted(maps.Keys(blocked)) {
+		errs = append(errs, errors.New(b))
 	}
 	for _, k := range slices.SortedFunc(maps.Keys(missing), func(a, b [2]string) int { return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1])) }) {
 		errs = append(errs, fmt.Errorf("catalog %s: no text for %s", k[0], k[1]))
@@ -438,11 +422,11 @@ func (h *Handler) check() error {
 	return errors.Join(errs...)
 }
 
-// sampleConfig is the configuration of check's pages: a flow, each catalog's
-// locale supported.
-func (h *Handler) sampleConfig() *store.Snapshot {
+// sampleConfig is the configuration of check's pages: a flow, each locale of
+// the theme's catalogs supported.
+func sampleConfig(th *Theme) *store.Snapshot {
 	settings := store.DefaultSettings()
-	settings.SupportedLocales = h.catalogs.Locales()
+	settings.SupportedLocales = th.Locales()
 	settings.DefaultLocale = settings.SupportedLocales[0]
 	return store.NewSnapshot(nil, []store.Flow{{ID: "f", Enabled: true, Title: map[string]string{settings.DefaultLocale: "F"}, Description: map[string]string{settings.DefaultLocale: "D"},
 		IconURL: map[string]string{settings.DefaultLocale: "https://flow.example/icon.svg"}}}, settings)
@@ -456,7 +440,7 @@ type sample struct {
 	fields     map[string]string
 }
 
-func (h *Handler) samples(r *http.Request, cfg *store.Snapshot) []sample {
+func (h *Handler) samples(r *http.Request, th *Theme, cfg *store.Snapshot) []sample {
 	client := json.RawMessage(`{"client_id":"c","client_name":"Client","logo_uri":"https://client.example/logo.png","client_uri":"https://client.example/"}`)
 	scopes := slices.Sorted(maps.Keys(standardScopes))
 	claims := flow.Object{"custom": json.RawMessage(`["v"]`)}
@@ -470,30 +454,72 @@ func (h *Handler) samples(r *http.Request, cfg *store.Snapshot) []sample {
 	choiceFields := map[string]string{"flow": "f", "login_challenge": sampleChallenge, "csrf_token": sampleCSRF}
 	consentFields := map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept"}
 	logoutFields := map[string]string{"logout_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept"}
+	// The last flow, preselected (ui.remember_last_flow).
+	selected := h.choicePage(r, th, cfg, &flow.ChoiceScreen{Flows: []string{"f"}, LoginChallenge: sampleChallenge, CSRF: sampleCSRF, Client: client})
+	selected.Flows[0].Selected = true
 	out := []sample{
-		{"select", "flows, one refused", h.choicePage(r, cfg, &flow.ChoiceScreen{Flows: []string{"f"}, LoginChallenge: sampleChallenge, CSRF: sampleCSRF, Client: client, Invalid: true}), choiceFields},
-		{"select", "no flow", h.choicePage(r, cfg, &flow.ChoiceScreen{LoginChallenge: sampleChallenge, CSRF: sampleCSRF}), nil},
-		{"consent", "scopes, claims, audience", h.consentPage(r, cfg, consent), consentFields},
-		{"consent", "nothing asked", h.consentPage(r, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF}), consentFields},
-		{"consent", "without a flow", h.consentPage(r, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint, Subject: "s", Claims: flow.Object{"email": json.RawMessage(`"v"`)}}),
+		{"select", "flows, one refused", h.choicePage(r, th, cfg, &flow.ChoiceScreen{Flows: []string{"f"}, LoginChallenge: sampleChallenge, CSRF: sampleCSRF, Client: client, Invalid: true}), choiceFields},
+		{"select", "flow selected", selected, choiceFields},
+		{"select", "no flow", h.choicePage(r, th, cfg, &flow.ChoiceScreen{LoginChallenge: sampleChallenge, CSRF: sampleCSRF}), nil},
+		{"consent", "scopes, claims, audience", h.consentPage(r, th, cfg, consent, false), consentFields},
+		{"consent", "values shown", h.consentPage(r, th, cfg, consent, true), consentFields},
+		{"consent", "nothing asked", h.consentPage(r, th, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF}, false), consentFields},
+		{"consent", "without a flow", h.consentPage(r, th, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint, Subject: "s", Claims: flow.Object{"email": json.RawMessage(`"v"`)}}, false),
 			map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept", "claims_print": samplePrint}},
-		{"logout", "confirm", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF}), logoutFields},
-		{"logout", "other session", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF, OtherSession: true, Client: &ory.OAuth2Client{ClientId: ory.PtrString("c"), ClientName: ory.PtrString("Client")}}), logoutFields},
-		{"logout", "declined", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutDeclined}), nil},
-		{"logout", "in progress", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutInProgress, Next: "/logout/next?ref=0"}), nil},
-		{"logout", "already out", h.logoutPage(r, cfg, &flow.LogoutScreen{State: flow.LogoutAlreadyOut}), nil},
+		{"logout", "confirm", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF}), logoutFields},
+		{"logout", "other session", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF, OtherSession: true, Client: &ory.OAuth2Client{ClientId: ory.PtrString("c"), ClientName: ory.PtrString("Client")}}), logoutFields},
+		{"logout", "declined", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutDeclined}), nil},
+		{"logout", "in progress", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutInProgress, Next: "/logout/next?ref=0"}), nil},
+		{"logout", "already out", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutAlreadyOut}), nil},
 	}
 	for _, code := range slices.Sorted(maps.Keys(statuses)) {
 		for _, link := range []string{"", "https://client.example/"} {
-			p := h.page(r, cfg, nil)
+			p := h.page(r, th, cfg, nil)
 			p.Error = &pageError{Code: string(code), MessageKey: "error." + string(code), TraceID: "0123456789abcdef0123456789abcdef", Link: link}
 			out = append(out, sample{name: "error", what: string(code), page: p})
 		}
 	}
-	p := h.page(r, cfg, nil)
+	p := h.page(r, th, cfg, nil)
 	p.Error = &pageError{Code: string(flow.E1003), MessageKey: "error." + string(flow.E1003), TraceID: "0123456789abcdef0123456789abcdef", SignOut: "https://hydra.example/oauth2/sessions/logout"}
 	out = append(out, sample{name: "error", what: "sign out", page: p})
 	return out
+}
+
+// inlineCode names what the CSP of the pages blocks without a word: a script
+// without src, an on… attribute, a style element or attribute, a javascript:
+// URL. A theme's script and style go to static/ (Thèmes, CSS et JavaScript).
+func inlineCode(page []byte) []string {
+	var out []string
+	z := html.NewTokenizer(bytes.NewReader(page))
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			return out
+		case html.StartTagToken, html.SelfClosingTagToken:
+			t := z.Token()
+			src := false
+			for _, a := range t.Attr {
+				name := strings.ToLower(a.Key)
+				switch {
+				case strings.HasPrefix(name, "on"):
+					out = append(out, fmt.Sprintf("attribute %s on <%s>, which the CSP blocks: a script goes to static/theme.js", name, t.Data))
+				case name == "style":
+					out = append(out, fmt.Sprintf("attribute style on <%s>, which the CSP blocks: a style goes to static/theme.css", t.Data))
+				case name == "src":
+					src = true
+				}
+				if slices.Contains([]string{"href", "src", "action", "formaction"}, name) && strings.HasPrefix(strings.ToLower(strings.TrimSpace(a.Val)), "javascript:") {
+					out = append(out, fmt.Sprintf("javascript: URL in %s on <%s>, which the CSP blocks", name, t.Data))
+				}
+			}
+			switch {
+			case t.Data == "script" && !src:
+				out = append(out, "<script> without src, which the CSP blocks: a script goes to static/theme.js")
+			case t.Data == "style":
+				out = append(out, "<style>, which the CSP blocks: a style goes to static/theme.css")
+			}
+		}
+	}
 }
 
 // formFields checks that the page's form fields (input, button, select,
@@ -535,17 +561,16 @@ func formFields(page []byte, want map[string]string) error {
 	return errors.Join(errs...)
 }
 
-// static serves a static file, cached for a year when its URL carries its
-// hash. fs.ReadFile refuses a name that would leave static/ (.., an empty
-// element).
+// static serves a static file of the theme, cached for a year when its URL
+// carries its hash. Only the files of static/ are known: no name leaves it.
 func (h *Handler) static(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	data, err := fs.ReadFile(web.FS, "static/"+name)
-	if err != nil {
+	f, ok := h.current().statics[name]
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	if v := r.URL.Query().Get("v"); v != "" && v == h.pages.hashes[name] {
+	if v := r.URL.Query().Get("v"); v != "" && v == f.hash {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -553,5 +578,5 @@ func (h *Handler) static(w http.ResponseWriter, r *http.Request) {
 	if t := mime.TypeByExtension(path.Ext(name)); t != "" {
 		w.Header().Set("Content-Type", t)
 	}
-	_, _ = w.Write(data)
+	_, _ = w.Write(f.data)
 }

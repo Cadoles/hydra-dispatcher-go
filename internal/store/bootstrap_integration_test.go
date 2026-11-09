@@ -317,10 +317,10 @@ dispatcher:
 	}
 }
 
-// An older version bootstraps on the table of a newer one: the locales it has
-// no catalog for are tolerated there, as Snapshot tolerates them, and left as
-// they are. The seed's own are not.
-func TestBootstrapNewerLocales(t *testing.T) {
+// A locale is any well-formed one (Q92): a table that names a theme's locale,
+// or that a newer version wrote, is left as it is by a bootstrap that does not
+// set it, and the seed may name one; not one that is not well formed.
+func TestBootstrapLocales(t *testing.T) {
 	ctx := context.Background()
 	p := migrated(t)
 	exec(t, p, `INSERT INTO setting (key, value) VALUES ('supported_locales', '["fr", "en", "de"]'), ('default_locale', '"de"')`)
@@ -331,9 +331,12 @@ func TestBootstrapNewerLocales(t *testing.T) {
 	if err := p.db.QueryRow(`SELECT value::text FROM setting WHERE key = 'supported_locales'`).Scan(&locales); err != nil || locales != `["fr", "en", "de"]` {
 		t.Errorf("supported_locales = %s, %v; want it left as it is", locales, err)
 	}
-	_, err := p.Bootstrap(ctx, loadSeed(t, "dispatcher:\n  supported_locales: [fr, de]\n"), Force, true)
-	if err == nil || !strings.Contains(err.Error(), `setting supported_locales: "de" has no catalog`) {
-		t.Errorf("Bootstrap of a locale without a catalog = %v", err)
+	if _, err := p.Bootstrap(ctx, loadSeed(t, "dispatcher:\n  supported_locales: [fr, de]\n  default_locale: de\n"), Force, true); err != nil {
+		t.Errorf("Bootstrap of a theme's locale = %v", err)
+	}
+	_, err := p.Bootstrap(ctx, loadSeed(t, "dispatcher:\n  supported_locales: [fr, pt_BR]\n  default_locale: fr\n"), Force, true)
+	if err == nil || !strings.Contains(err.Error(), `setting supported_locales: "pt_BR" is not a locale`) {
+		t.Errorf("Bootstrap of a locale not well formed = %v", err)
 	}
 }
 

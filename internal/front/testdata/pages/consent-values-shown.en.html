@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Allow access to your data</title>
+<link rel="stylesheet" href="/static/base.css?v=737a015ac8fc">
+<link rel="stylesheet" href="/static/theme.css?v=2ede3c5a8501">
+</head>
+<body>
+<header><div class="client"><span>Client</span></div></header>
+<main>
+
+<h1>Allow access to your data</h1>
+<p class="lead">Client asks for access to the following data:</p>
+
+<ul class="scopes">
+<li><span class="scope">Your postal address</span>
+<ul><li>Postal address : <span class="value">v</span></li></ul></li>
+<li><span class="scope">Your email address</span>
+<ul><li>Email address : <span class="value">v</span></li><li>Address verified : <span class="value">v</span></li></ul></li>
+<li><span class="scope">Identify you</span>
+<ul><li>Technical identifier : <span class="value">s · v</span></li></ul></li>
+<li><span class="scope">Your phone</span>
+<ul><li>Phone number : <span class="value">v</span></li><li>Number verified : <span class="value">v</span></li></ul></li>
+<li><span class="scope">Your profile</span>
+<ul><li>Full name : <span class="value">v</span></li><li>Last name : <span class="value">v</span></li><li>First name : <span class="value">v</span></li><li>Username : <span class="value">v</span></li><li>Language : <span class="value">v</span></li></ul></li>
+<li><span class="scope">Permission “custom”</span></li>
+<li><span class="scope">Other data</span>
+<ul><li>custom : <span class="value">[&#34;v&#34;]</span></li><li>roles : <span class="value">[&#34;admin&#34;]</span></li></ul></li>
+</ul>
+
+<p class="audience">Recipients : https://api.example/</p>
+<form method="post" action="/consent?consent_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">
+<input type="hidden" name="csrf_token" value="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef">
+<input type="hidden" name="consent_challenge" value="c2FtcGxlX2NoYWxsZW5nZQ==">
+<button type="submit" name="action" value="accept">Allow</button>
+<button type="submit" name="action" value="reject" class="secondary">Deny</button>
+</form>
+
+</main>
+<footer><form method="post" class="locales" aria-label="Language"><input type="hidden" name="return" value="/"><button type="submit" formaction="/locale/en" lang="en" aria-current="true" disabled>English</button><button type="submit" formaction="/locale/fr" lang="fr">Français</button></form></footer>
+</body>
+</html>

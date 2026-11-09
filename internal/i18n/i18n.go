@@ -1,12 +1,15 @@
 // Package i18n holds the catalogs of the pages, fr and en, embedded in the
-// binary, and the negotiation of the page's locale.
+// binary, those a theme adds or changes, and the negotiation of the page's
+// locale.
 package i18n
 
 import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"path"
+	"io/fs"
+	"maps"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -18,36 +21,63 @@ var files embed.FS
 type Catalogs map[string]map[string]string
 
 // Embedded returns the catalogs of the binary.
-func Embedded() (Catalogs, error) {
-	entries, err := files.ReadDir(".")
+func Embedded() (Catalogs, error) { return Read(files) }
+
+// Read returns the catalogs of fsys, a <locale>.json of a flat object, key to
+// text, for each locale: the embedded ones, or the translations/ of a theme.
+// Anything else is refused, a file a theme author would think read: another
+// name, a directory, a locale that is not well formed, a value that is not a
+// text.
+func Read(fsys fs.FS) (Catalogs, error) {
+	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, err
 	}
 	c := Catalogs{}
 	for _, e := range entries {
-		data, err := files.ReadFile(e.Name())
+		locale, ok := strings.CutSuffix(e.Name(), ".json")
+		switch {
+		case e.IsDir() || !ok:
+			return nil, fmt.Errorf("%s: not a <locale>.json", e.Name())
+		case !WellFormed(locale):
+			return nil, fmt.Errorf("%s: %q is not a locale in lowercase (fr, pt-br)", e.Name(), locale)
+		}
+		data, err := fs.ReadFile(fsys, e.Name())
 		if err != nil {
 			return nil, err
 		}
 		texts := map[string]string{}
 		if err := json.Unmarshal(data, &texts); err != nil {
-			return nil, fmt.Errorf("catalog %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("%s: %w", e.Name(), err)
 		}
-		c[strings.TrimSuffix(e.Name(), path.Ext(e.Name()))] = texts
+		c[locale] = texts
 	}
 	return c, nil
 }
 
-// Locales returns the locales the binary has a catalog for, sorted, without
-// reading them: those internal/store accepts in its locale settings.
-func Locales() []string {
-	entries, _ := files.ReadDir(".") // embedded: cannot fail
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, strings.TrimSuffix(e.Name(), path.Ext(e.Name())))
+// Merge returns c with the texts of over, key by key: a theme changes the
+// texts it gives and adds the locales it brings.
+func (c Catalogs) Merge(over Catalogs) Catalogs {
+	out := Catalogs{}
+	for l, texts := range c {
+		out[l] = maps.Clone(texts)
+	}
+	for l, texts := range over {
+		if out[l] == nil {
+			out[l] = map[string]string{}
+		}
+		maps.Copy(out[l], texts)
 	}
 	return out
 }
+
+// locale is a language tag (BCP 47) in lowercase, as Negotiate compares them:
+// a language, then subtags of letters or digits.
+var locale = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]{1,8})*$`)
+
+// WellFormed tells whether l is a locale the settings and the themes may name,
+// whether or not a catalog holds it (Q92).
+func WellFormed(l string) bool { return locale.MatchString(l) }
 
 // Has tells whether the catalog of locale holds key, without falling back.
 func (c Catalogs) Has(locale, key string) bool {
@@ -57,12 +87,7 @@ func (c Catalogs) Has(locale, key string) bool {
 
 // Locales returns the locales of the catalogs, sorted.
 func (c Catalogs) Locales() []string {
-	out := make([]string, 0, len(c))
-	for l := range c {
-		out = append(out, l)
-	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(c))
 }
 
 // T returns the text of key in locale, else in fallback, else the key
