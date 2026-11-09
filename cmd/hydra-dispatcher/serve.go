@@ -102,7 +102,7 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	db, err := openStore(ctx, cfg.Store.DSN)
+	db, err := openConfig(ctx, cfg)
 	if err != nil {
 		_ = states.Close()
 		return err
@@ -392,7 +392,7 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := webhook.Check(s.Settings, i.allowHTTP, i.signed); err != nil {
+	if err := webhookCheck(i.allowHTTP, i.signed)(s); err != nil {
 		return nil, err
 	}
 	// A copy: a source may give the same snapshot twice.
@@ -403,6 +403,15 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 		c.Warnings = append(c.Warnings, front.LocaleWarnings(i.theme, s.Settings)...)
 	}
 	return &c, nil
+}
+
+// webhookCheck refuses a snapshot whose webhooks cannot be called
+// (webhook.Check): serve at startup and at each refresh, and every write
+// before its commit (openConfig).
+func webhookCheck(allowHTTP, signed bool) func(*store.Snapshot) error {
+	return func(s *store.Snapshot) error {
+		return webhook.Check(s.Settings, allowHTTP, signed)
+	}
 }
 
 // shutdownGrace is how long in-flight requests may run once the drain is over,

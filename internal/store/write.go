@@ -71,31 +71,47 @@ func (p *Postgres) SetCheck(check func(*Snapshot) error) { p.check = check }
 // on the instance that made it. Set before the first write.
 func (p *Postgres) OnCommit(committed func(context.Context)) { p.committed = committed }
 
-// write runs fn in a transaction, under writeLock, in read committed whatever
-// the default of the database: each statement sees what the writes before
-// committed. Then it reads the snapshot the transaction leaves, refuses it
-// as serve would, notifies the instances and commits. The notification
-// leaves at the commit, never before.
+// write runs fn in a transaction (transact) and commits it.
 func (p *Postgres) write(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	return p.transact(ctx, "write", true, fn)
+}
+
+// transact runs fn in a transaction, under writeLock, in read committed
+// whatever the default of the database: each statement sees what the writes
+// before committed. In repeatable read, the snapshot would date from the lock
+// statement, before the wait, and miss what the write it waited for wrote.
+// Then it reads the snapshot the transaction leaves and refuses it as serve
+// would. With commit, it notifies the instances, commits, and calls the hook
+// of OnCommit; the notification leaves at the commit, never before. Without,
+// it rolls back what fn wrote: the dry run of bootstrap gives the refusals
+// of a write. op prefixes the errors of the transaction, not those of fn.
+func (p *Postgres) transact(ctx context.Context, op string, commit bool, fn func(tx *sql.Tx) error) error {
 	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return fmt.Errorf("write: %w", err)
+		return fmt.Errorf("%s: %w", op, err)
 	}
 	defer func() { _ = tx.Rollback() }() // after Commit, a no-op
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(writeLock)); err != nil {
-		return fmt.Errorf("write: lock: %w", err)
+		return fmt.Errorf("%s: lock: %w", op, err)
 	}
 	if err := fn(tx); err != nil {
 		return err
 	}
 	if err := p.checkSnapshot(ctx, tx); err != nil {
-		return err
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			return err
+		}
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if !commit {
+		return nil
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_notify($1, '')`, notifyChannel); err != nil {
-		return fmt.Errorf("write: notify: %w", err)
+		return fmt.Errorf("%s: notify: %w", op, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("write: %w", err)
+		return fmt.Errorf("%s: %w", op, err)
 	}
 	if p.committed != nil {
 		p.committed(ctx)

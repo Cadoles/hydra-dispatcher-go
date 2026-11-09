@@ -27,6 +27,7 @@ type configStore interface {
 	MigrateDown(ctx context.Context) (string, error)
 	LastMigration(ctx context.Context) (string, error)
 	Bootstrap(ctx context.Context, seed config.Seed, mode store.Mode, write bool) ([]store.Change, error)
+	SetCheck(check func(*store.Snapshot) error)
 }
 
 // openStore opens the configuration store at dsn. The tests replace it:
@@ -37,6 +38,18 @@ var openStore = func(ctx context.Context, dsn string) (configStore, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+// openConfig opens the configuration store of cfg: no write, bootstrap's
+// included, commits a configuration serve would refuse on this configuration
+// (webhookCheck).
+func openConfig(ctx context.Context, cfg *config.Config) (configStore, error) {
+	db, err := openStore(ctx, cfg.Store.DSN)
+	if err != nil {
+		return nil, err
+	}
+	db.SetCheck(webhookCheck(cfg.TLS.AllowHTTP, cfg.Secrets.WebhookSigningKey != nil))
+	return db, nil
 }
 
 const configHelp = "configuration file (default: $" + configEnv + ", else DISPATCHER_* variables only)"
@@ -56,7 +69,7 @@ func migrate(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	db, err := openStore(ctx, cfg.Store.DSN)
+	db, err := openConfig(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -77,7 +90,7 @@ func migrateDown(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	db, err := openStore(ctx, cfg.Store.DSN)
+	db, err := openConfig(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -132,7 +145,7 @@ func bootstrap(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	db, err := openStore(ctx, cfg.Store.DSN)
+	db, err := openConfig(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -176,6 +189,7 @@ func bootstrap(ctx context.Context, args []string) error {
 		printChanges(os.Stdout, changes)
 	}
 	warnWidened(ctx, changes, logs.app)
+	warnOverwrites(ctx, changes, logs.app)
 	return nil
 }
 
@@ -239,6 +253,7 @@ func prepareStore(ctx context.Context, cfg *config.Config, db configStore, logge
 		logger.InfoContext(ctx, "bootstrap.change", attrs...)
 	}
 	warnWidened(ctx, changes, logger)
+	warnOverwrites(ctx, changes, logger)
 	logger.InfoContext(ctx, "bootstrap.done", "mode", cfg.Serve.Bootstrap, "summary", summary(counts))
 	return nil
 }
@@ -252,6 +267,17 @@ func warnWidened(ctx context.Context, changes []store.Change, logger *slog.Logge
 			if c.Action == store.Update && f.WidensClaims() {
 				logger.WarnContext(ctx, "bootstrap.claims_widened", "id", c.ID, "was", f.Old)
 			}
+		}
+	}
+}
+
+// warnOverwrites warns of each row a bootstrap replaced that another than
+// bootstrap had written: an admin's write the seed undid (Q100). Its author is
+// logged, never a value.
+func warnOverwrites(ctx context.Context, changes []store.Change, logger *slog.Logger) {
+	for _, c := range changes {
+		if c.By != "" {
+			logger.WarnContext(ctx, "bootstrap.overwrites", "kind", c.Kind, "id", c.ID, "action", string(c.Action), "by", c.By)
 		}
 	}
 }
@@ -281,7 +307,11 @@ func printChanges(w io.Writer, changes []store.Change) {
 	counts := map[store.Action]int{}
 	for _, c := range changes {
 		counts[c.Action]++
-		fmt.Fprintf(w, "%-7s %s %s%s\n", c.Action, c.Kind, c.ID, notes[c.Action])
+		by := ""
+		if c.By != "" {
+			by = " (written by " + c.By + ")"
+		}
+		fmt.Fprintf(w, "%-7s %s %s%s%s\n", c.Action, c.Kind, c.ID, notes[c.Action], by)
 		for _, f := range c.Fields {
 			switch {
 			case f.Secret:

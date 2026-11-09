@@ -46,6 +46,8 @@ type fakeStore struct {
 	// written are the changes of a write when they differ from those of a
 	// dry run: the database changed in between.
 	written []store.Change
+	// check is that of SetCheck.
+	check func(*store.Snapshot) error
 }
 
 func (f *fakeStore) record(call string) {
@@ -117,6 +119,13 @@ func (f *fakeStore) Bootstrap(ctx context.Context, _ config.Seed, mode store.Mod
 	return f.changes, nil
 }
 
+// SetCheck keeps check, which the fake never calls.
+func (f *fakeStore) SetCheck(check func(*store.Snapshot) error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.check = check
+}
+
 // useStore makes openStore give f for the length of t.
 func useStore(t *testing.T, f *fakeStore) {
 	old := openStore
@@ -182,6 +191,95 @@ update 2, keep 1
 `
 	if out.String() != want {
 		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
+	}
+	out.Reset()
+	printChanges(&out, overwrites)
+	want = `update  app hydra-sql (written by admin:alice)
+          method: "pwd" -> "otp"
+reset   setting remember (back to its default) (written by api_client:c)
+          value: false -> true
+update 1, reset 1
+`
+	if out.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
+	}
+}
+
+// overwrites replace what an admin and an API client wrote.
+var overwrites = []store.Change{
+	{Kind: "app", ID: "hydra-sql", Action: store.Update, By: "admin:alice", Fields: []store.FieldChange{{Name: "method", Old: `"pwd"`, New: `"otp"`}}},
+	{Kind: "setting", ID: "remember", Action: store.Reset, By: "api_client:c", Fields: []store.FieldChange{{Name: "value", Old: "false", New: "true"}}},
+}
+
+// A row another than bootstrap wrote, replaced, warns once written, by
+// bootstrap or by serve, with its author and without its values (Q100).
+func TestOverwritesWarn(t *testing.T) {
+	keepLoggers(t)
+	const msg = `"msg":"bootstrap.overwrites"`
+	warned := func(logs string) bool {
+		return strings.Count(logs, msg) == 2 && strings.Contains(logs, `"kind":"app","id":"hydra-sql","action":"update","by":"admin:alice"`) &&
+			strings.Contains(logs, `"kind":"setting","id":"remember","action":"reset","by":"api_client:c"`) && !strings.Contains(logs, "otp")
+	}
+	commandEnv(t)
+	for _, tt := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"-force"}, true},
+		{[]string{"-force", "-dry-run"}, false},
+	} {
+		stdinFrom(t, "", false)
+		useStore(t, &fakeStore{changes: overwrites})
+		var err error
+		stderr := stderrOf(t, func() {
+			_ = stdoutOf(t, func() { err = run(context.Background(), append([]string{"bootstrap"}, tt.args...), io.Discard) })
+		})
+		if err != nil || warned(stderr) != tt.want || strings.Contains(stderr, msg) != tt.want {
+			t.Errorf("bootstrap %q: err = %v, stderr:\n%s", tt.args, err, stderr)
+		}
+	}
+	commandEnv(t, "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", "DISPATCHER_SERVE_BOOTSTRAP=force")
+	useStore(t, &fakeStore{changes: overwrites})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var err error
+	if logs := stdoutOf(t, func() { err = serve(ctx, nil) }); err != nil || !warned(logs) {
+		t.Errorf("serve: err = %v, logs:\n%s", err, logs)
+	}
+}
+
+// The commands give the store what serve refuses of a snapshot on their
+// configuration: bootstrap writes no seed serve would refuse.
+func TestOpenConfigCheck(t *testing.T) {
+	keepLoggers(t)
+	hooks := store.DefaultSettings()
+	hooks.LoginAcceptWebhookURL = "http://hooks/login"
+	snap := store.NewSnapshot(nil, nil, hooks)
+	for _, tt := range []struct {
+		env  []string
+		want string
+	}{
+		{nil, "tls.allow_http"},
+		{[]string{"DISPATCHER_TLS_ALLOW_HTTP=true"}, "secrets.webhook_signing_key"},
+		{[]string{"DISPATCHER_TLS_ALLOW_HTTP=true", "DISPATCHER_SECRETS_WEBHOOK_SIGNING_KEY=" + strings.Repeat("ef", 32)}, ""},
+	} {
+		commandEnv(t, tt.env...)
+		stdinFrom(t, "", false)
+		f := &fakeStore{}
+		useStore(t, f)
+		_ = stderrOf(t, func() {
+			_ = stdoutOf(t, func() {
+				if err := run(context.Background(), []string{"bootstrap"}, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+		if f.check == nil {
+			t.Fatalf("%q: no check", tt.env)
+		}
+		if err := f.check(snap); tt.want == "" && err != nil || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {
+			t.Errorf("%q: check = %v, want %q", tt.env, err, tt.want)
+		}
 	}
 }
 

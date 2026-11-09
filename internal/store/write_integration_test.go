@@ -520,3 +520,139 @@ func TestMigrateAdminWrites(t *testing.T) {
 	}
 	exec(t, p, `INSERT INTO admin_user (username, role) VALUES ('u', 'viewer'), ('v', 'admin')`)
 }
+
+// force rewrites what an admin wrote over the seed and names its author, never
+// a row of its own; the author of each row it writes is bootstrap (Q100).
+func TestBootstrapOverwrites(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	seed := loadSeed(t, `
+dispatcher:
+  remember: false
+  app_auto_select: true
+  apps:
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd }
+    - { id: b, login_url: http://b/login, consent_url: http://b/consent, method: pwd }
+  flows:
+    - { id: f, title: F, description: D, steps: [{ id: a, order: 0 }] }
+  oauth2_clients:
+    - { id: c, secret: s3cret }
+`)
+	if _, err := p.Bootstrap(ctx, seed, Force, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range [][2]string{{"app", "a"}, {"flow", "f"}, {"api_client", "c"}, {"setting", "remember"}} {
+		if by := author(t, p, row[0], row[1]); by != "bootstrap" {
+			t.Errorf("%s %s: updated_by = %s", row[0], row[1], by)
+		}
+	}
+	if err := p.UpdateApp(ctx, "admin:alice", "a", func(a *App) error { a.Method = "otp"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateFlow(ctx, "api_client:c", "f", func(f *Flow) error { f.Enabled = false; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateAPIClient(ctx, "cli", "c", func(c *APIClient) error { c.Scopes = []string{"admin:apps"}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateSettings(ctx, "admin:bob", values(t, map[string]any{"remember": true, "app_auto_select": false})); err != nil {
+		t.Fatal(err)
+	}
+	// The same rows written again by the seed, and one an older version
+	// wrote without an author: that of bootstrap.
+	exec(t, p, `UPDATE app SET updated_by = NULL, login_url = 'http://b/old' WHERE id = 'b'`)
+	seedNull := loadSeed(t, `
+dispatcher:
+  remember: false
+  app_auto_select: ~
+  apps:
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd }
+    - { id: b, login_url: http://b/login, consent_url: http://b/consent, method: pwd }
+  flows:
+    - { id: f, title: F, description: D, steps: [{ id: a, order: 0 }] }
+  oauth2_clients:
+    - { id: c, secret: s3cret }
+`)
+	for _, write := range []bool{false, true} {
+		changes, err := p.Bootstrap(ctx, seedNull, Force, write)
+		if err != nil {
+			t.Fatal(err)
+		}
+		by := map[string]string{}
+		for _, c := range changes {
+			by[c.Kind+" "+c.ID] = string(c.Action) + " " + c.By
+		}
+		want := map[string]string{
+			"setting remember": "update admin:bob", "setting app_auto_select": "reset admin:bob",
+			"app a": "update admin:alice", "app b": "update ", "flow f": "update api_client:c", "api_client c": "update cli",
+		}
+		if !reflect.DeepEqual(by, want) {
+			t.Errorf("write %v: changes = %q\nwant %q", write, by, want)
+		}
+	}
+	for _, row := range [][2]string{{"app", "a"}, {"app", "b"}, {"flow", "f"}, {"api_client", "c"}, {"setting", "remember"}} {
+		if by := author(t, p, row[0], row[1]); by != "bootstrap" {
+			t.Errorf("%s %s after force: updated_by = %s", row[0], row[1], by)
+		}
+	}
+	// Without force, nothing replaced: nothing named.
+	if err := p.UpdateApp(ctx, "admin:alice", "a", func(a *App) error { a.Method = "otp"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	changes, err := p.Bootstrap(ctx, seedNull, Missing, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range changes {
+		if c.By != "" {
+			t.Errorf("missing: %+v", c)
+		}
+	}
+}
+
+// A seed serve would refuse is not written, a dry run says so as the write
+// does, and only a write notifies the instances.
+func TestBootstrapRefusedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	p.SetCheck(func(s *Snapshot) error {
+		if strings.HasPrefix(s.Settings.ConsentAcceptWebhookURL, "http://") {
+			return errors.New("setting consent_accept_webhook_url: is in http://, which needs tls.allow_http")
+		}
+		return nil
+	})
+	committed := 0
+	p.OnCommit(func(context.Context) { committed++ })
+	listen := listener(t, p)
+	seed := loadSeed(t, `
+dispatcher:
+  consent_accept_webhook_url: http://hooks/consent
+  apps:
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd }
+`)
+	for _, write := range []bool{false, true} {
+		_, err := p.Bootstrap(ctx, seed, Force, write)
+		var refused *RefusedError
+		if !errors.As(err, &refused) || !strings.HasPrefix(err.Error(), "bootstrap: the configuration this write leaves would be refused: setting consent_accept_webhook_url") {
+			t.Errorf("write %v: %v", write, err)
+		}
+	}
+	if s := snapshot(t, p); len(s.Apps) != 0 || s.Settings.ConsentAcceptWebhookURL != "" || committed != 0 || listen(300*time.Millisecond) {
+		t.Errorf("refused seed: %d apps, webhook %q, %d commits", len(s.Apps), s.Settings.ConsentAcceptWebhookURL, committed)
+	}
+	ok := loadSeed(t, `
+dispatcher:
+  consent_accept_webhook_url: https://hooks/consent
+  apps:
+    - { id: a, login_url: http://a/login, consent_url: http://a/consent, method: pwd }
+`)
+	if _, err := p.Bootstrap(ctx, ok, Force, false); err != nil || committed != 0 || listen(300*time.Millisecond) {
+		t.Errorf("dry run: %v, %d commits", err, committed)
+	}
+	if _, err := p.Bootstrap(ctx, ok, Force, true); err != nil || committed != 1 || !listen(5*time.Second) {
+		t.Errorf("write: %v, %d commits", err, committed)
+	}
+	if s := snapshot(t, p); len(s.Apps) != 1 {
+		t.Errorf("%d apps", len(s.Apps))
+	}
+}
