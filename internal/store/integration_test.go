@@ -86,7 +86,7 @@ func exec(t *testing.T, p *Postgres, query string, args ...any) {
 }
 
 // allMigrations are the migrations of an empty database.
-var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql"}
+var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql", "00004_admin_writes.sql"}
 
 // What the code read of the options of an app becomes its receive_claims, and
 // comes back with a rollback: an app restricted before stays restricted.
@@ -144,14 +144,19 @@ func TestMigrateDown(t *testing.T) {
 	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('a', 'x', 'x', 'pwd', '{email}')`)
 	want := slices.Clone(allMigrations)
 	slices.Reverse(want)
-	for i, name := range want {
+	for _, name := range want {
 		if last, err := p.LastMigration(ctx); err != nil || last != name {
 			t.Fatalf("LastMigration = %q, %v; want %s", last, err, name)
 		}
 		if got, err := p.MigrateDown(ctx); err != nil || got != name {
 			t.Fatalf("MigrateDown = %q, %v; want %s", got, err, name)
 		}
-		if i == 0 {
+		if name == "00004_admin_writes.sql" {
+			if _, err := p.Snapshot(ctx); err != nil {
+				t.Errorf("snapshot after the rollback of %s: %v", name, err)
+			}
+		}
+		if name == "00003_app_receive_claims.sql" {
 			var options string
 			if err := p.db.QueryRow(`SELECT options::text FROM app WHERE id = 'a'`).Scan(&options); err != nil || options != `{"receive_claims": ["email"]}` {
 				t.Errorf("options after the rollback: %s, %v", options, err)

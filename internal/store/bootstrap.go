@@ -69,10 +69,6 @@ func (f FieldChange) WidensClaims() bool {
 	return f.Name == "receive_claims" && f.New == "null"
 }
 
-// bootstrapLock is the advisory lock that serializes bootstraps: replicas
-// starting in serve.bootstrap force would otherwise insert the same rows.
-const bootstrapLock = 0x6469737061746368 // "dispatch"
-
 // bootstrapBy fills setting.updated_by.
 const bootstrapBy = "bootstrap"
 
@@ -92,7 +88,7 @@ func (p *Postgres) Bootstrap(ctx context.Context, seed config.Seed, mode Mode, w
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // after Commit, a no-op
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(bootstrapLock)); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(writeLock)); err != nil {
 		return nil, fmt.Errorf("bootstrap: lock: %w", err)
 	}
 	b := &bootstrap{ctx: ctx, tx: tx, mode: mode, write: write}
@@ -228,11 +224,8 @@ func (b *bootstrap) settings(seed config.Seed) error {
 		return nil
 	}
 	for _, st := range write {
-		if _, err := b.tx.ExecContext(b.ctx, `
-			INSERT INTO setting (key, value, updated_at, updated_by) VALUES ($1, $2::jsonb, now(), $3)
-			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-			st.key, string(st.encode(&next)), bootstrapBy); err != nil {
-			return fmt.Errorf("setting %s: %w", st.key, err)
+		if err := putSetting(b.ctx, b.tx, st, &next, bootstrapBy); err != nil {
+			return err
 		}
 	}
 	for _, st := range reset {
@@ -299,19 +292,8 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		}) {
 			continue
 		}
-		sources := make([]string, len(a.AllowedSources)) // NOT NULL: never nil
-		for i, s := range a.AllowedSources {
-			sources[i] = s.String()
-		}
-		if _, err := b.tx.ExecContext(b.ctx, `
-			INSERT INTO app (id, login_url, consent_url, logout_url, method, auth_mode, allowed_sources, client_cert_fingerprint, receive_claims)
-			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7::text[]::cidr[], NULLIF($8, ''), $9::text[])
-			ON CONFLICT (id) DO UPDATE SET login_url = EXCLUDED.login_url, consent_url = EXCLUDED.consent_url,
-				logout_url = EXCLUDED.logout_url, method = EXCLUDED.method, auth_mode = EXCLUDED.auth_mode,
-				allowed_sources = EXCLUDED.allowed_sources, client_cert_fingerprint = EXCLUDED.client_cert_fingerprint,
-				receive_claims = EXCLUDED.receive_claims`,
-			a.ID, a.LoginURL, a.ConsentURL, a.LogoutURL, a.Method, a.AuthMode, sources, a.ClientCertFingerprint, a.ReceiveClaims); err != nil {
-			return fmt.Errorf("app %s: %w", a.ID, err)
+		if err := putApp(b.ctx, b.tx, a, bootstrapBy); err != nil {
+			return err
 		}
 	}
 	ids := make([]string, len(current))
@@ -346,29 +328,8 @@ func (b *bootstrap) flows(seed config.Seed) error {
 		}) {
 			continue
 		}
-		title, _ := json.Marshal(f.Title)
-		description, _ := json.Marshal(f.Description)
-		var icon *string
-		if f.IconURL != nil {
-			raw, _ := json.Marshal(f.IconURL)
-			s := string(raw)
-			icon = &s
-		}
-		if _, err := b.tx.ExecContext(b.ctx, `
-			INSERT INTO flow (id, title, description, icon_url, enabled, acr) VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, NULLIF($6, ''))
-			ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description,
-				icon_url = EXCLUDED.icon_url, enabled = EXCLUDED.enabled, acr = EXCLUDED.acr`,
-			f.ID, string(title), string(description), icon, f.Enabled, f.ACR); err != nil {
-			return fmt.Errorf("flow %s: %w", f.ID, err)
-		}
-		if _, err := b.tx.ExecContext(b.ctx, `DELETE FROM flow_step WHERE flow_id = $1`, f.ID); err != nil {
-			return fmt.Errorf("flow %s: %w", f.ID, err)
-		}
-		for _, s := range f.Steps {
-			if _, err := b.tx.ExecContext(b.ctx, `INSERT INTO flow_step (flow_id, app_id, position, subject_check) VALUES ($1, $2, $3, $4)`,
-				f.ID, s.AppID, s.Position, s.SubjectCheck); err != nil {
-				return fmt.Errorf("flow %s: step %s: %w", f.ID, s.AppID, err)
-			}
+		if err := putFlow(b.ctx, b.tx, f, bootstrapBy); err != nil {
+			return err
 		}
 	}
 	ids := make([]string, len(current))
@@ -381,12 +342,6 @@ func (b *bootstrap) flows(seed config.Seed) error {
 	return nil
 }
 
-// apiClient is a client of the admin API, as the table holds it.
-type apiClient struct {
-	id, secretHash string
-	scopes         []string
-}
-
 func (b *bootstrap) clients(seed config.Seed) error {
 	current, err := readAPIClients(b.ctx, b.tx)
 	if err != nil {
@@ -397,36 +352,33 @@ func (b *bootstrap) clients(seed config.Seed) error {
 		if scopes == nil {
 			scopes = []string{}
 		}
-		i := slices.IndexFunc(current, func(c apiClient) bool { return c.id == sc.ID })
-		var old apiClient
+		i := slices.IndexFunc(current, func(c APIClient) bool { return c.ID == sc.ID })
+		var old APIClient
 		if i >= 0 {
 			old = current[i]
 		}
 		// Once: bcrypt is slow on purpose.
-		sameSecret := i >= 0 && domain.SecretMatches(old.secretHash, sc.Secret)
+		sameSecret := i >= 0 && domain.SecretMatches(old.SecretHash, sc.Secret)
 		if !b.decide("api_client", sc.ID, i >= 0, []field{
 			{name: "secret", secret: func() bool { return sameSecret }},
-			{name: "scopes", old: old.scopes, new: scopes},
+			{name: "scopes", old: old.Scopes, new: scopes},
 		}) {
 			continue
 		}
 		// An unchanged secret keeps its hash: a new salt would show as a change.
-		hash := old.secretHash
+		c := APIClient{ID: sc.ID, SecretHash: old.SecretHash, Scopes: scopes}
 		if !sameSecret {
-			if hash, err = domain.HashSecret(sc.Secret); err != nil {
+			if c.SecretHash, err = domain.HashSecret(sc.Secret); err != nil {
 				return fmt.Errorf("API client %s: %w", sc.ID, err)
 			}
 		}
-		if _, err := b.tx.ExecContext(b.ctx, `
-			INSERT INTO api_client (id, secret_hash, scopes) VALUES ($1, $2, $3::text[])
-			ON CONFLICT (id) DO UPDATE SET secret_hash = EXCLUDED.secret_hash, scopes = EXCLUDED.scopes`,
-			sc.ID, hash, scopes); err != nil {
-			return fmt.Errorf("API client %s: %w", sc.ID, err)
+		if err := putAPIClient(b.ctx, b.tx, c, bootstrapBy); err != nil {
+			return err
 		}
 	}
 	ids := make([]string, len(current))
 	for i, c := range current {
-		ids[i] = c.id
+		ids[i] = c.ID
 	}
 	b.absent("api_client", ids, func(id string) bool {
 		return slices.ContainsFunc(seed.OAuth2Clients, func(c config.SeedClient) bool { return c.ID == id })
@@ -434,21 +386,21 @@ func (b *bootstrap) clients(seed config.Seed) error {
 	return nil
 }
 
-func readAPIClients(ctx context.Context, q querier) ([]apiClient, error) {
+func readAPIClients(ctx context.Context, q querier) ([]APIClient, error) {
 	rows, err := q.QueryContext(ctx, `SELECT id, secret_hash, scopes FROM api_client ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	m := pgtype.NewMap()
-	var clients []apiClient
+	var clients []APIClient
 	for rows.Next() {
-		var c apiClient
-		if err := rows.Scan(&c.id, &c.secretHash, m.SQLScanner(&c.scopes)); err != nil {
+		var c APIClient
+		if err := rows.Scan(&c.ID, &c.SecretHash, m.SQLScanner(&c.Scopes)); err != nil {
 			return nil, err
 		}
-		if c.scopes == nil {
-			c.scopes = []string{}
+		if c.Scopes == nil {
+			c.Scopes = []string{}
 		}
 		clients = append(clients, c)
 	}

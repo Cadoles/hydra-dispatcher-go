@@ -73,6 +73,33 @@ type APIClient struct {
 // "steps[1].subject_check"), "" for the entity itself.
 type Fail func(field, format string, args ...any)
 
+// Violation is a rule an entity breaks, its field named as Fail names it.
+type Violation struct{ Field, Message string }
+
+// Violations is the error of a write the rules refuse: every violation at
+// once, for the admin to correct them together.
+type Violations []Violation
+
+func (v Violations) Error() string {
+	parts := make([]string, len(v))
+	for i, x := range v {
+		parts[i] = x.Message
+		if x.Field != "" {
+			parts[i] = x.Field + ": " + x.Message
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// Collect runs check and gives what it reports, nil for nothing.
+func Collect(check func(Fail)) Violations {
+	var v Violations
+	check(func(field, format string, args ...any) {
+		v = append(v, Violation{Field: field, Message: fmt.Sprintf(format, args...)})
+	})
+	return v
+}
+
 // Lengths of the columns: past them, Postgres refuses the row with an error
 // that names neither the entity nor the field.
 const (

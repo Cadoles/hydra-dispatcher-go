@@ -40,6 +40,9 @@ const (
 // Postgres is the database of the configuration.
 type Postgres struct {
 	db *sql.DB
+	// check and committed are those of SetCheck and OnCommit.
+	check     func(*Snapshot) error
+	committed func(context.Context)
 }
 
 // Open connects to the database at dsn, a postgres:// URL or a pgx
@@ -214,15 +217,21 @@ func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 		return nil, fmt.Errorf("read configuration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // read-only: nothing to commit
+	return readSnapshot(ctx, tx)
+}
+
+// readSnapshot reads the whole configuration as q sees it.
+func readSnapshot(ctx context.Context, q querier) (*Snapshot, error) {
+	var err error
 	s := &Snapshot{}
-	if s.Apps, err = readApps(ctx, tx); err != nil {
+	if s.Apps, err = readApps(ctx, q); err != nil {
 		return nil, fmt.Errorf("read apps: %w", err)
 	}
 	s.index()
-	if s.Flows, err = readFlows(ctx, tx); err != nil {
+	if s.Flows, err = readFlows(ctx, q); err != nil {
 		return nil, fmt.Errorf("read flows: %w", err)
 	}
-	rows, err := readSettings(ctx, tx)
+	rows, err := readSettings(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("read settings: %w", err)
 	}

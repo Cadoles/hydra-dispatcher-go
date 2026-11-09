@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
 )
 
@@ -204,9 +205,14 @@ func decodeSettings(rows map[string][]byte) (Settings, []string, error) {
 // them or not (Q92).
 func (s Settings) Validate() error {
 	var errs []error
-	fail := func(key, format string, args ...any) {
+	s.Check(func(key, format string, args ...any) {
 		errs = append(errs, fmt.Errorf("setting %s: %s", key, fmt.Sprintf(format, args...)))
-	}
+	})
+	return errors.Join(errs...)
+}
+
+// Check is Validate, each problem reported under the key of its setting.
+func (s Settings) Check(fail domain.Fail) {
 	for _, d := range []struct {
 		key   string
 		value time.Duration
@@ -252,7 +258,6 @@ func (s Settings) Validate() error {
 	if !i18n.WellFormed(s.FallbackLocale) {
 		fail("fallback_locale", "%q is not a locale in lowercase (fr, pt-br)", s.FallbackLocale)
 	}
-	return errors.Join(errs...)
 }
 
 // uriScheme is the scheme of a URL (RFC 3986), colon included.

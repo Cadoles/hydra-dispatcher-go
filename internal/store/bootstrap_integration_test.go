@@ -50,8 +50,8 @@ func clientHash(t *testing.T, p *Postgres, id string) (string, []string) {
 		t.Fatal(err)
 	}
 	for _, c := range clients {
-		if c.id == id {
-			return c.secretHash, c.scopes
+		if c.ID == id {
+			return c.SecretHash, c.Scopes
 		}
 	}
 	t.Fatalf("no API client %s", id)
@@ -414,7 +414,7 @@ func TestBootstrapDryRunWaits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = other.Rollback() }()
-	if _, err := other.Exec(`SELECT pg_advisory_xact_lock($1)`, int64(bootstrapLock)); err != nil {
+	if _, err := other.Exec(`SELECT pg_advisory_xact_lock($1)`, int64(writeLock)); err != nil {
 		t.Fatal(err)
 	}
 	short, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
