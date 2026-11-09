@@ -100,12 +100,15 @@ func (q *Queue) run() {
 
 // Close writes what waits until ctx ends, the budget of the stop (Q82): what is left
 // then is lost and counted, an output that blocks holding the last line. Lines written
-// after it are lost. It reports the lines lost, if any.
-func (q *Queue) Close(ctx context.Context) {
+// after it are lost. It reports the lines lost, if any, and tells whether the writer
+// is done with the output: false, it may still be in a Write, and the output must
+// not be closed under it, a syslog.Writer's Close waiting for that Write without end
+// (revue R30).
+func (q *Queue) Close(ctx context.Context) bool {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
-		return
+		return q.finished()
 	}
 	q.closed = true
 	q.mu.Unlock()
@@ -116,6 +119,17 @@ func (q *Queue) Close(ctx context.Context) {
 		q.lose(len(q.lines))
 	}
 	q.report(true)
+	return q.finished()
+}
+
+// finished tells whether the writer has returned.
+func (q *Queue) finished() bool {
+	select {
+	case <-q.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // lose counts n lines lost, and tells the log when the last time is a minute away.

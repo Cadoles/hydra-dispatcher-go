@@ -43,7 +43,9 @@ func TestQueueWrites(t *testing.T) {
 		buf[5] = byte('0' + i)
 		_, _ = q.Write(buf) // the caller reuses its buffer, as slog does
 	}
-	q.Close(context.Background())
+	if !q.Close(context.Background()) {
+		t.Error("Close: the writer not done")
+	}
 	var want strings.Builder
 	for i := range 10 {
 		fmt.Fprintf(&want, "line %d\n", i)
@@ -93,9 +95,14 @@ func TestQueueBlockedOutput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start = time.Now()
-	q.Close(ctx)
+	if q.Close(ctx) {
+		t.Error("Close: the writer done, though held by the output")
+	}
 	if took := time.Since(start); took > time.Second {
 		t.Errorf("Close took %v", took)
+	}
+	if q.Close(ctx) {
+		t.Error("Close again: the writer done, though held by the output")
 	}
 	if n := dropped.Load(); n < 99 {
 		t.Errorf("%d lines lost once closed, want those queued too", n)
@@ -173,5 +180,7 @@ func TestAuditOfABlockedSyslog(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	q.Close(ctx)
+	if q.Close(ctx) {
+		t.Error("Close: the writer done, though held by the socket")
+	}
 }

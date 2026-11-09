@@ -258,7 +258,8 @@ func configuredHydraMode(cfg *config.Config) string {
 // and format do not follow log_level or log_format: a SIEM reads it, in JSON. Its lines
 // go through a bounded queue (Q89): an output that blocks loses lines, counted by
 // dropped and told by logger, instead of holding the requests. The function it returns
-// empties the queue within auditDrain, then closes the output.
+// empties the queue within auditDrain, then closes the output, unless it still blocks
+// (closeAudit).
 func newAudit(cfg *config.Config, stdout io.Writer, logger *slog.Logger, dropped func()) (*audit.Log, func(), error) {
 	w, closer := stdout, func() {}
 	switch out := cfg.Observability.Audit.Output; {
@@ -285,8 +286,7 @@ func newAudit(cfg *config.Config, stdout io.Writer, logger *slog.Logger, dropped
 	drain := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), auditDrain)
 		defer cancel()
-		queue.Close(ctx)
-		closer()
+		closeAudit(ctx, queue, closer)
 	}
 	auditLogger := slog.New(newLogHandler(queue, "json", slog.LevelInfo)).With("log_type", "audit")
 	return audit.New(auditLogger, key, !cfg.Observability.Audit.PseudonymizeSubject), drain, nil
@@ -295,6 +295,16 @@ func newAudit(cfg *config.Config, stdout io.Writer, logger *slog.Logger, dropped
 // auditDrain is how long the stop gives the lines of the audit still queued, with the
 // traces and Sentry (Q82, Q89).
 const auditDrain = 2 * time.Second
+
+// closeAudit empties queue until ctx ends, then closes its output by closer, unless the
+// queue's writer is still in a Write of it: a syslog whose daemon reads no more holds
+// that Write, syslog.Writer.Close waits for it, and the stop would never end (revue
+// R30). The output is left to the end of the process, which follows.
+func closeAudit(ctx context.Context, queue *audit.Queue, closer func()) {
+	if queue.Close(ctx) {
+		closer()
+	}
+}
 
 // loggers are the application, access and warnings loggers of newLoggers.
 type loggers struct{ app, access, warnings *slog.Logger }

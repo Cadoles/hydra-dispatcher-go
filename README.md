@@ -298,10 +298,12 @@ this checkout, on Hydra 2.1 (`make up-go-hydra22` on 2.2).
 
 ## Releases
 
-A tag `v*` runs `.gitea/workflows/release.yaml`: the image is pushed to
+A tag `v*` runs `.gitea/workflows/release.yaml`: the image is pushed by its digest to
 `reg.cadoles.com/cadoles/hydra-dispatcher-go`, its CycloneDX SBOM (syft) attested, both
-signed with cosign by the key pair of the dispatcher, and the release of the forge gets
-the changelog and the SBOM. Nothing goes to the public services of Sigstore
+signed with cosign by the key pair of the dispatcher and verified; only then does the
+digest get its tags, the version, `major.minor` and `latest`, so that a failed signature
+leaves no tag on an unsigned image. The release of the forge gets the changelog and the
+SBOM. Nothing goes to the public services of Sigstore
 (`.gitea/cosign-signing-config.json` names none): a deployment checks the digest with
 the public key alone, `cosign.pub` at the root of this repository:
 

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"log/syslog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -792,5 +793,56 @@ func TestNewAudit(t *testing.T) {
 	closer()
 	if !strings.Contains(out.String(), `"log_type":"audit"`) {
 		t.Errorf("stdout: %s", out.String())
+	}
+}
+
+// The scenario of revue R30: the audit in syslog, a daemon that reads no more. The stop
+// gives up the lines left at its deadline, and does not close the output under the
+// Write that holds it, syslog.Writer.Close waiting for that Write without end; a daemon
+// that reads gets its output closed.
+func TestCloseAuditOfABlockedSyslog(t *testing.T) {
+	for _, reads := range []bool{false, true} {
+		t.Run(fmt.Sprintf("daemon reads %v", reads), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "log")
+			daemon, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = daemon.Close() }()
+			if reads {
+				go func() {
+					buf := make([]byte, 64<<10)
+					for {
+						if _, err := daemon.Read(buf); err != nil {
+							return
+						}
+					}
+				}()
+			}
+			s, err := syslog.Dial("unixgram", path, syslog.LOG_AUTHPRIV|syslog.LOG_INFO, "hydra-dispatcher")
+			if err != nil {
+				t.Fatal(err)
+			}
+			queue := audit.NewQueue(s, audit.QueueSize, slog.New(slog.DiscardHandler), nil)
+			for range 2000 {
+				_, _ = queue.Write([]byte(`{"log_type":"audit","msg":"security.ip_rejected"}` + "\n"))
+			}
+			var closed atomic.Bool
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				closeAudit(ctx, queue, func() { _ = s.Close(); closed.Store(true) })
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("closeAudit still waiting 5 s on: the stop would never end")
+			}
+			if closed.Load() != reads {
+				t.Errorf("output closed: %v, want %v", closed.Load(), reads)
+			}
+		})
 	}
 }
