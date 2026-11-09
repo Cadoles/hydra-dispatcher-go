@@ -31,6 +31,9 @@ theme directory over the embedded theme and renders each page in each locale,
 as `serve` does at its start with `ui.theme_dir`; it exits 1 on a problem.
 With `ui.reload: true`, for the development of a theme, the pages read it again
 when one of its files changed, and answer 500 with the error while it fails.
+The guide of the themes, in French, is `docs/themes.md`, with a prompt to have
+one generated (`docs/theme-prompt.md`); `examples/theme-demo` is a whole theme
+in Tailwind.
 
 `-config` defaults to `$DISPATCHER_CONFIG`, which `healthcheck` reads too for
 the `server.listen` to probe: in a container, give the file by the variable.
