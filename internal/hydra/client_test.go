@@ -368,8 +368,41 @@ func TestTransportSettings(t *testing.T) {
 	if transport.Proxy != nil {
 		t.Error("the transport takes a proxy")
 	}
-	if d := transport.IdleConnTimeout; d <= 0 || d >= 120*time.Second {
-		t.Errorf("IdleConnTimeout = %v, want below Hydra's 120 s", d)
+	// Under Hydra's 120 s, and under the idle timeout of common balancers (Q84).
+	if d := transport.IdleConnTimeout; d != httpx.IdleConnTimeout || httpx.IdleConnTimeout != 30*time.Second {
+		t.Errorf("IdleConnTimeout = %v, want 30 s", d)
+	}
+}
+
+// Hydra, or a balancer in front of it, closes its idle connections before the client
+// does: the next accept, a PUT Go does not replay, opens a connection and passes (Q84).
+func TestIdleConnectionsClosedFirst(t *testing.T) {
+	var opened atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"redirect_to":"http://hydra/verifier"}`)
+	}))
+	srv.Config.IdleTimeout = 50 * time.Millisecond
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	c := newTestClient(t, srv.URL, 4, 5*time.Second)
+	for i := range 3 {
+		if _, err := c.AcceptLogin(context.Background(), "challenge", ory.AcceptOAuth2LoginRequest{Subject: "alice"}); err != nil {
+			t.Fatalf("accept %d: %v", i, err)
+		}
+		time.Sleep(150 * time.Millisecond) // the server closes the connection
+	}
+	if n := opened.Load(); n != 3 {
+		t.Errorf("%d connections for 3 accepts, each after the server closed the last one", n)
 	}
 }
 

@@ -162,7 +162,8 @@ keeps, which already went through them: a webhook that adds a group or a prefix
 would add it at each skip. A reload after a failure calls them again too.
 
 Over HTTP, a `POST` of JSON, in 5 s at most, with no proxy from the environment
-and no redirect followed; `webhooks.ca_file` replaces the system's authorities.
+and no redirect followed; an idle connection closed after 30 s, as towards Hydra,
+under the idle timeout of common balancers, and over HTTP/2 a silent one pinged; `webhooks.ca_file` replaces the system's authorities.
 `secrets.webhook_signing_key` is required with a URL, and `tls.allow_http` with
 an `http://` one. Each call is signed, and a receiver must refuse a signature
 that does not verify, or a timestamp over 5 minutes old:

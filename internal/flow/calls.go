@@ -105,7 +105,9 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 		Remember:    ory.PtrBool(settings.Remember),
 		RememberFor: ory.PtrInt64(int64(settings.LoginRememberFor / time.Second)),
 	}
-	ctx, stop := r.loginHook(f, &body, f.ContextOf())
+	// Without the x_dispatcher_* members an app wrote, as at a skip: the webhook
+	// receives what Hydra will (R28).
+	ctx, stop := r.loginHook(f, &body, withoutDispatcher(f.ContextOf()))
 	if stop != nil {
 		return *stop // FIN-4: flow unchanged, a reload replays the webhook
 	}

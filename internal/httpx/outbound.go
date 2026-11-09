@@ -7,10 +7,23 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // MaxCause bounds the cause of a failed outgoing call in the logs.
 const MaxCause = 200
+
+// IdleConnTimeout closes an idle connection to Hydra or a webhook (Q84): under
+// the idle timeouts of common balancers (60 s for an AWS ALB, 75 s for nginx,
+// 5 s for Apache's keep-alive), a connection they would close first could
+// fail a PUT Go does not replay, the final accept of an authentication.
+const IdleConnTimeout = 30 * time.Second
+
+// PingTimeout is how long an HTTP/2 connection waits for the answer to a ping,
+// sent once it has been silent for the timeout of a call: a peer gone without
+// a reset would otherwise hold every call multiplexed on the connection until
+// TCP gives up.
+const PingTimeout = 2 * time.Second
 
 // tls12Suites are the TLS 1.2 suites the ANSSI TLS guide recommends: ECDHE
 // with an AEAD. Go still enables ECDHE with AES-CBC-SHA by default. TLS 1.3

@@ -954,6 +954,18 @@ func TestFinalAccept(t *testing.T) {
 					t.Errorf("x_dispatcher_ref sent to the webhook: %s", rawJSON(c.AcceptLogin.Context))
 				}
 			}},
+		{name: "FIN-1 R28, the webhook gets no x_dispatcher_* of an app, as at a skip", ev: loop, env: hook, says: hydraSays{LoginHook: {}, AcceptLogin: {redirectTo: hydraDone}},
+			stored: func() *Flow {
+				f := lastDone(t)
+				f.Steps[1].ConsentContext["x_dispatcher_ref"] = json.RawMessage(`"forged"`)
+				f.Steps[1].ConsentContext["x_dispatcher_other"] = json.RawMessage(`1`)
+				return f
+			}(),
+			kind: Redirect, url: hydraDone, calls: []Op{LoginHook, AcceptLogin}, write: accepted, check: func(t *testing.T, p played) {
+				if ctx := rawJSON(p.calls[0].AcceptLogin.Context); ctx != `{"from":"2fa"}` {
+					t.Errorf("context sent to the webhook: %s", ctx)
+				}
+			}},
 		{name: "FIN-1, a null from the webhook drops the member, as Symfony", ev: loop, stored: lastDone(t), env: hook,
 			says: hydraSays{LoginHook: {loginHook: &LoginHookAnswer{NullACR: true, NullRemember: true, NullRememberFor: true}}, AcceptLogin: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{LoginHook, AcceptLogin}, write: accepted,

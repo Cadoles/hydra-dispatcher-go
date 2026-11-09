@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -75,26 +76,38 @@ func New(w config.Webhooks, minVersion string, key []byte) (*Client, error) {
 		return nil, fmt.Errorf("webhooks.ca_file: %w", err)
 	}
 	return &Client{
-		http: &http.Client{
-			Transport: &http.Transport{
-				DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-				TLSHandshakeTimeout: 2 * time.Second,
-				TLSClientConfig:     tlsConfig,
-				ForceAttemptHTTP2:   true,
-				MaxIdleConns:        idleConns,
-				MaxIdleConnsPerHost: idleConns,
-				IdleConnTimeout:     90 * time.Second,
-			},
-			Timeout: httpTimeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
+		http:    newHTTPClient(tlsConfig, httpTimeout, httpx.PingTimeout),
 		key:     key,
 		timeout: w.ProcessTimeout.Std(),
 		slots:   make(chan struct{}, w.MaxProcesses),
 		now:     time.Now,
 	}, nil
+}
+
+// newHTTPClient is the client of the calls over HTTP, bounded by timeout. An idle
+// connection is closed after 30 s (httpx.IdleConnTimeout, Q84). Over HTTP/2, a
+// connection silent for timeout gets a ping, and is closed if it stays
+// unanswered for ping, 2 s, as Hydra's (R28): a receiver gone without a reset
+// would otherwise keep its connection in the pool, and every call on it would
+// fail in E1006 after timeout. The call that waits on it when it closes goes
+// again on a new one, its Idempotency-Key letting Go replay it.
+func newHTTPClient(tlsConfig *tls.Config, timeout, ping time.Duration) *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout: 2 * time.Second,
+			TLSClientConfig:     tlsConfig,
+			ForceAttemptHTTP2:   true,
+			HTTP2:               &http.HTTP2Config{SendPingTimeout: timeout, PingTimeout: ping},
+			MaxIdleConns:        idleConns,
+			MaxIdleConnsPerHost: idleConns,
+			IdleConnTimeout:     httpx.IdleConnTimeout,
+		},
+		Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 }
 
 // Check refuses what a webhook of the settings cannot be called with: a URL in

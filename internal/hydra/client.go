@@ -225,12 +225,13 @@ type Client struct {
 // connections per host would open a connection per call under load); their
 // number is bounded by hydra.max_in_flight alone, as a lower limit in the
 // transport would queue the calls the cap let through. An idle connection is
-// closed after 90 s, before Hydra closes it after 120 s (ory/graceful's
-// default): Go never replays a PUT sent on a connection the server is
-// closing, and the final accept would be lost. Over HTTP/2, a connection
-// silent for hydra.timeout gets a ping, and is closed if it stays unanswered
-// for 2 s: a Hydra node gone without a reset would otherwise take every call
-// multiplexed on it until TCP gives up.
+// closed after 30 s (httpx.IdleConnTimeout, Q84), before Hydra closes it after
+// 120 s (ory/graceful's default) and before a balancer in front of it does:
+// Go never replays a PUT sent on a connection the server is closing, and the
+// final accept would be lost. Over HTTP/2, a connection silent for
+// hydra.timeout gets a ping, and is closed if it stays unanswered for 2 s: a
+// Hydra node gone without a reset would otherwise take every call multiplexed
+// on it until TCP gives up.
 func New(h config.Hydra, t config.TLS) (*Client, error) {
 	transport, err := newTransport(h, t)
 	if err != nil {
@@ -272,10 +273,10 @@ func newTransport(h config.Hydra, t config.TLS) (*http.Transport, error) {
 		TLSHandshakeTimeout: 2 * time.Second,
 		TLSClientConfig:     tlsConfig,
 		ForceAttemptHTTP2:   true,
-		HTTP2:               &http.HTTP2Config{SendPingTimeout: h.Timeout.Std(), PingTimeout: 2 * time.Second},
+		HTTP2:               &http.HTTP2Config{SendPingTimeout: h.Timeout.Std(), PingTimeout: httpx.PingTimeout},
 		MaxIdleConns:        h.MaxInFlight,
 		MaxIdleConnsPerHost: h.MaxInFlight,
-		IdleConnTimeout:     90 * time.Second,
+		IdleConnTimeout:     httpx.IdleConnTimeout,
 	}, nil
 }
 
