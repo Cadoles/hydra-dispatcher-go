@@ -231,6 +231,52 @@ func TestMainProcess(t *testing.T) {
 		}
 	})
 
+	// serve starts on the variables of hydra-dev's Symfony dispatcher, given the
+	// keys they have no equivalent of (P12a), each variable warned of.
+	t.Run("Symfony variables", func(t *testing.T) {
+		data, err := os.ReadFile("../../internal/config/testdata/symfony-dispatcher.env")
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := []string{
+			"DISPATCHER_SERVER_LISTEN=127.0.0.1:0",
+			"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS=10.0.6.0/24",
+			"DISPATCHER_SECRETS_CHALLENGE_KEY=" + strings.Repeat("cd", 32),
+			"DISPATCHER_SECRETS_COOKIE_KEY=" + strings.Repeat("ab", 32),
+		}
+		for line := range strings.Lines(string(data)) {
+			if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+				env = append(env, line)
+			}
+		}
+		cmd := child("serve", env...)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer time.AfterFunc(10*time.Second, func() { _ = cmd.Process.Kill() }).Stop()
+		var out strings.Builder
+		lines := bufio.NewScanner(stdout)
+		for lines.Scan() {
+			out.WriteString(lines.Text() + "\n")
+			if strings.Contains(lines.Text(), `"msg":"server.started"`) {
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+			}
+		}
+		if code := exitCode(cmd.Wait()); code != 0 || !strings.Contains(out.String(), `"msg":"server.stopped"`) {
+			t.Fatalf("exit code %d, output:\n%s", code, out.String())
+		}
+		for _, want := range []string{"BASE_PATH and SERVER_NAME (Symfony) are read as server.base_url", "DATABASE_URL (Symfony) is read as store.dsn",
+			"without use here, ignored: APP_DEBUG"} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("no warning %q in:\n%s", want, out.String())
+			}
+		}
+	})
+
 	// After the first signal, a second one stops at once, without waiting
 	// for the request in flight: /ready, held by a Hydra that does not answer.
 	t.Run("second signal", func(t *testing.T) {

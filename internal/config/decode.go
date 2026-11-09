@@ -32,15 +32,17 @@ var (
 // decodeFile expands ${VAR} in every value, checks every key against the
 // schema (an unknown key is an error, so typos do not pass silently) and
 // refuses null outside the seed, then decodes. It works on the parsed tree,
-// so errors give the lines of the file.
-func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) error {
+// so errors give the lines of the file. set holds the infrastructure keys the
+// file sets, for the variables of the Symfony dispatcher (applyLegacy).
+func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) (set map[string]bool, err error) {
+	set = map[string]bool{}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var doc yaml.Node
 	if err := dec.Decode(&doc); err != nil {
 		if errors.Is(err, io.EOF) { // empty file
-			return nil
+			return set, nil
 		}
-		return err
+		return nil, err
 	}
 	for {
 		// An empty document, such as a trailing ---, holds nothing to lose.
@@ -50,10 +52,10 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 			break
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(next.Content) > 0 && next.Content[0].ShortTag() != nullTag {
-			return fmt.Errorf("line %d: a second YAML document would be ignored, remove it", next.Content[0].Line)
+			return nil, fmt.Errorf("line %d: a second YAML document would be ignored, remove it", next.Content[0].Line)
 		}
 	}
 
@@ -65,10 +67,10 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 	}
 	p.walk(&doc, reflect.TypeFor[Config](), "")
 	if err := errors.Join(p.errs...); err != nil {
-		return err
+		return nil, err
 	}
 	if err := doc.Decode(c); err != nil {
-		return err
+		return nil, err
 	}
 	c.Seed.NullSettings = nullSettings(&doc)
 	seed := mappingValue(&doc, "dispatcher")
@@ -77,7 +79,16 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) e
 	// as in Symfony.
 	nullEntries(&doc, "oauth2_clients", "scopes", len(c.Seed.OAuth2Clients), func(i int) { c.Seed.OAuth2Clients[i].Scopes = &List{} })
 	nullEntries(&doc, "apps", "receive_claims", len(c.Seed.Apps), func(i int) { c.Seed.Apps[i].NullReceiveClaims = true })
-	return nil
+	for _, k := range envKeys(c) {
+		n := &doc
+		for part := range strings.SplitSeq(k.path, ".") {
+			if n = mappingValue(n, part); n == nil {
+				break
+			}
+		}
+		set[k.path] = n != nil
+	}
+	return set, nil
 }
 
 // prepare expands and checks a parsed file, collecting every error.

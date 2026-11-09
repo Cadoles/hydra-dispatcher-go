@@ -110,6 +110,33 @@ environment are used.
   host in lowercase, no default port, no user. A path in it is a prefix the
   reverse proxy removes before the dispatcher; the pages put it back before
   their URLs, and `server.cookie_path` must cover it.
+- `store.dsn` loses the parameters of a Doctrine `DATABASE_URL`
+  (`serverVersion`, `charset`…), which Postgres refuses, with a warning.
+
+Until 1.0, the variables of the Symfony dispatcher are read in fallback, each
+with a `config.warning` naming the key to set instead: a key takes one only
+when neither the file nor a `DISPATCHER_*` variable sets it (defaults < Symfony
+variables < file < `DISPATCHER_*`), and one a set key leaves aside is warned of
+too. A variable the file references by `${VAR}` is the file's.
+
+| Symfony | Key | |
+| --- | --- | --- |
+| `HYDRA_ADMIN_BASE_URL` | `hydra.admin_url` | |
+| `HYDRA_HTTP_MAX_DURATION` | `hydra.timeout` | seconds |
+| `BASE_URL`, `BASE_PATH`, `SERVER_NAME` | `server.base_url` | an absolute `BASE_URL`; else an absolute `BASE_PATH`; else `SERVER_NAME`, one `http(s)://` address, then the path `BASE_PATH` |
+| `COOKIE_PATH` | `server.cookie_path` | |
+| `TRUSTED_PROXIES` | `server.trusted_proxies` | `REMOTE_ADDR` dropped, refused alone; `PRIVATE_SUBNETS` the private networks |
+| `HYDRA_ADMIN_AUTHORIZED_HOSTS` | `security.admin_authorized_hosts` | not `security.emulated_api_authorized_hosts`, required |
+| `REDIS_DSN` | `state.redis_dsn` | one server, no option in the query |
+| `DATABASE_URL` | `store.dsn` | |
+| `OAUTH2_PRIVATE_KEY`, `OAUTH2_PUBLIC_KEY`, `OAUTH2_TOKEN_TTL` | `admin.api.*` | |
+| `ADMIN_UI_ENABLED` | `admin.ui.enabled` | |
+| `WEBHOOK_PROCESS_TIMEOUT` | `webhooks.process_timeout` | seconds |
+| `SENTRY_DSN`, `SENTRY_ENVIRONMENT`, `SENTRY_RELEASE` | `observability.sentry.*` | `sample_rate` 1 by default, not 0.25 |
+
+`OAUTH2_ADMIN_CLIENT_*` (no implicit client: `dispatcher.oauth2_clients`),
+`DEFAULT_LOCALE` and `APP_LOCALES` (settings of the seed) are not read; one
+warning lists those without use here, FrankenPHP's among them.
 
 ## Webhooks
 

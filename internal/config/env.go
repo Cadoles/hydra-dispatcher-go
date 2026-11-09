@@ -106,40 +106,51 @@ func envKeys(c *Config) []envKey {
 	return keys
 }
 
-// applyEnv overrides keys from DISPATCHER_<SECTION>_<KEY> variables. A value
-// is decoded like a YAML scalar, so it takes the same forms as in the file:
-// "30m", "365d", "a,b,c", "true". It is never null: "" empties a string, a
-// list or a key, and is an error for a boolean, a number or a duration.
-func applyEnv(c *Config, lookupEnv func(string) (string, bool)) error {
+// applyEnv overrides keys from DISPATCHER_<SECTION>_<KEY> variables, and
+// notes each one in set, even to "". A value is decoded like a YAML scalar, so
+// it takes the same forms as in the file: "30m", "365d", "a,b,c", "true".
+func applyEnv(c *Config, lookupEnv func(string) (string, bool), set map[string]bool) error {
 	for _, k := range envKeys(c) {
 		v, ok := lookupEnv(k.name)
 		if !ok {
 			continue
 		}
-		target := k.field
-		if target.Kind() == reflect.Pointer {
-			// Set, even to "": an empty allowlist means no address, it must
-			// not fall back to the admin list.
-			target.Set(reflect.New(target.Type().Elem()))
-			target = target.Elem()
-		}
-		if v == "" && target.Kind() != reflect.String && target.Kind() != reflect.Slice {
-			return fmt.Errorf("%s (%s): is empty", k.name, k.path)
-		}
-		node := &yaml.Node{Kind: yaml.ScalarNode, Value: v}
-		if target.Kind() == reflect.String || node.ShortTag() == nullTag {
-			node.Tag = strTag
-		}
-		if isInteger(target.Type()) && node.ShortTag() == floatTag { // yaml.v3 would truncate it
-			return fmt.Errorf("%s (%s): %q is not a valid %s", k.name, k.path, v, target.Kind())
-		}
-		if err := node.Decode(target.Addr().Interface()); err != nil {
-			var typeErr *yaml.TypeError
-			if errors.As(err, &typeErr) { // its message gives a line 0
-				return fmt.Errorf("%s (%s): %q is not a valid %s", k.name, k.path, v, target.Kind())
-			}
+		set[k.path] = true
+		if err := k.set(v); err != nil {
 			return fmt.Errorf("%s (%s): %w", k.name, k.path, err)
 		}
+	}
+	return nil
+}
+
+// set gives the key the value v of a variable. It is never null: "" empties a
+// string, a list or a key, and is an error for a boolean, a number or a
+// duration. Only the errors of a boolean, a number or a duration quote v: a
+// string may hold a DSN, and a key's own error does not quote it.
+func (k envKey) set(v string) error {
+	target := k.field
+	if target.Kind() == reflect.Pointer {
+		// Set, even to "": an empty allowlist means no address, it must
+		// not fall back to the admin list.
+		target.Set(reflect.New(target.Type().Elem()))
+		target = target.Elem()
+	}
+	if v == "" && target.Kind() != reflect.String && target.Kind() != reflect.Slice {
+		return errors.New("is empty")
+	}
+	node := &yaml.Node{Kind: yaml.ScalarNode, Value: v}
+	if target.Kind() == reflect.String || node.ShortTag() == nullTag {
+		node.Tag = strTag
+	}
+	if isInteger(target.Type()) && node.ShortTag() == floatTag { // yaml.v3 would truncate it
+		return fmt.Errorf("%q is not a valid %s", v, target.Kind())
+	}
+	if err := node.Decode(target.Addr().Interface()); err != nil {
+		var typeErr *yaml.TypeError
+		if errors.As(err, &typeErr) { // its message gives a line 0
+			return fmt.Errorf("%q is not a valid %s", v, target.Kind())
+		}
+		return err
 	}
 	return nil
 }

@@ -291,13 +291,15 @@ func defaults() *Config {
 }
 
 // Load reads the configuration file at path (none when path is empty),
-// applies the environment (os.Environ() outside tests) and validates the
-// result. Warnings report accepted but dubious settings; they come with an
-// error too, which a mistyped variable may explain.
+// applies the environment (os.Environ() outside tests), the variables of the
+// Symfony dispatcher in fallback, and validates the result. Warnings report
+// accepted but dubious settings; they come with an error too, which a
+// mistyped variable may explain.
 func Load(path string, environ []string) (*Config, []string, error) {
 	lookupEnv := lookupIn(environ)
 	c := defaults()
 	referenced := map[string]bool{}
+	set := map[string]bool{}
 	if path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -307,15 +309,22 @@ func Load(path string, environ []string) (*Config, []string, error) {
 			referenced[name] = true
 			return lookupEnv(name)
 		}
-		if err := decodeFile(data, c, lookupRef); err != nil {
+		if set, err = decodeFile(data, c, lookupRef); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
 	warnings := unknownOverrides(environ, referenced)
-	if err := applyEnv(c, lookupEnv); err != nil {
+	if err := applyEnv(c, lookupEnv, set); err != nil {
 		return nil, warnings, err
 	}
-	if err := c.resolve(); err != nil {
+	legacyWarnings, err := applyLegacy(c, environ, lookupEnv, set, referenced)
+	warnings = append(warnings, legacyWarnings...)
+	if err != nil {
+		return nil, warnings, err
+	}
+	resolveWarnings, err := c.resolve()
+	warnings = append(warnings, resolveWarnings...)
+	if err != nil {
 		return nil, warnings, err
 	}
 	warnings = append(warnings, c.Seed.warnings()...)
@@ -323,21 +332,26 @@ func Load(path string, environ []string) (*Config, []string, error) {
 	return c, append(warnings, validationWarnings...), err
 }
 
-// resolve fills the values that default to other values, and reads the
-// secrets given as files.
-func (c *Config) resolve() error {
+// resolve fills the values that default to other values, reads the
+// secrets given as files, and drops from store.dsn what Doctrine's
+// DATABASE_URL holds and Postgres refuses.
+func (c *Config) resolve() (warnings []string, err error) {
 	c.Seed.resolve()
+	var dropped []string
+	if c.Store.DSN, dropped = withoutDoctrine(c.Store.DSN); len(dropped) > 0 {
+		warnings = append(warnings, fmt.Sprintf("store.dsn: %s dropped, parameters of Doctrine that Postgres refuses", strings.Join(dropped, ", ")))
+	}
 	if c.Security.MetricsAuthorizedHosts == nil {
 		l := append(List{}, c.Security.AdminAuthorizedHosts...)
 		c.Security.MetricsAuthorizedHosts = &l
 	}
 	if c.Hydra.SystemSecretsFile != "" {
 		if len(c.Hydra.SystemSecrets) > 0 {
-			return errors.New("hydra.system_secrets and hydra.system_secrets_file are exclusive")
+			return warnings, errors.New("hydra.system_secrets and hydra.system_secrets_file are exclusive")
 		}
 		data, err := os.ReadFile(c.Hydra.SystemSecretsFile)
 		if err != nil {
-			return fmt.Errorf("hydra.system_secrets_file: %w", err)
+			return warnings, fmt.Errorf("hydra.system_secrets_file: %w", err)
 		}
 		c.Hydra.SystemSecrets = List{}
 		for line := range strings.Lines(string(data)) {
@@ -347,8 +361,8 @@ func (c *Config) resolve() error {
 		}
 		if len(c.Hydra.SystemSecrets) == 0 {
 			// A secret not provisioned yet, rather than the fallback mode.
-			return errors.New("hydra.system_secrets_file: holds no secret; for the fallback mode, leave the key empty")
+			return warnings, errors.New("hydra.system_secrets_file: holds no secret; for the fallback mode, leave the key empty")
 		}
 	}
-	return nil
+	return warnings, nil
 }
