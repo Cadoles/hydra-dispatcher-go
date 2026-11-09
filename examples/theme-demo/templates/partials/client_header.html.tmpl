@@ -1,0 +1,4 @@
+{{define "client_header"}}<div class="flex flex-wrap items-center justify-between gap-4">
+<span class="inline-flex items-center gap-2 text-lg font-semibold tracking-tight"><img src="{{.Asset "images/logo.svg"}}" alt="" class="size-9">{{.T "demo.name"}}</span>
+{{if .Client.Name}}<span class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">{{if .Client.LogoURI}}<img src="{{.Client.LogoURI}}" alt="" class="size-6 rounded object-contain">{{end}}<span class="font-medium">{{.Client.Name}}</span></span>{{end}}
+</div>{{end}}

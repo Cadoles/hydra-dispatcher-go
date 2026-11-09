@@ -1,0 +1,21 @@
+{{define "title"}}{{.T "logout.title"}}{{end}}
+{{define "content"}}
+<h1 class="text-xl font-semibold tracking-tight">{{.T "logout.title"}}</h1>
+{{if eq .Logout.State "confirm"}}
+<p class="mt-1 text-slate-600 dark:text-slate-400">{{.T "logout.intro"}}</p>
+{{if .Logout.OtherSession}}<p role="alert" class="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">{{.T "logout.other_session"}}</p>{{end}}
+<form method="post" action="{{.Form.Action}}" class="mt-6 grid gap-3 sm:grid-cols-2">
+{{template "csrf" .}}
+<input type="hidden" name="logout_challenge" value="{{.Form.LogoutChallenge}}">
+<button type="submit" name="action" value="reject" class="btn btn-secondary">{{.T "logout.reject"}}</button>
+<button type="submit" name="action" value="accept" class="btn btn-primary">{{.T "logout.accept"}}</button>
+</form>
+{{else if eq .Logout.State "in_progress"}}
+<p class="mt-4">{{.T "logout.in_progress"}}</p>
+<p class="mt-4"><a href="{{.Logout.Next}}" class="link">{{.T "logout.continue"}}</a></p>
+{{else if eq .Logout.State "already_out"}}
+<p class="mt-4">{{.T "logout.already_out"}}</p>
+{{else}}
+<p class="mt-4">{{.T "logout.declined"}}</p>
+{{end}}
+{{end}}

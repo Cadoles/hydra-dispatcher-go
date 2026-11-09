@@ -1,0 +1,33 @@
+/* The source of static/theme.css, built by build.sh with the standalone
+   Tailwind CLI: only the classes of templates/ are kept. The layout of this
+   theme does not load the base CSS of the dispatcher: Tailwind's preflight
+   takes its place. */
+@import "tailwindcss" source(none);
+@source "./templates";
+
+/* The colours of the charter, in place of variables of the base CSS. */
+@theme {
+  --color-brand-50: #f0fdfa;
+  --color-brand-100: #ccfbf1;
+  --color-brand-300: #5eead4;
+  --color-brand-400: #2dd4bf;
+  --color-brand-700: #0f766e;
+  --color-brand-800: #115e59;
+  --color-brand-900: #134e4a;
+  --color-brand-950: #042f2e;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex w-full items-center justify-center rounded-xl px-4 py-2.5 font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-700 dark:focus-visible:outline-brand-300;
+  }
+  .btn-primary {
+    @apply bg-brand-700 text-white hover:bg-brand-800;
+  }
+  .btn-secondary {
+    @apply bg-white text-slate-800 ring-1 ring-slate-300 ring-inset hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600 dark:hover:bg-slate-700;
+  }
+  .link {
+    @apply font-medium text-brand-700 underline underline-offset-2 hover:text-brand-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-700 dark:text-brand-300 dark:hover:text-brand-100;
+  }
+}

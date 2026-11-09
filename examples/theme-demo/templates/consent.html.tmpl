@@ -1,0 +1,23 @@
+{{define "title"}}{{.T "consent.title"}}{{end}}
+{{define "content"}}
+<h1 class="text-xl font-semibold tracking-tight">{{.T "consent.title"}}</h1>
+<p class="mt-1 text-slate-600 dark:text-slate-400">{{.T "consent.intro" .Client.Name}}</p>
+{{if .Scopes}}
+<ul class="mt-6 divide-y divide-slate-200 rounded-xl border border-slate-200 dark:divide-slate-700 dark:border-slate-700">
+{{range .Scopes}}<li class="p-4"><span class="font-medium">{{.Label}}</span>{{if .Claims}}
+<ul class="mt-2 grid gap-1 text-sm text-slate-600 dark:text-slate-400">{{range .Claims}}<li>{{.Label}}{{if .Value}} : <span class="font-medium text-slate-900 break-all dark:text-slate-100">{{.Value}}</span>{{end}}</li>{{end}}</ul>{{end}}</li>
+{{end}}</ul>
+{{else}}
+<p class="mt-6">{{.T "consent.nothing"}}</p>
+{{end}}
+{{if .Audience}}<p class="mt-4 text-sm text-slate-600 dark:text-slate-400">{{.T "consent.audience"}} : <span class="break-all">{{range $i, $a := .Audience}}{{if $i}}, {{end}}{{$a}}{{end}}</span></p>{{end}}
+<form method="post" action="{{.Form.Action}}" class="mt-6 grid gap-3 sm:grid-cols-2">
+{{template "csrf" .}}
+<input type="hidden" name="consent_challenge" value="{{.Form.ConsentChallenge}}">
+{{- if .Form.Print}}
+<input type="hidden" name="claims_print" value="{{.Form.Print}}">
+{{- end}}
+<button type="submit" name="action" value="reject" class="btn btn-secondary">{{.T "consent.reject"}}</button>
+<button type="submit" name="action" value="accept" class="btn btn-primary">{{.T "consent.accept"}}</button>
+</form>
+{{end}}

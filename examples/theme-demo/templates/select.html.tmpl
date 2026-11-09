@@ -1,0 +1,19 @@
+{{define "title"}}{{.T "choice.title"}}{{end}}
+{{define "content"}}
+<h1 class="text-xl font-semibold tracking-tight">{{.T "choice.title"}}</h1>
+{{if .Client.Name}}<p class="mt-1 text-slate-600 dark:text-slate-400">{{.T "choice.client" .Client.Name}}</p>{{end}}
+{{if .Error}}<p role="alert" class="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">{{.T .Error.MessageKey}}</p>{{end}}
+{{if .Flows}}
+<form method="post" action="{{.Form.Action}}" class="mt-6">
+{{template "csrf" .}}
+<input type="hidden" name="login_challenge" value="{{.Form.LoginChallenge}}">
+<fieldset class="grid gap-3">
+<legend class="sr-only">{{.T "choice.title"}}</legend>
+{{range .Flows}}{{template "flow_card" .}}{{end}}
+</fieldset>
+<button type="submit" autofocus class="btn btn-primary mt-6">{{.T "choice.submit"}}</button>
+</form>
+{{else}}
+<p class="mt-6 text-slate-600 dark:text-slate-400">{{.T "choice.none"}}</p>
+{{end}}
+{{end}}

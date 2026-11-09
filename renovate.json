@@ -39,6 +39,12 @@
       "matchDepNames": ["moby/buildkit"],
       "groupName": null,
       "automerge": false
+    },
+    {
+      "description": "The standalone Tailwind CLI of examples/theme-demo/build.sh: its four checksums come by hand from the release's sha256sums.txt, then theme.css is built again and committed; the CI fails until both are done.",
+      "matchDepNames": ["tailwindlabs/tailwindcss"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "customManagers": [
@@ -48,6 +54,12 @@
       "managerFilePatterns": ["/(^|/)\\.gitea/workflows/[^/]+\\.ya?ml$/"],
       "matchStrings": ["image=(?<depName>moby/buildkit):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})"],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "A version a comment names, in a shell script: the Tailwind CLI of examples/theme-demo/build.sh.",
+      "managerFilePatterns": ["/(^|/)examples/[^/]+/build\\.sh$/"],
+      "matchStrings": ["[A-Z_]+_VERSION=(?<currentValue>v[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
     }
   ]
 }

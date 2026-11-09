@@ -249,3 +249,32 @@ func TestLocaleWarnings(t *testing.T) {
 		t.Errorf("with de: %q", got)
 	}
 }
+
+// examples/theme-demo, a whole theme in Tailwind with a locale of its own, passes
+// the check: a change of the contract that breaks it fails here, not only in its
+// job of the CI (Q91).
+func TestThemeDemo(t *testing.T) {
+	th, err := LoadTheme(filepath.Join("..", "..", "examples", "theme-demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Check(th); err != nil {
+		t.Fatal(err)
+	}
+	if th.Manifest.Name != "theme-demo" || !slices.Equal(th.Locales(), []string{"de", "en", "fr"}) {
+		t.Errorf("manifest %+v, locales %v", th.Manifest, th.Locales())
+	}
+	// Its layout loads its theme.css, not the base CSS: Tailwind's preflight takes its place.
+	snap := testSnapshot()
+	snap.Settings.SupportedLocales = []string{"fr", "en", "de"}
+	w := newWorld(t, worldOptions{base: base, snapshot: snap, theme: th})
+	body := text(t, w.do(http.MethodGet, "/?login_challenge="+hydraL+"&_locale=de", nil))
+	for _, want := range []string{"Wie möchten Sie sich anmelden?", `href="/static/theme.css?v=`, `src="/static/flags/de.svg?v=`, `class="btn btn-primary mt-6"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "base.css") {
+		t.Errorf("base.css loaded:\n%s", body)
+	}
+}

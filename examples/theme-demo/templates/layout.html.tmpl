@@ -1,0 +1,21 @@
+{{define "layout"}}<!doctype html>
+<html lang="{{.Locale}}" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{{block "title" .}}{{end}} · {{.T "demo.name"}}</title>
+<link rel="stylesheet" href="{{.Asset "theme.css"}}">
+{{with .Asset "theme.js"}}<script src="{{.}}" defer></script>
+{{end}}{{block "head" .}}{{end}}</head>
+<body class="min-h-full bg-slate-100 font-sans text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+<div class="mx-auto flex min-h-screen w-full max-w-lg flex-col px-4 py-8 sm:py-16">
+<header class="mb-6">{{block "header" .}}{{template "client_header" .}}{{end}}</header>
+<main class="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-slate-200 sm:p-8 dark:bg-slate-900 dark:ring-slate-800">
+{{block "content" .}}{{end}}
+</main>
+<footer class="mt-6">{{block "footer" .}}{{template "locale_switcher" .}}{{end}}</footer>
+</div>
+</body>
+</html>
+{{end}}

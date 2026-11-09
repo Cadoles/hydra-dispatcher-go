@@ -599,7 +599,7 @@ func TestLoadTheme(t *testing.T) {
 	if _, err := loadTheme(dir, logger); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), `"msg":"theme.loaded","dir":"`+dir+`","name":"demo","version":"2.1.0","api":1,"locales":["en","fr"]`) {
+	if !strings.Contains(logs.String(), `"msg":"theme.loaded","dir":"`+dir+`","theme":"demo","theme_version":"2.1.0","api":1,"locales":["en","fr"]`) {
 		t.Errorf("logs: %s", logs.String())
 	}
 	if theme, err := loadTheme("", logger); err != nil || theme.Dir != "" {

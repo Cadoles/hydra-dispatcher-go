@@ -1,0 +1,7 @@
+{{define "title"}}{{.T "error.title"}}{{end}}
+{{define "content"}}
+<h1 class="text-xl font-semibold tracking-tight">{{.T "error.title"}}</h1>
+<p role="alert" class="mt-4 rounded-lg bg-red-50 p-3 text-red-800 dark:bg-red-950 dark:text-red-200">{{.T .Error.MessageKey}}</p>
+{{if or .Error.Link .Error.SignOut}}<ul class="mt-4 grid gap-2">{{if .Error.Link}}<li><a href="{{.Error.Link}}" class="link">{{.T "error.back"}}</a></li>{{end}}{{if .Error.SignOut}}<li><a href="{{.Error.SignOut}}" class="link">{{.T "error.sign_out"}}</a></li>{{end}}</ul>{{end}}
+<p class="mt-6 text-xs text-slate-500 dark:text-slate-400">{{.T "error.trace" .Error.TraceID}} · <span class="font-mono">{{.Error.Code}}</span></p>
+{{end}}

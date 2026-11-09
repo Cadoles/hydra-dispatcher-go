@@ -348,7 +348,8 @@ func loadTheme(dir string, logger *slog.Logger) (*front.Theme, error) {
 		return nil, fmt.Errorf("ui.theme_dir %s: %w", dir, err)
 	}
 	if dir != "" {
-		logger.Info("theme.loaded", "dir", dir, "name", theme.Manifest.Name, "version", theme.Manifest.Version, "api", theme.Manifest.API, "locales", theme.Locales())
+		// version is the binary's, in every line.
+		logger.Info("theme.loaded", "dir", dir, "theme", theme.Manifest.Name, "theme_version", theme.Manifest.Version, "api", theme.Manifest.API, "locales", theme.Locales())
 	}
 	return theme, nil
 }
