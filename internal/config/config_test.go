@@ -151,7 +151,8 @@ func TestEveryKeyIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(warnings) != 0 {
+	// ui.reload, true there, alone is warned of (Q93).
+	if len(warnings) != 1 || !strings.HasPrefix(warnings[0], "ui.reload is for the development of a theme") {
 		t.Errorf("warnings = %q", warnings)
 	}
 	got, defaultKeys := envKeys(c), envKeys(defaults())
@@ -1153,6 +1154,19 @@ func TestWarnings(t *testing.T) {
 		"DISPATCHER_SECURITY_EMULATED_API_AUTHORIZED_HOSTS": ""})))
 	if hasWarning(warnings, "server.trusted_proxies is empty") {
 		t.Errorf("no trusted proxies, no allowlist: warnings = %q", warnings)
+	}
+
+	// ui.reload is for the development of a theme, and needs one (Q93).
+	_, warnings, _ = Load("", envOf(required(map[string]string{"DISPATCHER_UI_RELOAD": "true", "DISPATCHER_UI_THEME_DIR": "/theme"})))
+	if !hasWarning(warnings, "ui.reload is for the development of a theme: the pages read it again when a file changed, and answer 500 with the error of its check while it fails") {
+		t.Errorf("ui.reload: warnings = %q", warnings)
+	}
+	_, warnings, _ = Load("", envOf(required(map[string]string{"DISPATCHER_UI_RELOAD": "true"})))
+	if !hasWarning(warnings, "ui.reload does nothing without ui.theme_dir") || hasWarning(warnings, "ui.reload is for the development") {
+		t.Errorf("ui.reload without a theme: warnings = %q", warnings)
+	}
+	if _, warnings, _ := Load("", envOf(required(nil))); hasWarning(warnings, "ui.reload") {
+		t.Errorf("without ui.reload: warnings = %q", warnings)
 	}
 
 	// The in-memory store is only for a single instance.

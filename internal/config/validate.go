@@ -149,6 +149,13 @@ func (c *Config) validate() (warnings []string, err error) {
 		// in the private networks of the default allowlists.
 		warnings = append(warnings, "server.trusted_proxies is empty: behind a reverse proxy, every client has the proxy's address and passes the allowlists that contain it")
 	}
+	switch {
+	case c.UI.Reload && c.UI.ThemeDir == "":
+		warnings = append(warnings, "ui.reload does nothing without ui.theme_dir: the embedded theme is read once")
+	case c.UI.Reload:
+		// Q93.
+		warnings = append(warnings, "ui.reload is for the development of a theme: the pages read it again when a file changed, and answer 500 with the error of its check while it fails")
+	}
 	positive("security.failure_rate_limit.max", int64(c.Security.FailureRateLimit.Max))
 	positive("security.failure_rate_limit.per", int64(c.Security.FailureRateLimit.Per))
 	positive("security.failure_rate_limit.block", int64(c.Security.FailureRateLimit.Block))

@@ -551,6 +551,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		RememberLastFlow: cfg.UI.RememberLastFlow,
 		Guard:            limit.Guard("front"),
 		Theme:            s.theme,
+		Reload:           cfg.UI.Reload,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)

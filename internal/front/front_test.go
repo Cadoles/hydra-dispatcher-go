@@ -220,8 +220,10 @@ type worldOptions struct {
 	// lastFlow is ui.remember_last_flow, guard the failure limiter.
 	lastFlow bool
 	guard    func(http.Handler) http.Handler
-	// theme is that of ui.theme_dir, nil for the embedded one.
-	theme *Theme
+	// theme is that of ui.theme_dir, nil for the embedded one; reload is
+	// ui.reload.
+	theme  *Theme
+	reload bool
 }
 
 func (o worldOptions) cookiePath() string {
@@ -254,7 +256,7 @@ func newWorld(t *testing.T, opts ...worldOptions) *world {
 		t.Fatal(err)
 	}
 	h, err := New(Options{RememberLastFlow: opt.lastFlow, Guard: opt.guard, Engine: w.o, Config: cfg, Remember: memories, BaseURL: opt.base, CookiePath: opt.cookiePath(), ShowValues: opt.showValues, Logger: logger,
-		Theme: opt.theme})
+		Theme: opt.theme, Reload: opt.reload})
 	if err != nil {
 		t.Fatal(err)
 	}

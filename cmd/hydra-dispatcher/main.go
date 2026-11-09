@@ -28,6 +28,10 @@ var version = "dev"
 // errUsage reports a command line error; usage has already been printed.
 var errUsage = errors.New("usage error")
 
+// errFailed reports a check that failed, its problems already printed: exit 1,
+// without a fatal line.
+var errFailed = errors.New("check failed")
+
 type command struct {
 	name    string
 	summary string
@@ -39,6 +43,7 @@ var commands = []command{
 	{"migrate", "apply the database migrations; migrate down rolls back the last one", migrate},
 	{"bootstrap", "write the seed of the configuration file to the database", bootstrap},
 	{"healthcheck", "probe /health of a local server (container HEALTHCHECK)", healthcheck},
+	{"theme", "theme check <dir>: render the pages of a theme as serve does, one line by problem", theme},
 	{"version", "print the version", printVersion},
 }
 
@@ -52,6 +57,8 @@ func main() {
 	switch {
 	case errors.Is(err, errUsage):
 		os.Exit(2)
+	case errors.Is(err, errFailed):
+		os.Exit(1)
 	case err != nil:
 		slog.Error("fatal", "err", err)
 		os.Exit(1)

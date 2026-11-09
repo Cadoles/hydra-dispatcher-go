@@ -22,8 +22,15 @@ hydra-dispatcher migrate down [-config ...] [-yes]  roll back the last migration
 hydra-dispatcher bootstrap [-config ...] [-force] [-dry-run] [-yes]
                                                     write the seed of the configuration file to the database
 hydra-dispatcher healthcheck [-url ...]             probe /health of a local server (container HEALTHCHECK)
+hydra-dispatcher theme check <dir>                  render the pages of a theme as serve does, one line by problem
 hydra-dispatcher version                            print the version
 ```
+
+`theme check` needs neither a configuration nor a database: it loads the
+theme directory over the embedded theme and renders each page in each locale,
+as `serve` does at its start with `ui.theme_dir`; it exits 1 on a problem.
+With `ui.reload: true`, for the development of a theme, the pages read it again
+when one of its files changed, and answer 500 with the error while it fails.
 
 `-config` defaults to `$DISPATCHER_CONFIG`, which `healthcheck` reads too for
 the `server.listen` to probe: in a container, give the file by the variable.

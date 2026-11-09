@@ -59,12 +59,17 @@ type Options struct {
 	Guard func(http.Handler) http.Handler
 	// Theme is that of ui.theme_dir (LoadTheme); nil for the embedded one.
 	Theme *Theme
+	// Reload is ui.reload: a theme of ui.theme_dir read again when a file
+	// changed (Q93).
+	Reload bool
 }
 
 // Handler serves the pages.
 type Handler struct {
 	o     Options
 	theme *Theme
+	// reload, nil without ui.reload, reads the theme again.
+	reload *reloader
 	// origin is the scheme and host of BaseURL, for the forms' origin check;
 	// internal/config has them written as browsers serialize an Origin.
 	origin string
@@ -112,6 +117,9 @@ func New(o Options) (*Handler, error) {
 	if err := h.check(h.theme); err != nil {
 		return nil, err
 	}
+	if o.Reload && h.theme.Dir != "" {
+		h.reload = newReloader(h.theme, h.check, o.Logger)
+	}
 	return h, nil
 }
 
@@ -121,16 +129,13 @@ func Check(th *Theme) error {
 	return (&Handler{origin: "https://dispatcher.example"}).check(th)
 }
 
-// current is the theme a request renders its page with.
-func (h *Handler) current() *Theme { return h.theme }
-
 // Register adds the routes to mux.
 func (h *Handler) Register(mux *http.ServeMux) {
 	guard := func(page http.HandlerFunc) http.Handler {
 		if h.o.Guard == nil {
-			return page
+			return h.withTheme(page)
 		}
-		return h.o.Guard(page)
+		return h.withTheme(h.o.Guard(page))
 	}
 	mux.Handle("GET /{$}", guard(visit(h.entry)))
 	mux.Handle("POST /{$}", guard(h.choose))
@@ -140,8 +145,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /logout", guard(visit(h.logoutGet)))
 	mux.Handle("POST /logout", guard(h.logoutPost))
 	mux.Handle("GET /logout/next", guard(visit(h.logoutNext)))
-	mux.HandleFunc("POST /locale/{code}", h.locale)
-	mux.HandleFunc("GET /static/{name...}", h.static)
+	mux.Handle("POST /locale/{code}", h.withTheme(http.HandlerFunc(h.locale)))
+	mux.Handle("GET /static/{name...}", h.withTheme(http.HandlerFunc(h.static)))
 }
 
 // entry is GET / (ENT): Hydra's login challenge, or the ref of
@@ -313,11 +318,11 @@ func (h *Handler) respond(w http.ResponseWriter, r *http.Request, res flow.Resul
 	case flow.Redirect:
 		http.Redirect(w, r, resp.URL, http.StatusSeeOther)
 	case flow.ChoicePage:
-		h.render(w, r, http.StatusOK, "select", h.choicePage(r, h.current(), cfg, resp.Choice))
+		h.render(w, r, http.StatusOK, "select", h.choicePage(r, h.themeOf(r), cfg, resp.Choice))
 	case flow.ConsentPage:
-		h.render(w, r, http.StatusOK, "consent", h.consentPage(r, h.current(), cfg, resp.Consent, h.o.ShowValues))
+		h.render(w, r, http.StatusOK, "consent", h.consentPage(r, h.themeOf(r), cfg, resp.Consent, h.o.ShowValues))
 	case flow.LogoutPage:
-		h.render(w, r, http.StatusOK, "logout", h.logoutPage(r, h.current(), cfg, resp.Logout))
+		h.render(w, r, http.StatusOK, "logout", h.logoutPage(r, h.themeOf(r), cfg, resp.Logout))
 	case flow.ErrorPage:
 		h.fail(w, r, resp, cfg)
 	default:
@@ -351,7 +356,7 @@ func (h *Handler) fail(w http.ResponseWriter, r *http.Request, resp flow.Respons
 		status = http.StatusServiceUnavailable
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	p := h.page(r, h.current(), cfg, nil)
+	p := h.page(r, h.themeOf(r), cfg, nil)
 	p.Error = &pageError{Code: string(resp.Code), MessageKey: "error." + string(resp.Code), TraceID: httpx.TraceID(r.Context()), Link: resp.Link, SignOut: resp.SignOut}
 	h.render(w, r, status, "error", p)
 }
@@ -478,7 +483,7 @@ func (h *Handler) locale(w http.ResponseWriter, r *http.Request) {
 	if !h.form(w, r) {
 		return
 	}
-	if code := r.PathValue("code"); slices.Contains(supportedLocales(h.current(), cfg), code) {
+	if code := r.PathValue("code"); slices.Contains(supportedLocales(h.themeOf(r), cfg), code) {
 		h.setCookie(w, localeCookie, code, 365*24*time.Hour, false)
 	}
 	to := h.path + "/"

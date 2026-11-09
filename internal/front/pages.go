@@ -565,7 +565,7 @@ func formFields(page []byte, want map[string]string) error {
 // carries its hash. Only the files of static/ are known: no name leaves it.
 func (h *Handler) static(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	f, ok := h.current().statics[name]
+	f, ok := h.themeOf(r).statics[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
