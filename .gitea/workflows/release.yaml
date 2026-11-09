@@ -120,7 +120,10 @@ jobs:
             --type cyclonedx "$REF" >/dev/null
 
       # The tags of the version, and latest, on the digest signed and verified: from one
-      # source, imagetools makes a carbon copy, the digest kept.
+      # source, imagetools makes a carbon copy, the digest kept. The image is an index
+      # by the default provenance attestation; without it, a lone manifest would be
+      # wrapped in a new index, another digest, unsigned, unless --prefer-index=false
+      # (buildx 0.15; an older one refuses the flag, and nothing is tagged) (revue R31).
       - name: Tag the image
         env:
           TAGS: ${{ steps.meta.outputs.tags }}
@@ -128,7 +131,7 @@ jobs:
         run: |
           set -f --
           for tag in $TAGS; do set -- "$@" -t "$tag"; done
-          docker buildx imagetools create "$@" "$REF"
+          docker buildx imagetools create --prefer-index=false "$@" "$REF"
 
       - name: Build changelog
         id: changelog
