@@ -139,6 +139,9 @@ func TestEnvironmentSecrets(t *testing.T) {
 		{"DISPATCHER_* variables", "", nil, []string{"secrets.cookie_key", "secrets.challenge_key", "store.dsn"}},
 		{"values of the file", "secrets: {cookie_key: \"" + hexKey + "\", challenge_key: \"" + base64Key + "\"}\nstore: {dsn: \"postgres://u:p@db/d\"}\n",
 			map[string]string{"DISPATCHER_SECRETS_COOKIE_KEY": "", "DISPATCHER_SECRETS_CHALLENGE_KEY": "", "DISPATCHER_STORE_DSN": ""}, nil},
+		// R30: the variable, not the file, gives the key.
+		{"values of the file replaced by DISPATCHER_* variables", "secrets: {cookie_key: \"" + hexKey3 + "\", challenge_key: \"" + base64Key + "\"}\nstore: {dsn: \"postgres://u:p@db/d\"}\n",
+			map[string]string{"DISPATCHER_SECRETS_CHALLENGE_KEY": ""}, []string{"secrets.cookie_key", "store.dsn"}},
 		{"${VAR} of the file", "secrets:\n  cookie_key: \"" + hexKey + "\"\n  challenge_keys_previous: [\"${OLD}\"]\nstore: {dsn: \"postgres://u:${PGPASSWORD}@db/d\"}\n",
 			map[string]string{"DISPATCHER_SECRETS_COOKIE_KEY": "", "DISPATCHER_STORE_DSN": "", "OLD": hexKey3, "PGPASSWORD": "p"},
 			[]string{"secrets.challenge_key", "secrets.challenge_keys_previous", "store.dsn"}},

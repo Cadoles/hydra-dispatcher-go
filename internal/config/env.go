@@ -107,15 +107,16 @@ func envKeys(c *Config) []envKey {
 }
 
 // applyEnv overrides keys from DISPATCHER_<SECTION>_<KEY> variables, and
-// notes each one in set, even to "". A value is decoded like a YAML scalar, so
-// it takes the same forms as in the file: "30m", "365d", "a,b,c", "true".
-func applyEnv(c *Config, lookupEnv func(string) (string, bool), set map[string]bool) error {
+// notes each one in set, even to "", and in overridden, a key the file set
+// included. A value is decoded like a YAML scalar, so it takes the same forms
+// as in the file: "30m", "365d", "a,b,c", "true".
+func applyEnv(c *Config, lookupEnv func(string) (string, bool), set, overridden map[string]bool) error {
 	for _, k := range envKeys(c) {
 		v, ok := lookupEnv(k.name)
 		if !ok {
 			continue
 		}
-		set[k.path] = true
+		set[k.path], overridden[k.path] = true, true
 		if err := k.set(v); err != nil {
 			return fmt.Errorf("%s (%s): %w", k.name, k.path, err)
 		}

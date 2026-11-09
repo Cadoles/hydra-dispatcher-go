@@ -348,9 +348,9 @@ func Load(path string, environ []string) (*Config, []string, error) {
 			return nil, nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	fileSet := maps.Clone(set)
+	fileSet, overridden := maps.Clone(set), map[string]bool{}
 	warnings := unknownOverrides(environ, referenced)
-	if err := applyEnv(c, lookupEnv, set); err != nil {
+	if err := applyEnv(c, lookupEnv, set, overridden); err != nil {
 		return nil, warnings, err
 	}
 	legacyWarnings, err := applyLegacy(c, environ, lookupEnv, set, referenced)
@@ -358,11 +358,13 @@ func Load(path string, environ []string) (*Config, []string, error) {
 	if err != nil {
 		return nil, warnings, err
 	}
-	// A key the file did not set took its value from a variable; one it set, from a
-	// ${VAR} it holds, in it or in an item of its list.
+	// A key took its value from the environment when a DISPATCHER_* variable set
+	// it, over the file or not (R30), when a variable of the Symfony dispatcher
+	// set it in the file's place, or when the file set it by a ${VAR}, in it or
+	// in an item of its list.
 	fromEnv := func(path string) bool {
-		if !fileSet[path] {
-			return set[path]
+		if overridden[path] || set[path] && !fileSet[path] {
+			return true
 		}
 		for p := range expanded {
 			if p == path || strings.HasPrefix(p, path+"[") {
