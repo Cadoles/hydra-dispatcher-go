@@ -23,6 +23,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
@@ -661,6 +662,47 @@ func TestMetricsListen(t *testing.T) {
 	}
 	cancel()
 	wait()
+}
+
+// A login app passes on the login_challenge of the URL a browser opened: the challenges a
+// client of the Internet forges, relayed by the app from its address, do not stop it for
+// all its users (Q80, revue R29). Played here on newHandler, where the limiter is wired.
+func TestEmulatedAPINotLimited(t *testing.T) {
+	const challenge = "0c34aaee066148adbc0251024fee9bb4"
+	hydra := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"challenge": r.URL.Query().Get("login_challenge"), "client": map[string]any{"client_id": "c1"},
+			"request_url": "http://public.hydra.test/oauth2/auth?client_id=c1", "requested_scope": []string{"openid"}, "skip": false, "subject": ""})
+	}))
+	defer hydra.Close()
+	services := testServices(t, func(context.Context) error { return nil })
+	app := store.App{ID: "sql", LoginURL: "http://sql/login", ConsentURL: "http://sql/consent", AuthMode: "network",
+		AllowedSources: []netip.Prefix{netip.MustParsePrefix("10.0.1.7/32")}}
+	step := []store.Step{{AppID: "sql", Position: 1, SubjectCheck: "none"}}
+	flows := []store.Flow{{ID: "a", Enabled: true, Title: map[string]string{"en": "A"}, Steps: step}, {ID: "b", Enabled: true, Title: map[string]string{"en": "B"}, Steps: step}}
+	services.config = fixedSnapshot{store.NewSnapshot([]store.App{app}, flows, store.DefaultSettings())}
+	logger := slog.New(slog.DiscardHandler)
+	h, err := newHandler(testConfig(t, hydra.URL), logger, logger, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	do := func(remote, target string) int {
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	// A client starts a flow, then hands the app its step challenge, its signature changed.
+	if code := do("198.51.100.66:1", "/?login_challenge="+challenge); code != http.StatusOK {
+		t.Fatalf("choice page: %d", code)
+	}
+	forged := flow.Ref(challenge) + strings.Repeat("0", 12)
+	for i := range 30 {
+		if code := do("10.0.1.7:1", "/admin/oauth2/auth/requests/login?login_challenge="+forged); code != http.StatusNotFound {
+			t.Fatalf("call %d of the app: %d", i, code)
+		}
+	}
 }
 
 // observability.audit.output: a file it appends to, one that cannot open stops serve;

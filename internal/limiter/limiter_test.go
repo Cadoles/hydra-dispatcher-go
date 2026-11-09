@@ -12,34 +12,43 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 )
 
-// served plays a request from remote through Guard; next, when it runs, observes obs.
-func served(l *Limiter, remote string, obs flow.Observation) *httptest.ResponseRecorder {
+// served plays a request from remote through Guard, with the headers given in name, value
+// pairs; next, when it runs, observes obs.
+func served(l *Limiter, remote string, obs flow.Observation, header ...string) *httptest.ResponseRecorder {
 	h := httpx.Chain(l.Guard("front")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		l.Observe(r.Context(), obs)
 		w.WriteHeader(http.StatusBadRequest)
 	})), httpx.RealIP(nil))
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = remote
+	for i := 0; i+1 < len(header); i += 2 {
+		r.Header.Set(header[i], header[i+1])
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	return rec
 }
 
-var forged = flow.Observation{Reports: []flow.Report{{Event: "challenge.invalid", Detail: "forged"}}}
+var forged = flow.Observation{Surface: "front", Reports: []flow.Report{{Event: "challenge.invalid", Detail: "forged"}}}
 
-// What counts, what does not: the expired are authentic (Q78).
+// What counts, what does not: the expired are authentic (Q78); on the emulated API, the
+// challenge is what a browser gave the app (Q80).
 func TestWhatCounts(t *testing.T) {
+	emulated := func(reports ...flow.Report) flow.Observation {
+		return flow.Observation{Surface: "emulated", Reports: reports}
+	}
 	for name, tc := range map[string]struct {
 		o    flow.Observation
 		want bool
 	}{
 		"forged":             {forged, true},
-		"a CSRF invalid":     {flow.Observation{Response: flow.Response{Code: flow.E1008}}, true},
-		"EMU-4":              {flow.Observation{Reports: []flow.Report{{Event: "security.ip_rejected"}}}, true},
-		"expired":            {flow.Observation{Reports: []flow.Report{{Event: "challenge.invalid", Detail: "expired"}}}, false},
-		"a stale generation": {flow.Observation{Reports: []flow.Report{{Event: "challenge.invalid", Detail: "stale_generation"}}}, false},
-		"a page E1002":       {flow.Observation{Response: flow.Response{Code: flow.E1002}}, false},
-		"a success":          {flow.Observation{Reports: []flow.Report{{Event: "hydra.login_accepted"}}}, false},
+		"a CSRF invalid":     {flow.Observation{Surface: "front", Response: flow.Response{Code: flow.E1008}}, true},
+		"forged, emulated":   {emulated(flow.Report{Event: "challenge.invalid", Detail: "forged"}), false},
+		"EMU-4":              {emulated(flow.Report{Event: "security.ip_rejected"}), false},
+		"expired":            {flow.Observation{Surface: "front", Reports: []flow.Report{{Event: "challenge.invalid", Detail: "expired"}}}, false},
+		"a stale generation": {flow.Observation{Surface: "front", Reports: []flow.Report{{Event: "challenge.invalid", Detail: "stale_generation"}}}, false},
+		"a page E1002":       {flow.Observation{Surface: "front", Response: flow.Response{Code: flow.E1002}}, false},
+		"a success":          {flow.Observation{Surface: "front", Reports: []flow.Report{{Event: "hydra.login_accepted"}}}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := failed(tc.o); got != tc.want {
@@ -89,6 +98,27 @@ func TestBlock(t *testing.T) {
 	}
 	if blocks != 1 {
 		t.Errorf("%d blocks", blocks)
+	}
+}
+
+// What a page loads, an <img>, an iframe, a fetch, does not count: another site's page
+// would block its visitor's address (Q80). It is refused all the same once the address
+// is blocked; a navigation, and a client that sends no fetch metadata, count.
+func TestSubrequests(t *testing.T) {
+	l := New(2, time.Minute, 5*time.Minute)
+	const a = "203.0.113.9:1"
+	for _, dest := range []string{"image", "iframe", "empty", "script", "style"} {
+		for range 5 {
+			if rec := served(l, a, forged, "Sec-Fetch-Site", "cross-site", "Sec-Fetch-Dest", dest, "Sec-Fetch-Mode", "no-cors"); rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: %d", dest, rec.Code)
+			}
+		}
+	}
+	served(l, a, forged, "Sec-Fetch-Site", "cross-site", "Sec-Fetch-Dest", "document", "Sec-Fetch-Mode", "navigate")
+	served(l, a, forged)
+	served(l, a, forged)
+	if rec := served(l, a, forged, "Sec-Fetch-Dest", "image"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("blocked, a subrequest: %d", rec.Code)
 	}
 }
 

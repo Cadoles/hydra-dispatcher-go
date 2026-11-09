@@ -45,10 +45,9 @@ type Options struct {
 	LogIP  string
 	// Refused, nil for none, is told of a caller outside the allowlist.
 	Refused func(context.Context)
-	// LogSample thins the lines of those refusals, nil keeps them all; Guard, nil for
-	// none, runs first on each endpoint: the failure limiter.
+	// LogSample thins the lines of those refusals, nil keeps them all. The failure
+	// limiter has no part here: the challenge an app calls with, a browser gave it (Q80).
 	LogSample *httpx.Sampler
-	Guard     func(http.Handler) http.Handler
 }
 
 // maxBody bounds the body of a call (Sécurité, report R5).
@@ -89,19 +88,15 @@ const prefix = "/oauth2/auth/requests/"
 // the other paths and methods, after the allowlist as well.
 func Register(mux *http.ServeMux, o Options) {
 	h := &handler{Options: o, legacyCallers: map[netip.Addr]bool{}}
-	guard := o.Guard
-	if guard == nil {
-		guard = func(next http.Handler) http.Handler { return next }
-	}
 	for _, e := range endpoints {
-		mux.Handle(e.method+" /admin"+e.path, guard(h.serve(e, false)))
+		mux.Handle(e.method+" /admin"+e.path, h.serve(e, false))
 		if o.LegacyV1Paths {
-			mux.Handle(e.method+" "+e.path, guard(h.serve(e, true)))
+			mux.Handle(e.method+" "+e.path, h.serve(e, true))
 		}
 	}
-	mux.Handle("/admin"+prefix, guard(h.other(false)))
+	mux.Handle("/admin"+prefix, h.other(false))
 	if o.LegacyV1Paths {
-		mux.Handle(prefix, guard(h.other(true)))
+		mux.Handle(prefix, h.other(true))
 	}
 }
 

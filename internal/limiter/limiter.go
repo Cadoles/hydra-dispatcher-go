@@ -1,16 +1,18 @@
-// Package limiter slows what looks like forging, by client address: a challenge no one
-// issued, an invalid CSRF token, an app outside its sources. Past max in a window, the
-// address gets 429 for a while. It lives in the memory of each instance: with N replicas
-// the real threshold rises up to N times, which is accepted, since it brakes and signals
-// and the signature is what protects (doc, Durcissements point 4). A challenge expired is
-// authentic and proves nothing: it does not count, or a login app would stop all its
-// users on a peak of expirations (Q78).
+// Package limiter slows what looks like forging on the pages, by client address: a
+// challenge no one issued, an invalid CSRF token. Past max in a window, the address gets
+// 429 for a while. It lives in the memory of each instance: with N replicas the real
+// threshold rises up to N times, which is accepted, since it brakes and signals and the
+// signature is what protects (doc, Durcissements point 4). A challenge expired is
+// authentic and proves nothing: it does not count (Q78). Neither does what a client does
+// not choose: the calls of the emulated API, whose challenge a login app relays from any
+// browser, and a page another site loads in its visitor's browser (Q80, revue R29).
 package limiter
 
 import (
 	"context"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -73,25 +75,38 @@ func key(ip netip.Addr) (netip.Addr, bool) {
 	return p.Addr(), true
 }
 
-// failed tells what in a request counts: one at most by request.
+// failed tells what in a request counts: one at most by request, on the pages only. On
+// the emulated API, the caller is a login app, which passes on the login_challenge of the
+// URL a browser opened: counted there, a forged challenge or another app's (EMU-3, EMU-4)
+// would let any client of the Internet stop the app for all its users (Q80).
 func failed(o flow.Observation) bool {
+	if o.Surface == "emulated" {
+		return false
+	}
 	if o.Response.Code == flow.E1008 {
 		return true
 	}
-	for _, r := range o.Reports {
-		switch {
-		case r.Event == "challenge.invalid" && r.Detail == "forged":
-			return true
-		case r.Event == "security.ip_rejected": // EMU-4, LEM-3: an app outside its sources
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(o.Reports, func(r flow.Report) bool {
+		return r.Event == "challenge.invalid" && r.Detail == "forged"
+	})
+}
+
+// notCounted marks the context of a request its client did not make: Guard sets it.
+type notCounted struct{}
+
+// subrequest tells what a page loads for itself, an <img>, an iframe, a fetch, from the
+// fetch metadata browsers send over HTTPS: another site's page, in its visitor's browser,
+// would block the visitor's address, and everyone behind it (Q80). The pages of the
+// dispatcher load none of the routes Guard covers; a navigation, a form included, is a
+// document. Without the header, a client that is no browser, the request counts.
+func subrequest(r *http.Request) bool {
+	dest := r.Header.Get("Sec-Fetch-Dest")
+	return dest != "" && dest != "document"
 }
 
 // Observe is flow.Observer.
 func (l *Limiter) Observe(ctx context.Context, o flow.Observation) {
-	if !failed(o) {
+	if ctx.Value(notCounted{}) != nil || !failed(o) {
 		return
 	}
 	k, ok := key(httpx.ClientIP(ctx))
@@ -154,10 +169,14 @@ func (l *Limiter) retryAfter(k netip.Addr) time.Duration {
 }
 
 // Guard refuses a blocked address on surface, with 429 and Retry-After, before anything
-// else of the request: no read of Hydra or of the store. RealIP must run outside it.
+// else of the request: no read of Hydra or of the store. RealIP must run outside it. A
+// subrequest is refused the same, but what it fails does not count.
 func (l *Limiter) Guard(surface string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if subrequest(r) {
+				r = r.WithContext(context.WithValue(r.Context(), notCounted{}, true))
+			}
 			if k, ok := key(httpx.ClientIP(r.Context())); ok {
 				if wait := l.retryAfter(k); wait > 0 {
 					if l.OnRefused != nil {

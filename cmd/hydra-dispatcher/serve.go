@@ -459,7 +459,6 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 			s.audit.Refused(c, "emulated")
 		},
 		LogSample: logSample,
-		Guard:     limit.Guard("emulated"),
 	})
 	pages.Register(mux)
 	if cfg.Observability.Metrics.Listen == "" {

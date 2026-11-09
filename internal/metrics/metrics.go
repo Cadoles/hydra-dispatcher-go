@@ -215,7 +215,8 @@ func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string, refused func(cont
 // Refused counts a refusal of an IP filter on surface: admin, emulated or metrics.
 func (m *Metrics) Refused(surface string) { m.ipRejections.WithLabelValues(surface).Inc() }
 
-// RateLimited counts a request the failure limiter refused on surface, front or emulated.
+// RateLimited counts a request the failure limiter refused on surface: front, the pages
+// (Q80).
 func (m *Metrics) RateLimited(surface string) { m.rateLimited.WithLabelValues(surface).Inc() }
 
 // SkipUnavailable counts a memory of the skip too big to write (WRT-2).

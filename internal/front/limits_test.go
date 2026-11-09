@@ -132,3 +132,27 @@ func TestLimiterThroughThePages(t *testing.T) {
 		t.Errorf("static: %d", resp.StatusCode)
 	}
 }
+
+// Another site's page loads the pages in its visitor's browser: images of forged
+// challenges, forms posted by fetch. Nothing counts, or the visitor's address, and
+// everyone behind it, would be blocked by a page it only visited (Q80, revue R29).
+func TestLimiterIgnoresSubrequests(t *testing.T) {
+	limit := limiter.New(3, time.Minute, 5*time.Minute)
+	w := newWorld(t, worldOptions{base: base, guard: limit.Guard("front")})
+	w.o.Observers = []flow.Observer{limit}
+	w.hydra.errs["get_login"] = &hydra.RequestError{Op: "get_login_request", Status: http.StatusNotFound, Body: []byte(`{"error":"x"}`)}
+	image := []string{"Sec-Fetch-Site", "cross-site", "Sec-Fetch-Mode", "no-cors", "Sec-Fetch-Dest", "image"}
+	fetch := []string{"Sec-Fetch-Site", "cross-site", "Sec-Fetch-Mode", "no-cors", "Sec-Fetch-Dest", "empty"}
+	for range 10 {
+		if resp := w.do(http.MethodGet, "/?login_challenge="+hydraL, nil, image...); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("an image: %d", resp.StatusCode)
+		}
+		if resp := w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}}, fetch...); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("a fetch: %d", resp.StatusCode)
+		}
+	}
+	delete(w.hydra.errs, "get_login")
+	if resp := w.do(http.MethodGet, "/?login_challenge="+hydraL, nil, "Sec-Fetch-Site", "none", "Sec-Fetch-Mode", "navigate", "Sec-Fetch-Dest", "document"); resp.StatusCode != http.StatusOK {
+		t.Errorf("a navigation after another site's page: %d", resp.StatusCode)
+	}
+}
