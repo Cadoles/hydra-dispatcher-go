@@ -484,3 +484,126 @@ func TestAppsPages(t *testing.T) {
 		t.Errorf("no app: %s", w.Body)
 	}
 }
+
+// withApps gives the writer the apps a, b and c.
+func (r *resources) withApps(ids ...string) {
+	for _, id := range ids {
+		r.writer.apps = append(r.writer.apps, store.App{ID: id, LoginURL: "http://" + id + "/l", ConsentURL: "http://" + id + "/c", Method: "m", AuthMode: "network"})
+	}
+	r.writer.publish()
+}
+
+// DispatcherFlowApiCreateTest and DispatcherFlowProcessorTest of Symfony, and
+// the contract of the doc for the flows.
+func TestFlows(t *testing.T) {
+	r := newResources(t)
+	r.withApps("a", "b", "c")
+	const flow = `{"id": "f", "title": {"fr": "F", "en": ""}, "description": {"fr": "D"}, "steps": [{"appId": "a", "stepOrder": 0}]}`
+	w := r.do(r.all, http.MethodPost, "/admin/v1/flows", "", flow)
+	want := `{"id":"f","title":{"fr":"F"},"description":{"fr":"D"},"iconUrl":null,"enabled":true,"acr":null,"steps":[{"appId":"a","stepOrder":0,"subjectCheck":"none"}]}`
+	if got := strings.TrimSpace(w.Body.String()); w.Code != http.StatusCreated || got != want || w.Header().Get("Location") != "/admin/v1/flows/f" {
+		t.Fatalf("POST: %d %s", w.Code, got)
+	}
+	if got := strings.TrimSpace(r.do(r.reader, http.MethodGet, "/admin/v1/flows/f", "", "").Body.String()); got != want {
+		t.Errorf("GET: %s", got)
+	}
+	if got := paths(t, r.do(r.all, http.MethodPost, "/admin/v1/flows", "", strings.Replace(flow, `"id": "f"`, `"id": ""`, 1))); !slices.Contains(got, "id") {
+		t.Errorf("POST without id: %q", got)
+	}
+
+	steps := func(t *testing.T, w *httptest.ResponseRecorder) string {
+		t.Helper()
+		if w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		var parts []string
+		for _, s := range decodeInto[flowJSON](t, w).Steps {
+			parts = append(parts, fmt.Sprintf("%s:%d:%s", s.AppID, s.StepOrder, s.SubjectCheck))
+		}
+		return strings.Join(parts, " ")
+	}
+	patchF := func(body string) *httptest.ResponseRecorder {
+		return r.do(r.all, http.MethodPatch, "/admin/v1/flows/f", "application/merge-patch+json", body)
+	}
+	// In order: each patch starts from the steps the one before left.
+	for _, tt := range []struct{ name, body, want string }{
+		{"replaced, order kept", `{"steps": [{"appId": "b", "stepOrder": 5, "subjectCheck": "equal"}, {"appId": "a", "stepOrder": 2}]}`, "a:2:none b:5:equal"},
+		{"absent: kept", `{"enabled": false}`, "a:2:none b:5:equal"},
+		{"id and order of Symfony", `{"steps": [{"id": "a", "order": 0}, {"id": "b", "order": "1"}]}`, "a:0:none b:1:equal"},
+		{"round trip of Symfony read", `{"steps": [{"id": 3, "appId": "c", "stepOrder": 0}, {"id": 4, "appId": "b", "stepOrder": 1}]}`, "c:0:none b:1:equal"},
+		{"subjectCheck by app (Q107)", `{"steps": [{"appId": "b", "stepOrder": 0}, {"appId": "a", "stepOrder": 1, "subjectCheck": null}]}`, "b:0:equal a:1:none"},
+	} {
+		if got := steps(t, patchF(tt.body)); got != tt.want {
+			t.Errorf("%s: %s, want %s", tt.name, got, tt.want)
+		}
+	}
+	// PUT of a tool written for Symfony: title, description, iconUrl and
+	// enabled replaced; the steps and acr, absent, kept.
+	if w := patchF(`{"acr": "loa2", "iconUrl": {"fr": "http://i/f.svg"}}`); w.Code != http.StatusOK {
+		t.Fatalf("PATCH acr: %d %s", w.Code, w.Body)
+	}
+	w = r.do(r.all, http.MethodPut, "/admin/v1/flows/f", "", `{"id": "f", "title": {"fr": "F2"}, "description": {"fr": "D2"}}`)
+	got := decodeInto[flowJSON](t, w)
+	if w.Code != http.StatusOK || got.Title["fr"] != "F2" || got.IconURL != nil || !got.Enabled || got.ACR == nil || *got.ACR != "loa2" || len(got.Steps) != 2 {
+		t.Errorf("PUT: %d %s", w.Code, w.Body)
+	}
+	// A map replaced whole (Q104).
+	w = patchF(`{"title": {"en": "E"}}`)
+	if got := decodeInto[flowJSON](t, w); len(got.Title) != 1 || got.Title["en"] != "E" {
+		t.Errorf("title: %s", w.Body)
+	}
+
+	for name, tt := range map[string]struct {
+		body   string
+		status int
+		paths  []string
+	}{
+		"no step left":       {`{"steps": []}`, 422, []string{"steps"}},
+		"unknown app":        {`{"steps": [{"appId": "zz", "stepOrder": 0}]}`, 422, []string{"steps[0]"}},
+		"not an object":      {`{"steps": [{"appId": "a", "stepOrder": 0}, "junk", [1]]}`, 422, []string{"steps[1]", "steps[2]"}},
+		"no app":             {`{"steps": [{"stepOrder": 0}]}`, 422, []string{"steps[0].appId"}},
+		"no order":           {`{"steps": [{"appId": "a"}]}`, 422, []string{"steps[0].stepOrder"}},
+		"order not a number": {`{"steps": [{"appId": "a", "order": "first"}]}`, 422, []string{"steps[0].order"}},
+		"order fractional":   {`{"steps": [{"appId": "a", "stepOrder": 1.5}]}`, 422, []string{"steps[0].stepOrder"}},
+		"unknown key":        {`{"steps": [{"appId": "a", "stepOrder": 0, "position": 0}]}`, 422, []string{"steps[0].position"}},
+		"subject check":      {`{"steps": [{"appId": "a", "stepOrder": 0, "subjectCheck": "claim:"}]}`, 422, []string{"steps[0].subjectCheck"}},
+		"app twice":          {`{"steps": [{"appId": "a", "stepOrder": 0}, {"appId": "a", "stepOrder": 1}]}`, 422, []string{"steps[1]"}},
+		"steps not a list":   {`{"steps": {"appId": "a"}}`, 400, nil},
+		"appId a number":     {`{"steps": [{"appId": 1, "stepOrder": 0}]}`, 400, nil},
+		"title not a map":    {`{"title": "F"}`, 400, nil},
+		"title emptied":      {`{"title": {}}`, 422, []string{"title"}},
+		"enabled a string":   {`{"enabled": "yes"}`, 400, nil},
+		"acr with a space":   {`{"acr": "loa 2"}`, 422, []string{"acr"}},
+	} {
+		w := patchF(tt.body)
+		if w.Code != tt.status {
+			t.Errorf("%s: %d, want %d: %s", name, w.Code, tt.status, w.Body)
+			continue
+		}
+		if tt.paths != nil && !slices.Equal(paths(t, w), tt.paths) {
+			t.Errorf("%s: paths %q, want %q", name, paths(t, w), tt.paths)
+		}
+	}
+	if w := r.do(r.flows, http.MethodPatch, "/admin/v1/flows/f", "", `{"enabled": true}`); w.Code != http.StatusOK {
+		t.Errorf("admin:flows writes a flow: %d", w.Code)
+	}
+	if w := r.do(r.reader, http.MethodDelete, "/admin/v1/flows/f", "", ""); w.Code != http.StatusForbidden {
+		t.Errorf("admin:read deletes a flow: %d", w.Code)
+	}
+	// DELETE deletes, where Symfony answered 204 and kept the flow (Q95).
+	if w := r.do(r.all, http.MethodDelete, "/admin/v1/flows/f", "", ""); w.Code != http.StatusNoContent {
+		t.Errorf("DELETE: %d", w.Code)
+	}
+	if w := r.do(r.all, http.MethodGet, "/admin/v1/flows/f", "", ""); w.Code != http.StatusNotFound {
+		t.Errorf("GET after DELETE: %d", w.Code)
+	}
+	if w := r.do(r.all, http.MethodPost, "/admin/v1/flows", "", flow); w.Code != http.StatusCreated {
+		t.Fatal(w.Body)
+	}
+	if w := r.do(r.all, http.MethodPost, "/admin/v1/flows", "", flow); w.Code != http.StatusConflict {
+		t.Errorf("POST twice: %d", w.Code)
+	}
+	if got := decodeInto[[]flowJSON](t, r.do(r.reader, http.MethodGet, "/admin/v1/flows", "", "")); len(got) != 1 {
+		t.Errorf("collection: %+v", got)
+	}
+}

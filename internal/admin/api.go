@@ -89,6 +89,7 @@ func New(o Options) *API {
 	a.mux.HandleFunc(Prefix+"/", a.notFound)
 	if o.Writer != nil {
 		a.registerApps()
+		a.registerFlows()
 	}
 	return a
 }

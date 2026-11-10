@@ -125,6 +125,39 @@ func (b body) str(field string) (string, error) {
 	return s, nil
 }
 
+// boolean reads a bool field; null is def.
+func (b body) boolean(field string, def bool) (bool, error) {
+	raw := b[field]
+	if kind(raw) == "null" {
+		return def, nil
+	}
+	var v bool
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false, typeError(field, "bool", raw)
+	}
+	return v, nil
+}
+
+// texts reads a map of locale to text, nil when null; a null text is no
+// text.
+func (b body) texts(field string) (map[string]string, error) {
+	raw := b[field]
+	if kind(raw) == "null" {
+		return nil, nil
+	}
+	var v map[string]*string
+	if err := json.Unmarshal(raw, &v); err != nil || v == nil {
+		return nil, typeError(field, "array", raw)
+	}
+	m := map[string]string{}
+	for locale, text := range v {
+		if text != nil && *text != "" {
+			m[locale] = *text
+		}
+	}
+	return m, nil
+}
+
 // strs reads a list of strings, nil when null.
 func (b body) strs(field string) ([]string, error) {
 	raw := b[field]
