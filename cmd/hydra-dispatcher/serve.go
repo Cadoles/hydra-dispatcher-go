@@ -143,7 +143,13 @@ func serve(ctx context.Context, args []string) error {
 	// A write reads back at once on the instance that made it; those of the
 	// other instances show as soon as Listen hears of them (Q99), every
 	// RefreshEvery at worst.
-	db.OnCommit(func(ctx context.Context) { _ = live.Refresh(ctx) }) // logged by Refresh
+	db.OnCommit(func(ctx context.Context) {
+		// Bounded as the refreshes of Run: a database frozen after the commit
+		// would otherwise hold Live and its refreshes without a word (revue R33).
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), commitRefreshTimeout)
+		defer cancel()
+		_ = live.Refresh(refreshCtx) // logged by Refresh
+	})
 	go func() {
 		defer close(refreshed)
 		var listening sync.WaitGroup
@@ -154,7 +160,7 @@ func serve(ctx context.Context, args []string) error {
 
 	var draining atomic.Bool
 	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker,
-		draining: draining.Load, theme: theme, adminKeys: adminKeys})
+		draining: draining.Load, theme: theme, adminKeys: adminKeys, adminWriter: writerOf(db)})
 	if err != nil {
 		stop()
 		return err
@@ -434,6 +440,20 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	return &c, nil
 }
 
+// commitRefreshTimeout bounds the refresh of the snapshot after a write of the
+// instance, as Run bounds its own.
+const commitRefreshTimeout = 10 * time.Second
+
+// store.Postgres writes the resources of the admin API.
+var _ admin.Writer = (*store.Postgres)(nil)
+
+// writerOf is the writer of the admin API in db: store.Postgres; nil for a
+// store that does not write, the fake of the tests.
+func writerOf(db configStore) admin.Writer {
+	w, _ := db.(admin.Writer)
+	return w
+}
+
 // webhookCheck refuses a snapshot whose webhooks cannot be called
 // (webhook.Check): serve at startup and at each refresh, and every write
 // before its commit (openConfig).
@@ -503,6 +523,8 @@ type services struct {
 	theme *front.Theme
 	// adminKeys are those of the admin API; nil, it is not served.
 	adminKeys *admin.Keys
+	// adminWriter writes its resources; nil, it serves /token alone.
+	adminWriter admin.Writer
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -635,7 +657,9 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 				watch.AdminRateLimited()
 				s.audit.AdminRateLimited(c)
 			},
-			Token: s.audit.Token,
+			Token:  s.audit.Token,
+			Writer: s.adminWriter,
+			Wrote:  s.audit.Wrote,
 		}).Register(mux)
 	}
 	if cfg.Observability.Metrics.Listen == "" {

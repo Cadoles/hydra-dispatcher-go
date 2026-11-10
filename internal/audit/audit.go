@@ -194,3 +194,9 @@ func (l *Log) Token(ctx context.Context, client, result, reason string) {
 func (l *Log) AdminRateLimited(ctx context.Context) {
 	l.logger.WarnContext(ctx, "admin.rate_limited", "ip", clientIP(ctx))
 }
+
+// Wrote writes a write of the admin API done: the client, the resource, its id,
+// the method, and the names of the fields written, never their values.
+func (l *Log) Wrote(ctx context.Context, client, resource, id, method string, fields []string) {
+	l.logger.InfoContext(ctx, "admin.write", "client_id", client, "resource", resource, "id", id, "method", method, "fields", fields, "ip", clientIP(ctx))
+}
