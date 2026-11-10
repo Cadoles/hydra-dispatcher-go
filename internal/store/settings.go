@@ -74,6 +74,22 @@ var registry = []setting{
 	{"fallback_locale", "locale of a text missing from the page's locale", func(s *Settings) any { return &s.FallbackLocale }},
 }
 
+// SettingValue is a setting and its value, in the JSON of its type.
+type SettingValue struct {
+	Key   string
+	Value json.RawMessage
+}
+
+// Document gives every setting of s, in the order of the registry: the
+// document of the admin API (Q105).
+func (s Settings) Document() []SettingValue {
+	values := make([]SettingValue, len(registry))
+	for i, st := range registry {
+		values[i] = SettingValue{Key: st.key, Value: st.encode(&s)}
+	}
+	return values
+}
+
 // SettingKey is a key of the registry and its help, for the admin forms.
 type SettingKey struct{ Key, Help string }
 

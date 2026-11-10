@@ -235,13 +235,13 @@ func TestToken(t *testing.T) {
 		t.Errorf("warnings = %q", got)
 	}
 	if w := r.do(http.MethodGet, "/admin/v1/token", admin, ""); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "POST" ||
-		decode(t, w)["error"] != "method_not_allowed" {
+		decode(t, w)["status"] != float64(405) {
 		t.Errorf("GET /token: %d %v", w.Code, w.Header())
 	}
 	if w := r.do(http.MethodDelete, "/admin/v1/apps", admin, ""); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD, POST" {
 		t.Errorf("DELETE /apps: %d %v", w.Code, w.Header())
 	}
-	if w := r.do(http.MethodGet, "/admin/v1/nope", admin, ""); w.Code != http.StatusNotFound || decode(t, w)["error"] != "not_found" {
+	if w := r.do(http.MethodGet, "/admin/v1/nope", admin, ""); w.Code != http.StatusNotFound || decode(t, w)["status"] != float64(404) {
 		t.Errorf("unknown path: %d %s", w.Code, w.Body)
 	}
 	// The audit is told of each token, granted or refused, never of a secret.

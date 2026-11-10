@@ -238,6 +238,14 @@ func (s *Snapshot) App(id string) (App, bool) {
 	return s.Apps[i], true
 }
 
+// unreadable is an error of a row the reader cannot take: a value of the wrong
+// type, settings Validate refuses. A write that leaves one is refused
+// (RefusedError); an error of the database is not.
+type unreadable struct{ err error }
+
+func (u unreadable) Error() string { return u.err.Error() }
+func (u unreadable) Unwrap() error { return u.err }
+
 // querier is a database or a transaction.
 type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -273,6 +281,7 @@ func readSnapshot(ctx context.Context, q querier) (*Snapshot, error) {
 		return nil, fmt.Errorf("read settings: %w", err)
 	}
 	if s.Settings, s.Warnings, err = settingsFrom(rows); err != nil {
+		err = unreadable{err}
 		return nil, err
 	}
 	return s, nil
@@ -299,7 +308,7 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 		for _, src := range sources {
 			prefix, err := netip.ParsePrefix(src)
 			if err != nil {
-				return nil, fmt.Errorf("app %s: allowed source %q: %w", a.ID, src, err)
+				return nil, unreadable{fmt.Errorf("app %s: allowed source %q: %w", a.ID, src, err)}
 			}
 			a.AllowedSources = append(a.AllowedSources, prefix)
 		}
@@ -330,7 +339,7 @@ func readFlows(ctx context.Context, q querier) ([]Flow, error) {
 				continue // icon_url NULL
 			}
 			if err := json.Unmarshal(l.raw, l.into); err != nil {
-				return nil, fmt.Errorf("flow %s: %s: %w", f.ID, l.name, err)
+				return nil, unreadable{fmt.Errorf("flow %s: %s: %w", f.ID, l.name, err)}
 			}
 			// A null or empty text is none, as internal/config drops it from
 			// the seed: the page falls back to another locale.

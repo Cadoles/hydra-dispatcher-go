@@ -120,16 +120,21 @@ func (p *Postgres) transact(ctx context.Context, op string, commit bool, fn func
 }
 
 // checkSnapshot refuses what tx leaves when serve would refuse it.
+// An error of the database while reading (a lock_timeout, a connection lost) is
+// not a refusal: the configuration is not at fault (revue R33).
 func (p *Postgres) checkSnapshot(ctx context.Context, tx *sql.Tx) error {
 	s, err := readSnapshot(ctx, tx)
-	if err == nil && p.check != nil {
-		err = p.check(s)
-	}
-	if err != nil {
-		if ctx.Err() != nil {
-			return err
-		}
+	var u unreadable
+	switch {
+	case errors.As(err, &u):
 		return &RefusedError{Err: err}
+	case err != nil:
+		return fmt.Errorf("read the configuration back: %w", err)
+	}
+	if p.check != nil {
+		if err := p.check(s); err != nil {
+			return &RefusedError{Err: err}
+		}
 	}
 	return nil
 }

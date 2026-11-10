@@ -63,6 +63,11 @@ type Options struct {
 	Refused     func(ctx context.Context)
 	RateLimited func(ctx context.Context)
 	Token       func(ctx context.Context, client, result, reason string)
+	// Writer writes the resources; nil, the API serves /token alone.
+	Writer Writer
+	// Wrote, nil for none, is told of each write done: the audit (admin.write),
+	// the names of the fields written, never their values.
+	Wrote func(ctx context.Context, client, resource, id, method string, fields []string)
 	// Now is the clock, time.Now when nil.
 	Now func() time.Time
 }
@@ -82,6 +87,9 @@ func New(o Options) *API {
 	a := &API{o: o, mux: http.NewServeMux(), limit: newRateLimiter(o.RatePerMinute)}
 	a.mux.HandleFunc("POST "+Prefix+"/token", a.token)
 	a.mux.HandleFunc(Prefix+"/", a.notFound)
+	if o.Writer != nil {
+		a.registerApps()
+	}
 	return a
 }
 
@@ -89,7 +97,7 @@ func New(o Options) *API {
 var methods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
 
 // notFound answers what no route takes: 405 with Allow when the path has
-// routes for other methods, 404 otherwise, in JSON as the rest of the API.
+// routes for other methods, 404 otherwise, in problem+json as the resources.
 // The catch-all pattern hides the 405 of the mux.
 func (a *API) notFound(w http.ResponseWriter, r *http.Request) {
 	var allowed []string
@@ -102,10 +110,10 @@ func (a *API) notFound(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(allowed) > 0 {
 		w.Header().Set("Allow", strings.Join(allowed, ", "))
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "The method is not allowed on this resource.")
+		writeProblem(w, http.StatusMethodNotAllowed, "No route found for \""+r.Method+" "+r.URL.Path+"\": Method Not Allowed (Allow: "+strings.Join(allowed, ", ")+")")
 		return
 	}
-	writeError(w, http.StatusNotFound, "not_found", "No such resource.")
+	writeProblem(w, http.StatusNotFound, "Not Found")
 }
 
 // Register serves the API on mux, under Prefix.

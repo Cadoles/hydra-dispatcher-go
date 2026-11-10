@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -654,5 +655,32 @@ dispatcher:
 	}
 	if s := snapshot(t, p); len(s.Apps) != 1 {
 		t.Errorf("%d apps", len(s.Apps))
+	}
+}
+
+// A failure of the database while the write reads its configuration back (a
+// lock_timeout here) is an error of the database, not a refusal (revue R33):
+// the admin API answers 500, not 422.
+func TestWriteReadBackFails(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	exec(t, p, fmt.Sprintf(`ALTER DATABASE %s SET lock_timeout = '200ms'`, databaseName(t, p)))
+	q := replica(t, p) // its connections take the lock_timeout
+	locker, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = locker.Rollback() }()
+	if _, err := locker.Exec(`LOCK TABLE api_client IN ACCESS EXCLUSIVE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	err = q.UpdateSettings(ctx, "admin:alice", values(t, map[string]any{"remember": false}))
+	var refused *RefusedError
+	if err == nil || errors.As(err, &refused) || !strings.Contains(err.Error(), "lock timeout") {
+		t.Errorf("err = %v, want an error of the database, not a refusal", err)
+	}
+	_ = locker.Rollback()
+	if n := rowCount(t, p, "setting"); n != 0 {
+		t.Errorf("%d rows written", n)
 	}
 }
