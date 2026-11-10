@@ -24,11 +24,12 @@ type secretFile struct {
 }
 
 // secretFiles are the secret keys and their files: the keys of secrets, previous ones
-// included, the DSNs that may hold a password, and the private key of the admin API.
+// included, the DSNs that may hold a password, the private key of the admin API, and the
+// secrets of its clients in the seed.
 // hydra.system_secrets_file has its own format, one secret per line.
 func (c *Config) secretFiles() []secretFile {
 	s := &c.Secrets
-	return []secretFile{
+	files := []secretFile{
 		keyFile("secrets.cookie_key", s.CookieKeyFile, &s.CookieKey),
 		keysFile("secrets.cookie_keys_previous", s.CookieKeysPreviousFile, &s.CookieKeysPrevious),
 		keyFile("secrets.encryption_key", s.EncryptionKeyFile, &s.EncryptionKey),
@@ -41,6 +42,13 @@ func (c *Config) secretFiles() []secretFile {
 		dsnFile("state.redis_dsn", c.State.RedisDSNFile, &c.State.RedisDSN),
 		textFile("admin.api.private_key", c.Admin.API.PrivateKeyFile, &c.Admin.API.PrivateKey),
 	}
+	// The secrets of the API clients of the seed, by ${OAUTH2_ADMIN_CLIENT_SECRET} as
+	// the warning of OAUTH2_ADMIN_CLIENT_* advises, or by a file.
+	for i := range c.Seed.OAuth2Clients {
+		sc := &c.Seed.OAuth2Clients[i]
+		files = append(files, textFile(fmt.Sprintf("dispatcher.oauth2_clients[%d].secret", i), sc.SecretFile, &sc.Secret))
+	}
+	return files
 }
 
 // readSecretFiles gives each secret key given by a file the content of its file. The

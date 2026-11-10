@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/admin"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
@@ -87,6 +88,12 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// So do keys of the admin API that cannot sign or verify.
+	adminKeys, err := loadAdminKeys(cfg.Admin, logger)
+	if err != nil {
+		return err
+	}
+	_ = adminKeys // the admin API is served from P15c
 	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
 	// given by -config alone may listen where the probe does not look.
 	if *configPath != os.Getenv(configEnv) {
@@ -343,6 +350,20 @@ func loadConfig(path string, w io.Writer) (*config.Config, loggers, error) {
 
 // loadTheme reads and checks the theme of ui.theme_dir, the embedded one for
 // "" (Thèmes).
+// loadAdminKeys reads the keys of the admin API, nil when it is not served:
+// disabled, or enabled without its private key, which config warns of.
+func loadAdminKeys(a config.Admin, logger *slog.Logger) (*admin.Keys, error) {
+	if !a.API.Enabled || a.API.PrivateKey == "" {
+		return nil, nil
+	}
+	keys, err := admin.ParseKeys(a.API.PrivateKey, a.API.PublicKey, a.API.PublicKeysPrevious)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("admin.keys_loaded", "kid", keys.KeyID(), "alg", keys.Algorithm(), "previous", keys.Previous())
+	return keys, nil
+}
+
 func loadTheme(dir string, logger *slog.Logger) (*front.Theme, error) {
 	theme, err := front.LoadTheme(dir)
 	if err == nil {

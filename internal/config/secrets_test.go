@@ -150,6 +150,12 @@ func TestEnvironmentSecrets(t *testing.T) {
 		{"Symfony's DATABASE_URL and the system secrets", "", map[string]string{"DISPATCHER_STORE_DSN": "", "DATABASE_URL": "postgres://u:p@db/d",
 			"DISPATCHER_HYDRA_SYSTEM_SECRETS": "youReallyNeedToChangeThis", "DISPATCHER_STATE_REDIS_DSN": "redis://redis:6379"},
 			[]string{"secrets.cookie_key", "secrets.challenge_key", "store.dsn", "hydra.system_secrets"}},
+		// R30: the secret of an API client of the seed, by a ${VAR} as the warning of
+		// OAUTH2_ADMIN_CLIENT_* advises, or by its file; one written in the file is not
+		// named.
+		{"secrets of the seed", "dispatcher:\n  oauth2_clients:\n    - { id: a, secret: \"${OAUTH2_ADMIN_CLIENT_SECRET}\" }\n    - { id: b, secret: s3cret }\n    - { id: c, secret_file: " + secretFileOf(t, "c-secret\n") + " }\n",
+			map[string]string{"OAUTH2_ADMIN_CLIENT_SECRET": "a-secret"},
+			[]string{"secrets.cookie_key", "secrets.challenge_key", "store.dsn", "dispatcher.oauth2_clients[0].secret"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			env := required(tt.env)
@@ -170,5 +176,23 @@ func TestEnvironmentSecrets(t *testing.T) {
 				t.Errorf("%q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// The secret of an API client of the seed by its file: trimmed, exclusive of
+// secret, and its absence still refused.
+func TestSeedClientSecretFile(t *testing.T) {
+	c, _, err := load(t, "dispatcher:\n  oauth2_clients:\n    - { id: c, secret_file: "+secretFileOf(t, "  s3cret\n")+" }\n", nil)
+	if err != nil || c.Seed.OAuth2Clients[0].Secret != "s3cret" {
+		t.Fatalf("secret = %q, %v", c.Seed.OAuth2Clients[0].Secret, err)
+	}
+	for content, want := range map[string]string{
+		"dispatcher:\n  oauth2_clients:\n    - { id: c, secret: s, secret_file: " + secretFileOf(t, "s3cret") + " }\n": "dispatcher.oauth2_clients[0].secret and dispatcher.oauth2_clients[0].secret_file are exclusive",
+		"dispatcher:\n  oauth2_clients:\n    - { id: c, secret_file: " + secretFileOf(t, " \n") + " }\n":               "dispatcher.oauth2_clients[0].secret_file: is empty",
+		"dispatcher:\n  oauth2_clients:\n    - { id: c, secret_file: /nonexistent/secret }\n":                          "dispatcher.oauth2_clients[0].secret_file: open /nonexistent/secret",
+	} {
+		if _, _, err := load(t, content, nil); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want %q", err, want)
+		}
 	}
 }

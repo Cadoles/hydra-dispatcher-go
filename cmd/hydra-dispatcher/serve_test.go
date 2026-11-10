@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -604,6 +609,48 @@ func TestLoadTheme(t *testing.T) {
 	}
 	if theme, err := loadTheme("", logger); err != nil || theme.Dir != "" {
 		t.Errorf("embedded theme: %v", err)
+	}
+}
+
+// Keys of the admin API that cannot sign stop serve before the stores, named
+// by their key; good ones are logged by their id, never by their value; without
+// a private key, the API is not served, and nothing is read.
+func TestServeAdminKeys(t *testing.T) {
+	keepLoggers(t)
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+
+	commandEnv(t, "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", "DISPATCHER_ADMIN_API_PRIVATE_KEY=not a key")
+	f := &fakeStore{}
+	useStore(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var serveErr error
+	_ = stdoutOf(t, func() { serveErr = serve(ctx, nil) })
+	if serveErr == nil || !strings.HasPrefix(serveErr.Error(), "admin.api.private_key: ") || len(f.Calls()) != 0 {
+		t.Errorf("broken key: err = %v, calls = %q", serveErr, f.Calls())
+	}
+
+	commandEnv(t, "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", "DISPATCHER_ADMIN_API_PRIVATE_KEY="+private)
+	useStore(t, &fakeStore{})
+	logs := stdoutOf(t, func() { serveErr = serve(ctx, nil) })
+	if serveErr != nil || !strings.Contains(logs, `"msg":"admin.keys_loaded"`) || !strings.Contains(logs, `"alg":"ES256","previous":0`) ||
+		strings.Contains(logs, "PRIVATE KEY") {
+		t.Errorf("good key: err = %v, logs:\n%s", serveErr, logs)
+	}
+
+	commandEnv(t, "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", "DISPATCHER_ADMIN_API_PRIVATE_KEY=")
+	useStore(t, &fakeStore{})
+	logs = stdoutOf(t, func() { serveErr = serve(ctx, nil) })
+	if serveErr != nil || strings.Contains(logs, "admin.keys_loaded") || !strings.Contains(logs, "admin.api.enabled without admin.api.private_key") {
+		t.Errorf("no key: err = %v, logs:\n%s", serveErr, logs)
 	}
 }
 

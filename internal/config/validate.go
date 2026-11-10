@@ -207,7 +207,15 @@ func (c *Config) validate() (warnings []string, err error) {
 	}
 
 	positive("admin.api.token_ttl", int64(c.Admin.API.TokenTTL))
+	if c.Admin.API.TokenTTL%Duration(time.Second) != 0 {
+		fail("admin.api.token_ttl", "must be a whole number of seconds: expires_in counts them")
+	}
 	positive("admin.api.rate_limit_per_minute", int64(c.Admin.API.RateLimitPerMinute))
+	// Enabled by default: without its key, nothing tells otherwise that the API is
+	// not served. serve reads the keys (admin.ParseKeys).
+	if c.Admin.API.Enabled && c.Admin.API.PrivateKey == "" {
+		warnings = append(warnings, "admin.api.enabled without admin.api.private_key: /admin/v1 is not served; give the key, or set admin.api.enabled to false")
+	}
 	positive("admin.session.idle_timeout", int64(c.Admin.Session.IdleTimeout))
 	positive("admin.session.max_age", int64(c.Admin.Session.MaxAge))
 

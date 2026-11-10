@@ -218,6 +218,8 @@ func checkStepKeys(n *yaml.Node) error {
 type SeedClient struct {
 	ID     string `yaml:"id"`
 	Secret string `yaml:"secret"`
+	// SecretFile gives Secret by a file, as a secret (Q87).
+	SecretFile string `yaml:"secret_file"`
 	// Scopes is nil until Load applies the Symfony default, admin:flows, to
 	// absent scopes; null ones are no scope, as in Symfony.
 	Scopes *List `yaml:"scopes"`

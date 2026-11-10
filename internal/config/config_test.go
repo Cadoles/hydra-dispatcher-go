@@ -87,9 +87,10 @@ func TestDesignDocExample(t *testing.T) {
 		t.Fatal(err)
 	}
 	// REDIS_DSN is unset: the in-memory store, with its warning; Hydra's admin in
-	// http://, with its own. The DISPATCHER_*_KEY references are no overrides, and draw
-	// no warning.
-	if len(warnings) != 2 || !hasWarning(warnings, memoryWarning) || !hasWarning(warnings, adminHTTPWarning) {
+	// http://, with its own; OAUTH2_PRIVATE_KEY unset, the admin API without its key.
+	// The DISPATCHER_*_KEY references are no overrides, and draw no warning.
+	if len(warnings) != 3 || !hasWarning(warnings, memoryWarning) || !hasWarning(warnings, adminHTTPWarning) ||
+		!hasWarning(warnings, "admin.api.enabled without admin.api.private_key: /admin/v1 is not served") {
 		t.Errorf("warnings = %q", warnings)
 	}
 	for _, check := range []struct {
@@ -1344,6 +1345,7 @@ dispatcher:
 		"claims in options":        {app + "      options: { receive_claims: [email] }\n", "dispatcher.apps[0].options.receive_claims: is a key of the app"},
 		"claims as a mapping":      {app + "      receive_claims: { a: b }\n", "expected a list"},
 		"no locale":                {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
+		"token TTL fraction":       {"admin:\n  api: { token_ttl: 1500ms }\n", "admin.api.token_ttl: must be a whole number of seconds"},
 	} {
 		if _, _, err := load(t, tt.content, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tt.want)

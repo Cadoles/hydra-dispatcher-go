@@ -12,6 +12,7 @@ tool (
 require (
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/getsentry/sentry-go/otel/otlp v0.50.0
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/ory/hydra-client-go/v26 v26.2.0
 	github.com/pressly/goose/v3 v3.29.0
