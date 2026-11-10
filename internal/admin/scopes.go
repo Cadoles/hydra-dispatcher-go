@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -48,10 +49,15 @@ func Allowed(granted []string, r Resource, method string) bool {
 
 // Warnings names the scopes of the API clients the API does not know, which
 // grant nothing: admin:config and admin:users of Symfony, kept by a seed,
-// translated only by the import of its database (Q96).
+// translated only by the import of its database (Q96); and the clients whose
+// secret hash costs too much for /token to compute it (revue R33).
 func Warnings(clients []store.APIClient) []string {
 	var warnings []string
 	for _, c := range clients {
+		if domain.SecretCostTooHigh(c.SecretHash) {
+			warnings = append(warnings, fmt.Sprintf("API client %s: its secret is hashed at a bcrypt cost over %d, which /token refuses to compute: give it a new secret",
+				c.ID, domain.MaxSecretCost))
+		}
 		var unknown []string
 		for _, s := range c.Scopes {
 			if !slices.Contains(Scopes, s) {

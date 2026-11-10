@@ -223,6 +223,17 @@ func TestToken(t *testing.T) {
 	if unknown["error_description"] != wrong["error_description"] {
 		t.Errorf("descriptions differ: %v, %v", unknown, wrong)
 	}
+	// A hash of too high a cost, written by hand in the database: refused at
+	// once, never computed (revue R33).
+	costly := strings.Replace(clientHash(), "$04$", "$31$", 1)
+	r.config.set(store.APIClient{ID: "costly", SecretHash: costly, Scopes: []string{ScopeRead}})
+	start := time.Now()
+	if w := r.tokenForm(form("grant_type", "client_credentials", "client_id", "costly", "client_secret", clientSecret)); w.Code != http.StatusUnauthorized || time.Since(start) > 5*time.Second {
+		t.Errorf("hash of cost 31: %d after %v", w.Code, time.Since(start))
+	}
+	if got := Warnings(r.config.Snapshot().APIClients); len(got) != 1 || !strings.HasPrefix(got[0], "API client costly: its secret is hashed at a bcrypt cost over 14") {
+		t.Errorf("warnings = %q", got)
+	}
 	if w := r.do(http.MethodGet, "/admin/v1/token", admin, ""); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "POST" ||
 		decode(t, w)["error"] != "method_not_allowed" {
 		t.Errorf("GET /token: %d %v", w.Code, w.Header())

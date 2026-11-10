@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -133,11 +134,37 @@ func TestAPIClient(t *testing.T) {
 		"empty scope":      {APIClient{ID: "c", SecretHash: hash, Scopes: []string{""}}, []string{"scopes[0]: is empty"}},
 		"scope with space": {APIClient{ID: "c", SecretHash: hash, Scopes: []string{"a", "admin flows"}}, []string{`scopes[1]: "admin flows" contains a space`}},
 		"bad id":           {APIClient{ID: ".c", SecretHash: hash}, []string{`id: ".c" is not an id`}},
+		"cost 31":          {APIClient{ID: "c", SecretHash: costly(t, 31)}, []string{"secret: is a bcrypt hash of cost 31: 14 at most"}},
+		"cost 15":          {APIClient{ID: "c", SecretHash: costly(t, 15)}, []string{"secret: is a bcrypt hash of cost 15"}},
+		"cost 14":          {APIClient{ID: "c", SecretHash: costly(t, 14)}, nil},
 	} {
 		wants(t, name, violations(tt.c.Check), tt.want...)
 	}
 	if !SecretMatches(hash, "s3cret") || SecretMatches(hash, "s3cre") {
 		t.Error("SecretMatches")
+	}
+}
+
+// costly is a hash of cost 4 that announces cost: bcrypt reads the cost from
+// the hash, and would compute 2^cost rounds to compare it.
+func costly(t *testing.T, cost int) string {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte("s3cret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Replace(string(h), "$04$", fmt.Sprintf("$%02d$", cost), 1)
+}
+
+// A hash of a cost over MaxSecretCost is never computed: the test would hold a
+// CPU for hours otherwise.
+func TestSecretCost(t *testing.T) {
+	start := time.Now()
+	if SecretMatches(costly(t, 31), "s3cret") || !SecretCostTooHigh(costly(t, 31)) || SecretCostTooHigh(costly(t, 14)) || SecretCostTooHigh("not a hash") {
+		t.Error("SecretMatches or SecretCostTooHigh")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("%v to refuse a hash of cost 31", d)
 	}
 }
 

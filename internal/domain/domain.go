@@ -228,10 +228,25 @@ func (f Flow) Check(fail Fail, app func(id string) bool) {
 // Check checks c, its id included.
 func (c APIClient) Check(fail Fail) {
 	CheckID(fail, c.ID)
-	if _, err := bcrypt.Cost([]byte(c.SecretHash)); err != nil {
+	switch cost, err := bcrypt.Cost([]byte(c.SecretHash)); {
+	case err != nil:
 		fail("secret", "is not a bcrypt hash")
+	case cost > MaxSecretCost:
+		fail("secret", "is a bcrypt hash of cost %d: %d at most, each token request computing it", cost, MaxSecretCost)
 	}
 	CheckScopes(fail, c.Scopes)
+}
+
+// MaxSecretCost is the highest cost of bcrypt a client secret may have:
+// /token computes it at each request, and a cost of 31 would hold a CPU for
+// hours (revue R33). Symfony hashes at 13 by default; HashSecret at 10.
+const MaxSecretCost = 14
+
+// SecretCostTooHigh tells whether hash is a bcrypt hash of a cost over
+// MaxSecretCost, which SecretMatches never computes.
+func SecretCostTooHigh(hash string) bool {
+	cost, err := bcrypt.Cost([]byte(hash))
+	return err == nil && cost > MaxSecretCost
 }
 
 // CheckScopes checks the scopes of an API client: a token request names them
@@ -330,7 +345,11 @@ func HashSecret(secret string) (string, error) {
 }
 
 // SecretMatches tells whether secret is the one hash holds.
+// A hash of a cost over MaxSecretCost matches nothing, without being computed.
 func SecretMatches(hash, secret string) bool {
+	if SecretCostTooHigh(hash) {
+		return false
+	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), BcryptInput(secret)) == nil
 }
 
