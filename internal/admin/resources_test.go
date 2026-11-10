@@ -222,6 +222,7 @@ func (f *fakeWriter) UpdateSettings(_ context.Context, by string, values map[str
 // the tokens of three clients: all the scopes, admin:read alone, admin:flows
 // alone.
 type resources struct {
+	api     *API
 	handler http.Handler
 	writer  *fakeWriter
 	all     string
@@ -243,7 +244,7 @@ func newResources(t *testing.T) *resources {
 	writer.publish()
 	keys := mustKeys(t, pkcs8(t, ecKey(t, elliptic.P256())), "")
 	r := &resources{writer: writer}
-	api := New(Options{
+	api := mustNew(t, Options{
 		Keys: keys, Config: config, Issuer: issuer, TokenTTL: 15 * time.Minute,
 		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, RatePerMinute: 100000,
 		Writer: writer,
@@ -256,6 +257,7 @@ func newResources(t *testing.T) *resources {
 	})
 	mux := http.NewServeMux()
 	api.Register(mux)
+	r.api = api
 	r.handler = httpx.Chain(mux, httpx.RealIP(nil))
 	now := time.Now()
 	for _, c := range []struct {

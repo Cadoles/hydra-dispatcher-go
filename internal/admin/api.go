@@ -77,24 +77,40 @@ type API struct {
 	o     Options
 	mux   *http.ServeMux
 	limit *rateLimiter
+	// routes are the patterns served, for the test that compares them with
+	// the OpenAPI document.
+	routes []string
 }
 
-// New returns the admin API, /token registered.
-func New(o Options) *API {
+// New returns the admin API: /token, the documentation, and the resources
+// with a writer.
+func New(o Options) (*API, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
 	a := &API{o: o, mux: http.NewServeMux(), limit: newRateLimiter(o.RatePerMinute)}
-	a.mux.HandleFunc("POST "+Prefix+"/token", a.token)
+	a.route("POST "+Prefix+"/token", http.HandlerFunc(a.token))
 	a.mux.HandleFunc(Prefix+"/", a.notFound)
+	if err := a.registerDocs(); err != nil {
+		return nil, err
+	}
 	if o.Writer != nil {
 		a.registerApps()
 		a.registerFlows()
 		a.registerClients()
 		a.registerSettings()
 	}
-	return a
+	return a, nil
 }
+
+// route serves h on pattern, a method and a path of the API.
+func (a *API) route(pattern string, h http.Handler) {
+	a.mux.Handle(pattern, h)
+	a.routes = append(a.routes, pattern)
+}
+
+// Routes are the patterns the API serves, method and path.
+func (a *API) Routes() []string { return slices.Clone(a.routes) }
 
 // methods are those a route of the API may take.
 var methods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
@@ -128,7 +144,7 @@ func (a *API) Register(mux *http.ServeMux) {
 // Handle serves h on pattern, a path of the API with its method (POST
 // /admin/v1/apps), for a caller whose token allows the method on r (Q96).
 func (a *API) Handle(pattern string, r Resource, h http.Handler) {
-	a.mux.Handle(pattern, a.authenticate(r, h))
+	a.route(pattern, a.authenticate(r, h))
 }
 
 // ServeHTTP filters by address, then by rate, then routes. Nothing of the API

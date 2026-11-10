@@ -84,6 +84,19 @@ var endpoints = []endpoint{
 // prefix is the path of the nine endpoints, by their v1 path.
 const prefix = "/oauth2/auth/requests/"
 
+// Routes are the patterns of the endpoints, method and path, the v1 aliases
+// with legacy: for the test that compares them with the OpenAPI document.
+func Routes(legacy bool) []string {
+	var routes []string
+	for _, e := range endpoints {
+		routes = append(routes, e.method+" /admin"+e.path)
+		if legacy {
+			routes = append(routes, e.method+" "+e.path)
+		}
+	}
+	return routes
+}
+
 // Register adds the endpoints to mux, and under their prefix an answer to
 // the other paths and methods, after the allowlist as well.
 func Register(mux *http.ServeMux, o Options) {

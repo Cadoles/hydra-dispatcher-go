@@ -108,7 +108,7 @@ func newInstance(t *testing.T, dsn string, keys *Keys) *instance {
 	wg.Go(func() { db.Listen(ctx, live.Changed, quiet) })
 	t.Cleanup(func() { cancel(); wg.Wait(); _ = db.Close() })
 	i := &instance{db: db, live: live}
-	api := New(Options{
+	api := mustNew(t, Options{
 		Keys: keys, Config: live, Issuer: issuer, TokenTTL: 15 * time.Minute,
 		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, RatePerMinute: 100000,
 		Writer: db,

@@ -1,0 +1,1105 @@
+openapi: 3.1.0
+info:
+  title: Hydra dispatcher
+  version: "1"
+  summary: The admin API of the dispatcher, and the API of Hydra it emulates for the login apps.
+  description: |
+    Two APIs, by their tags.
+
+    **Admin API** (`/admin/v1`): the configuration of the dispatcher, its apps,
+    flows, API clients and settings. Only the addresses of
+    `security.admin_authorized_hosts` reach it (403 otherwise, before anything);
+    100 requests a minute and per address by default (`X-RateLimit-Remaining`,
+    `X-RateLimit-Reset`, and `Retry-After` on a 429). A token comes from
+    `/admin/v1/token` (client_credentials); each resource asks for its scope,
+    `admin:read` reading every one. Fields in camelCase; every field present in
+    a representation, null for what is absent. Errors of the resources in
+    `application/problem+json`; those of the token and of the authentication in
+    the OAuth2 form of the Symfony dispatcher. The contract and its deviations
+    from Symfony: "Contrat de l'admin API" of the design document.
+
+    **Emulated API** (`/admin/oauth2/auth/requests/...`): the nine calls of
+    Hydra's admin API a login app makes, served by the dispatcher in Hydra's
+    place, only to the networks of `security.emulated_api_authorized_hosts`
+    and, within them, to the sources of each app. The v1 paths of the Symfony
+    dispatcher (`/oauth2/auth/requests/...`) are deprecated aliases, removed in
+    1.0.
+servers:
+  - url: /
+tags:
+  - name: Token
+    description: The token of the admin API.
+  - name: Apps
+    description: The login apps.
+  - name: Flows
+    description: The flows, sequences of apps the user chooses from.
+  - name: API clients
+    description: The clients of the admin API.
+  - name: Settings
+    description: The settings, one document.
+  - name: Documentation
+    description: This document, and the page that shows it.
+  - name: Emulated API
+    description: Hydra's admin API, as the login apps call it.
+  - name: Emulated API v1
+    description: The paths of the Symfony dispatcher, deprecated aliases of the emulated API; removed in 1.0.
+
+# The responses several operations share, as YAML anchors: OpenAPI does not
+# reference a whole responses object. /docs.json, the YAML read as JSON,
+# resolves them.
+x-shared-responses:
+  updateErrors: &updateErrors
+    "400": { $ref: "#/components/responses/BadRequest" }
+    "401": { $ref: "#/components/responses/Unauthorized" }
+    "403": { $ref: "#/components/responses/Forbidden" }
+    "404": { $ref: "#/components/responses/NotFound" }
+    "413": { $ref: "#/components/responses/TooLarge" }
+    "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+    "422": { $ref: "#/components/responses/Invalid" }
+    "429": { $ref: "#/components/responses/RateLimited" }
+  deletes: &deletes
+    "204": { description: 'Deleted.' }
+    "401": { $ref: "#/components/responses/Unauthorized" }
+    "403": { $ref: "#/components/responses/Forbidden" }
+    "404": { $ref: "#/components/responses/NotFound" }
+    "409": { $ref: "#/components/responses/Conflict" }
+    "429": { $ref: "#/components/responses/RateLimited" }
+  settingsWrites: &settingsWrites
+    "200":
+      description: The document of the settings, as written.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Settings" }
+    "400": { $ref: "#/components/responses/BadRequest" }
+    "401": { $ref: "#/components/responses/Unauthorized" }
+    "403": { $ref: "#/components/responses/Forbidden" }
+    "413": { $ref: "#/components/responses/TooLarge" }
+    "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+    "422": { $ref: "#/components/responses/Invalid" }
+    "429": { $ref: "#/components/responses/RateLimited" }
+  emulatedWrites: &emulatedWrites
+    "200":
+      description: Where the app sends the browser.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/RedirectTo" }
+    "400": { $ref: "#/components/responses/EmulatedError" }
+    "403": { $ref: "#/components/responses/EmulatedError" }
+    "404": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/EmulatedError" }
+    "413": { $ref: "#/components/responses/EmulatedError" }
+    "500": { $ref: "#/components/responses/EmulatedError" }
+    "503": { $ref: "#/components/responses/EmulatedError" }
+  loginReads: &loginReads
+    "200":
+      description: The login request of the step.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LoginRequest" }
+    "400": { $ref: "#/components/responses/EmulatedError" }
+    "403": { $ref: "#/components/responses/EmulatedError" }
+    "404": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/EmulatedError" }
+  consentReads: &consentReads
+    "200":
+      description: The consent request of the step.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ConsentRequest" }
+    "400": { $ref: "#/components/responses/EmulatedError" }
+    "403": { $ref: "#/components/responses/EmulatedError" }
+    "404": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/EmulatedError" }
+  logoutReads: &logoutReads
+    "200":
+      description: The logout request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/LogoutRequest" }
+    "400": { $ref: "#/components/responses/EmulatedError" }
+    "403": { $ref: "#/components/responses/EmulatedError" }
+    "404": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/EmulatedError" }
+
+paths:
+  /admin/v1/token:
+    post:
+      tags: [Token]
+      operationId: token
+      summary: Get a token (client_credentials)
+      description: |
+        The client's secret in the body, as a form or in JSON, never by HTTP
+        Basic. The scopes asked are those the client has; none asked, all of
+        them. An unknown client and a wrong secret get the same answer.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+      responses:
+        "200":
+          description: The token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "400":
+          description: unsupported_grant_type, invalid_request or invalid_scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuth2Error" }
+        "401":
+          description: invalid_client.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuth2Error" }
+        "403": { $ref: "#/components/responses/AddressRefused" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /admin/v1/apps:
+    get:
+      tags: [Apps]
+      operationId: listApps
+      summary: List the apps
+      security: [{ bearer: [admin:apps] }, { bearer: [admin:read] }]
+      parameters: [{ $ref: "#/components/parameters/page" }]
+      responses:
+        "200":
+          description: A page of apps, by id.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/App" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Apps]
+      operationId: createApp
+      summary: Create an app
+      security: [{ bearer: [admin:apps] }]
+      requestBody: { $ref: "#/components/requestBodies/App" }
+      responses:
+        "201":
+          description: The app created; Location names it.
+          headers:
+            Location: { $ref: "#/components/headers/Location" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/Invalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /admin/v1/apps/{id}:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    get:
+      tags: [Apps]
+      operationId: getApp
+      summary: Read an app
+      security: [{ bearer: [admin:apps] }, { bearer: [admin:read] }]
+      responses:
+        "200":
+          description: The app.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Apps]
+      operationId: replaceApp
+      summary: Replace an app
+      description: |
+        Replaces loginUrl, consentUrl, logoutUrl and method; authMode,
+        allowedSources, clientCertFingerprint and receiveClaims, absent, keep
+        their value (Q107). The id of the body, when given, is the path's.
+      security: [{ bearer: [admin:apps] }]
+      requestBody: { $ref: "#/components/requestBodies/App" }
+      responses:
+        "200":
+          description: The resource as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        <<: *updateErrors
+    patch:
+      tags: [Apps]
+      operationId: patchApp
+      summary: Change fields of an app
+      description: The fields sent; null gives a field its default (receiveClaims null, every claim).
+      security: [{ bearer: [admin:apps] }]
+      requestBody: { $ref: "#/components/requestBodies/AppPatch" }
+      responses:
+        "200":
+          description: The resource as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        <<: *updateErrors
+    delete:
+      tags: [Apps]
+      operationId: deleteApp
+      summary: Delete an app
+      description: Refused (409) while a flow has it as a step.
+      security: [{ bearer: [admin:apps] }]
+      responses: *deletes
+
+  /admin/v1/flows:
+    get:
+      tags: [Flows]
+      operationId: listFlows
+      summary: List the flows
+      security: [{ bearer: [admin:flows] }, { bearer: [admin:read] }]
+      parameters: [{ $ref: "#/components/parameters/page" }]
+      responses:
+        "200":
+          description: A page of flows, by id.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Flow" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Flows]
+      operationId: createFlow
+      summary: Create a flow
+      security: [{ bearer: [admin:flows] }]
+      requestBody: { $ref: "#/components/requestBodies/Flow" }
+      responses:
+        "201":
+          description: The flow created; Location names it.
+          headers:
+            Location: { $ref: "#/components/headers/Location" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Flow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/Invalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /admin/v1/flows/{id}:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    get:
+      tags: [Flows]
+      operationId: getFlow
+      summary: Read a flow
+      security: [{ bearer: [admin:flows] }, { bearer: [admin:read] }]
+      responses:
+        "200":
+          description: The flow, its steps by stepOrder.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Flow" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Flows]
+      operationId: replaceFlow
+      summary: Replace a flow
+      description: |
+        Replaces title, description, iconUrl and enabled; steps, absent, keep
+        theirs, as with Symfony; acr, absent, keeps its value (Q107).
+      security: [{ bearer: [admin:flows] }]
+      requestBody: { $ref: "#/components/requestBodies/Flow" }
+      responses:
+        "200":
+          description: The resource as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Flow" }
+        <<: *updateErrors
+    patch:
+      tags: [Flows]
+      operationId: patchFlow
+      summary: Change fields of a flow
+      description: The fields sent; steps sent replace every step; a map of texts is replaced whole.
+      security: [{ bearer: [admin:flows] }]
+      requestBody: { $ref: "#/components/requestBodies/FlowPatch" }
+      responses:
+        "200":
+          description: The resource as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Flow" }
+        <<: *updateErrors
+    delete:
+      tags: [Flows]
+      operationId: deleteFlow
+      summary: Delete a flow and its steps
+      security: [{ bearer: [admin:flows] }]
+      responses: *deletes
+
+  /admin/v1/oauth2-clients:
+    get:
+      tags: [API clients]
+      operationId: listClients
+      summary: List the API clients
+      security: [{ bearer: [admin:clients] }, { bearer: [admin:read] }]
+      parameters: [{ $ref: "#/components/parameters/page" }]
+      responses:
+        "200":
+          description: A page of clients, by id; never a secret.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/APIClient" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [API clients]
+      operationId: createClient
+      summary: Create an API client
+      description: Without scopes, the client has none (Q111).
+      security: [{ bearer: [admin:clients] }]
+      requestBody: { $ref: "#/components/requestBodies/APIClient" }
+      responses:
+        "201":
+          description: The client created; Location names it.
+          headers:
+            Location: { $ref: "#/components/headers/Location" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/APIClient" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/Invalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /admin/v1/oauth2-clients/{id}:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    get:
+      tags: [API clients]
+      operationId: getClient
+      summary: Read an API client
+      security: [{ bearer: [admin:clients] }, { bearer: [admin:read] }]
+      responses:
+        "200":
+          description: The client; never its secret.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/APIClient" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [API clients]
+      operationId: replaceClient
+      summary: Replace an API client
+      description: Without secret, the client keeps its own (Q112); without scopes, its scopes (Q107).
+      security: [{ bearer: [admin:clients] }]
+      requestBody: { $ref: "#/components/requestBodies/APIClientUpdate" }
+      responses:
+        "200":
+          description: The resource as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/APIClient" }
+        <<: *updateErrors
+    patch:
+      tags: [API clients]
+      operationId: patchClient
+      summary: Change fields of an API client
+      security: [{ bearer: [admin:clients] }]
+      requestBody: { $ref: "#/components/requestBodies/APIClientPatch" }
+      responses:
+        "200":
+          description: The resource as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/APIClient" }
+        <<: *updateErrors
+    delete:
+      tags: [API clients]
+      operationId: deleteClient
+      summary: Delete an API client
+      description: Its tokens are refused as soon as the instance sees it.
+      security: [{ bearer: [admin:clients] }]
+      responses: *deletes
+
+  /admin/v1/settings:
+    get:
+      tags: [Settings]
+      operationId: getSettings
+      summary: Read the settings
+      security: [{ bearer: [admin:settings] }, { bearer: [admin:read] }]
+      responses:
+        "200":
+          description: The document of the settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Settings" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Settings]
+      operationId: putSettings
+      summary: Write settings
+      description: Partial, as the PUT of Symfony was; the same as PATCH.
+      security: [{ bearer: [admin:settings] }]
+      requestBody: { $ref: "#/components/requestBodies/Settings" }
+      responses: *settingsWrites
+    patch:
+      tags: [Settings]
+      operationId: patchSettings
+      summary: Write settings
+      description: The keys sent; null gives a key its default.
+      security: [{ bearer: [admin:settings] }]
+      requestBody: { $ref: "#/components/requestBodies/SettingsPatch" }
+      responses: *settingsWrites
+
+  /admin/v1/docs:
+    get:
+      tags: [Documentation]
+      operationId: docs
+      summary: This document, shown
+      description: A page of Scalar, embedded in the dispatcher, without a CDN.
+      security: []
+      responses:
+        "200":
+          description: The page.
+          content:
+            text/html: { schema: { type: string } }
+        "403": { $ref: "#/components/responses/AddressRefused" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+  /admin/v1/docs.json:
+    get:
+      tags: [Documentation]
+      operationId: docsJSON
+      summary: This document, in JSON
+      security: []
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/json: { schema: { type: object } }
+        "403": { $ref: "#/components/responses/AddressRefused" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /admin/oauth2/auth/requests/login:
+    get:
+      tags: [Emulated API]
+      operationId: getLoginRequest
+      summary: Read a login request
+      parameters: [{ $ref: "#/components/parameters/login_challenge" }]
+      responses: *loginReads
+  /admin/oauth2/auth/requests/login/accept:
+    put:
+      tags: [Emulated API]
+      operationId: acceptLoginRequest
+      summary: Accept a login request
+      parameters: [{ $ref: "#/components/parameters/login_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/AcceptLogin" }
+      responses: *emulatedWrites
+  /admin/oauth2/auth/requests/login/reject:
+    put:
+      tags: [Emulated API]
+      operationId: rejectLoginRequest
+      summary: Reject a login request
+      parameters: [{ $ref: "#/components/parameters/login_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/Reject" }
+      responses: *emulatedWrites
+  /admin/oauth2/auth/requests/consent:
+    get:
+      tags: [Emulated API]
+      operationId: getConsentRequest
+      summary: Read a consent request
+      parameters: [{ $ref: "#/components/parameters/consent_challenge" }]
+      responses: *consentReads
+  /admin/oauth2/auth/requests/consent/accept:
+    put:
+      tags: [Emulated API]
+      operationId: acceptConsentRequest
+      summary: Accept a consent request
+      parameters: [{ $ref: "#/components/parameters/consent_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/AcceptConsent" }
+      responses: *emulatedWrites
+  /admin/oauth2/auth/requests/consent/reject:
+    put:
+      tags: [Emulated API]
+      operationId: rejectConsentRequest
+      summary: Reject a consent request
+      parameters: [{ $ref: "#/components/parameters/consent_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/Reject" }
+      responses: *emulatedWrites
+  /admin/oauth2/auth/requests/logout:
+    get:
+      tags: [Emulated API]
+      operationId: getLogoutRequest
+      summary: Read a logout request
+      parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
+      responses: *logoutReads
+  /admin/oauth2/auth/requests/logout/accept:
+    put:
+      tags: [Emulated API]
+      operationId: acceptLogoutRequest
+      summary: Accept a logout request
+      parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
+      responses: *emulatedWrites
+  /admin/oauth2/auth/requests/logout/reject:
+    put:
+      tags: [Emulated API]
+      operationId: rejectLogoutRequest
+      summary: Reject a logout request
+      parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
+      responses:
+        "204": { description: 'Rejected.' }
+        "400": { $ref: "#/components/responses/EmulatedError" }
+        "403": { $ref: "#/components/responses/EmulatedError" }
+        "404": { $ref: "#/components/responses/EmulatedError" }
+        "410": { $ref: "#/components/responses/EmulatedError" }
+
+  /oauth2/auth/requests/login:
+    get:
+      tags: [Emulated API v1]
+      operationId: getLoginRequestV1
+      summary: Read a login request (v1)
+      deprecated: true
+      description: Use GET /admin/oauth2/auth/requests/login.
+      parameters: [{ $ref: "#/components/parameters/login_challenge" }]
+      responses: *loginReads
+  /oauth2/auth/requests/login/accept:
+    put:
+      tags: [Emulated API v1]
+      operationId: acceptLoginRequestV1
+      summary: Accept a login request (v1)
+      deprecated: true
+      description: Use PUT /admin/oauth2/auth/requests/login/accept.
+      parameters: [{ $ref: "#/components/parameters/login_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/AcceptLogin" }
+      responses: *emulatedWrites
+  /oauth2/auth/requests/login/reject:
+    put:
+      tags: [Emulated API v1]
+      operationId: rejectLoginRequestV1
+      summary: Reject a login request (v1)
+      deprecated: true
+      description: Use PUT /admin/oauth2/auth/requests/login/reject.
+      parameters: [{ $ref: "#/components/parameters/login_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/Reject" }
+      responses: *emulatedWrites
+  /oauth2/auth/requests/consent:
+    get:
+      tags: [Emulated API v1]
+      operationId: getConsentRequestV1
+      summary: Read a consent request (v1)
+      deprecated: true
+      description: Use GET /admin/oauth2/auth/requests/consent.
+      parameters: [{ $ref: "#/components/parameters/consent_challenge" }]
+      responses: *consentReads
+  /oauth2/auth/requests/consent/accept:
+    put:
+      tags: [Emulated API v1]
+      operationId: acceptConsentRequestV1
+      summary: Accept a consent request (v1)
+      deprecated: true
+      description: Use PUT /admin/oauth2/auth/requests/consent/accept.
+      parameters: [{ $ref: "#/components/parameters/consent_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/AcceptConsent" }
+      responses: *emulatedWrites
+  /oauth2/auth/requests/consent/reject:
+    put:
+      tags: [Emulated API v1]
+      operationId: rejectConsentRequestV1
+      summary: Reject a consent request (v1)
+      deprecated: true
+      description: Use PUT /admin/oauth2/auth/requests/consent/reject.
+      parameters: [{ $ref: "#/components/parameters/consent_challenge" }]
+      requestBody: { $ref: "#/components/requestBodies/Reject" }
+      responses: *emulatedWrites
+  /oauth2/auth/requests/logout:
+    get:
+      tags: [Emulated API v1]
+      operationId: getLogoutRequestV1
+      summary: Read a logout request (v1)
+      deprecated: true
+      description: Use GET /admin/oauth2/auth/requests/logout.
+      parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
+      responses: *logoutReads
+  /oauth2/auth/requests/logout/accept:
+    put:
+      tags: [Emulated API v1]
+      operationId: acceptLogoutRequestV1
+      summary: Accept a logout request (v1)
+      deprecated: true
+      description: Use PUT /admin/oauth2/auth/requests/logout/accept.
+      parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
+      responses: *emulatedWrites
+  /oauth2/auth/requests/logout/reject:
+    put:
+      tags: [Emulated API v1]
+      operationId: rejectLogoutRequestV1
+      summary: Reject a logout request (v1)
+      deprecated: true
+      description: Use PUT /admin/oauth2/auth/requests/logout/reject.
+      parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
+      responses:
+        "204": { description: 'Rejected.' }
+        "400": { $ref: "#/components/responses/EmulatedError" }
+        "403": { $ref: "#/components/responses/EmulatedError" }
+        "404": { $ref: "#/components/responses/EmulatedError" }
+        "410": { $ref: "#/components/responses/EmulatedError" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: A token of /admin/v1/token, ES256 (PS256 for an RSA key of Symfony), 15 minutes.
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      description: 128 characters at most, letters, digits, ".", "_" or "-", starting with a letter or a digit.
+      schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+    page:
+      name: page
+      in: query
+      description: The page, from 1; 30 items a page.
+      schema: { type: integer, minimum: 1, default: 1 }
+    login_challenge:
+      name: login_challenge
+      in: query
+      required: true
+      description: The challenge of the step, as the app received it.
+      schema: { type: string }
+    consent_challenge:
+      name: consent_challenge
+      in: query
+      required: true
+      schema: { type: string }
+    logout_challenge:
+      name: logout_challenge
+      in: query
+      required: true
+      schema: { type: string }
+
+  headers:
+    Location:
+      description: The path of the resource created.
+      schema: { type: string }
+    RetryAfter:
+      description: Seconds before a request passes again.
+      schema: { type: integer }
+
+  requestBodies:
+    App:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AppWrite" }
+    AppPatch:
+      required: true
+      content:
+        application/merge-patch+json:
+          schema: { $ref: "#/components/schemas/AppWrite" }
+        application/json:
+          schema: { $ref: "#/components/schemas/AppWrite" }
+    Flow:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/FlowWrite" }
+    FlowPatch:
+      required: true
+      content:
+        application/merge-patch+json:
+          schema: { $ref: "#/components/schemas/FlowWrite" }
+        application/json:
+          schema: { $ref: "#/components/schemas/FlowWrite" }
+    APIClient:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/APIClientWrite" }
+    APIClientUpdate:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/APIClientWrite" }
+    APIClientPatch:
+      required: true
+      content:
+        application/merge-patch+json:
+          schema: { $ref: "#/components/schemas/APIClientWrite" }
+        application/json:
+          schema: { $ref: "#/components/schemas/APIClientWrite" }
+    Settings:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/SettingsWrite" }
+    SettingsPatch:
+      required: true
+      content:
+        application/merge-patch+json:
+          schema: { $ref: "#/components/schemas/SettingsWrite" }
+        application/json:
+          schema: { $ref: "#/components/schemas/SettingsWrite" }
+    AcceptLogin:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AcceptLogin" }
+    AcceptConsent:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/AcceptConsent" }
+    Reject:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Reject" }
+
+  responses:
+    BadRequest:
+      description: A body or a parameter that cannot be read, a field of the wrong type.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Unauthorized:
+      description: invalid_token, with WWW-Authenticate.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string, examples: ['Bearer realm="Dispatcher Admin API", error="invalid_token"'] }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OAuth2Error" }
+    Forbidden:
+      description: The address outside the allowlist (request_forbidden), or a token without the scope (insufficient_scope).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OAuth2Error" }
+    AddressRefused:
+      description: The address outside security.admin_authorized_hosts (request_forbidden).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OAuth2Error" }
+    RateLimited:
+      description: rate_limit_exceeded.
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/OAuth2Error" }
+    NotFound:
+      description: No such resource.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Conflict:
+      description: An id taken, or an app a flow has as a step.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    TooLarge:
+      description: A body over 1 MiB.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    UnsupportedMediaType:
+      description: POST and PUT in application/json, PATCH in application/merge-patch+json or application/json.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Invalid:
+      description: The rules of the resource, or a configuration the dispatcher would refuse.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    EmulatedError:
+      description: An error in the form of the Symfony dispatcher.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/EmulatedError" }
+
+  schemas:
+    TokenRequest:
+      type: object
+      required: [grant_type, client_id, client_secret]
+      properties:
+        grant_type: { type: string, const: client_credentials }
+        client_id: { type: string }
+        client_secret: { type: string, writeOnly: true }
+        scope: { type: string, description: 'Scopes separated by spaces.' }
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, scope]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_in: { type: integer, description: 'Seconds.' }
+        scope: { type: string }
+    OAuth2Error:
+      type: object
+      required: [error, error_description]
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+    Problem:
+      type: object
+      required: [type, title, status, detail]
+      properties:
+        type: { type: string, examples: [/errors/404, /validation_errors] }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        violations:
+          type: array
+          items:
+            type: object
+            required: [propertyPath, message]
+            properties:
+              propertyPath: { type: string, description: 'The field in camelCase, "" for the configuration as a whole.' }
+              message: { type: string }
+
+    App:
+      type: object
+      required: [id, loginUrl, consentUrl, logoutUrl, method, authMode, allowedSources, clientCertFingerprint, receiveClaims]
+      properties:
+        id: { type: string }
+        loginUrl: { type: string, format: uri }
+        consentUrl: { type: string, format: uri }
+        logoutUrl: { type: string, description: '"" when the app takes no part in the logout.' }
+        method: { type: string, description: 'The amr of the app.' }
+        authMode: { type: string, enum: [network, mtls] }
+        allowedSources: { type: array, items: { type: string }, description: 'Networks, canonical.' }
+        clientCertFingerprint: { type: [string, "null"], description: 'SHA-256 of the certificate, lowercase hex.' }
+        receiveClaims:
+          type: [array, "null"]
+          items: { type: string }
+          description: The claims of the steps before the app receives; null every claim, [] none.
+    AppWrite:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: [string, "null"] }
+        loginUrl: { type: [string, "null"] }
+        consentUrl: { type: [string, "null"] }
+        logoutUrl: { type: [string, "null"] }
+        method: { type: [string, "null"] }
+        authMode: { type: [string, "null"], enum: [network, mtls, null] }
+        allowedSources: { type: [array, "null"], items: { type: string }, description: 'Networks or addresses.' }
+        clientCertFingerprint: { type: [string, "null"], description: 'SHA-256, hex, with or without colons.' }
+        receiveClaims: { type: [array, "null"], items: { type: string } }
+
+    Flow:
+      type: object
+      required: [id, title, description, iconUrl, enabled, acr, steps]
+      properties:
+        id: { type: string }
+        title: { $ref: "#/components/schemas/Texts" }
+        description: { $ref: "#/components/schemas/Texts" }
+        iconUrl:
+          oneOf:
+            - { $ref: "#/components/schemas/Texts" }
+            - { type: "null" }
+        enabled: { type: boolean }
+        acr: { type: [string, "null"] }
+        steps: { type: array, items: { $ref: "#/components/schemas/Step" } }
+    Step:
+      type: object
+      required: [appId, stepOrder, subjectCheck]
+      properties:
+        appId: { type: string }
+        stepOrder: { type: integer }
+        subjectCheck: { type: string, description: "none, equal or claim:<name>." }
+    FlowWrite:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: [string, "null"] }
+        title: { $ref: "#/components/schemas/TextsWrite" }
+        description: { $ref: "#/components/schemas/TextsWrite" }
+        iconUrl: { $ref: "#/components/schemas/TextsWrite" }
+        enabled: { type: [boolean, "null"] }
+        acr: { type: [string, "null"] }
+        steps:
+          type: [array, "null"]
+          items: { $ref: "#/components/schemas/StepWrite" }
+    StepWrite:
+      type: object
+      additionalProperties: false
+      description: The app by appId or id, appId winning; the position by stepOrder or order. subjectCheck absent keeps the app's.
+      properties:
+        appId: { type: string }
+        id: { description: 'The app, when appId is absent; the internal id of a step of Symfony otherwise, ignored.' }
+        stepOrder: { type: [integer, string] }
+        order: { type: [integer, string] }
+        subjectCheck: { type: [string, "null"] }
+    Texts:
+      type: object
+      description: Locale to text.
+      additionalProperties: { type: string }
+    TextsWrite:
+      type: [object, "null"]
+      description: Locale to text, replaced whole; a null or empty text is none.
+      additionalProperties: { type: [string, "null"] }
+
+    APIClient:
+      type: object
+      required: [id, scopes]
+      properties:
+        id: { type: string }
+        scopes:
+          type: array
+          items: { type: string, examples: [admin:apps, admin:flows, admin:clients, admin:settings, admin:read] }
+    APIClientWrite:
+      type: object
+      additionalProperties: false
+      properties:
+        id: { type: [string, "null"] }
+        secret: { type: string, writeOnly: true, description: 'In clear, hashed in bcrypt; or a bcrypt hash of a cost of 14 at most, kept as it is.' }
+        scopes: { type: [array, "null"], items: { type: string } }
+
+    Settings:
+      type: object
+      required: [appAutoSelect, consentAutoAccept, aggregateAmrFromLoginRequest, challengeTtl, remember, loginRememberFor, consentRememberFor,
+        loginAcceptWebhookUrl, consentAcceptWebhookUrl, supportedLocales, defaultLocale, fallbackLocale]
+      properties:
+        appAutoSelect: { type: boolean }
+        consentAutoAccept: { type: boolean }
+        aggregateAmrFromLoginRequest: { type: boolean }
+        challengeTtl: { type: integer, description: 'Seconds.' }
+        remember: { type: boolean }
+        loginRememberFor: { type: integer, description: 'Seconds.' }
+        consentRememberFor: { type: integer, description: 'Seconds.' }
+        loginAcceptWebhookUrl: { type: [string, "null"] }
+        consentAcceptWebhookUrl: { type: [string, "null"] }
+        supportedLocales: { type: array, items: { type: string } }
+        defaultLocale: { type: string }
+        fallbackLocale: { type: string }
+    SettingsWrite:
+      type: object
+      additionalProperties: false
+      description: The keys sent; null gives a key its default. sessionTtl is read as loginRememberFor; id, hydraPublicUrl and adminAuthorizedHosts are ignored.
+      properties:
+        appAutoSelect: { type: [boolean, "null"] }
+        consentAutoAccept: { type: [boolean, "null"] }
+        aggregateAmrFromLoginRequest: { type: [boolean, "null"] }
+        challengeTtl: { type: [integer, "null"] }
+        remember: { type: [boolean, "null"] }
+        loginRememberFor: { type: [integer, "null"] }
+        consentRememberFor: { type: [integer, "null"] }
+        loginAcceptWebhookUrl: { type: [string, "null"] }
+        consentAcceptWebhookUrl: { type: [string, "null"] }
+        supportedLocales: { type: [array, "null"], items: { type: string } }
+        defaultLocale: { type: [string, "null"] }
+        fallbackLocale: { type: [string, "null"] }
+        sessionTtl: { type: [integer, "null"], deprecated: true }
+        id: { deprecated: true }
+        hydraPublicUrl: { deprecated: true }
+        adminAuthorizedHosts: { deprecated: true }
+
+    EmulatedError:
+      type: object
+      required: [error, error_description, status_code]
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+        status_code: { type: integer }
+        trace_id: { type: string }
+    RedirectTo:
+      type: object
+      required: [redirect_to]
+      properties:
+        redirect_to: { type: string }
+    LoginRequest:
+      type: object
+      description: Hydra's OAuth2LoginRequest, as Hydra serves it, and the extensions of the dispatcher.
+      required: [challenge, client, request_url, requested_scope, skip, subject]
+      properties:
+        challenge: { type: string }
+        client: { type: object }
+        request_url: { type: string }
+        requested_scope: { type: array, items: { type: string } }
+        requested_access_token_audience: { type: array, items: { type: string } }
+        session_id: { type: string }
+        skip: { type: boolean }
+        subject: { type: string }
+        oidc_context: { type: object }
+        x_dispatcher_claims: { type: object, description: 'The claims of the steps before, filtered by receive_claims.' }
+        x_dispatcher_restart_url: { type: string, description: 'The choice page of the flow.' }
+      additionalProperties: true
+    ConsentRequest:
+      type: object
+      description: Hydra's OAuth2ConsentRequest, and the extensions of the dispatcher.
+      required: [challenge]
+      properties:
+        challenge: { type: string }
+        client: { type: object }
+        requested_scope: { type: array, items: { type: string } }
+        subject: { type: string }
+        context: { type: [object, "null"] }
+        x_dispatcher_claims: { type: object }
+      additionalProperties: true
+    LogoutRequest:
+      type: object
+      description: Hydra's OAuth2LogoutRequest.
+      properties:
+        challenge: { type: string }
+        subject: { type: string }
+        sid: { type: string }
+        rp_initiated: { type: boolean }
+      additionalProperties: true
+    AcceptLogin:
+      type: object
+      description: Hydra's AcceptOAuth2LoginRequest.
+      required: [subject]
+      properties:
+        subject: { type: string }
+        remember: { type: boolean }
+        remember_for: { type: integer }
+        acr: { type: string }
+        amr: { type: array, items: { type: string } }
+        context: { type: [object, "null"] }
+      additionalProperties: true
+    AcceptConsent:
+      type: object
+      description: Hydra's AcceptOAuth2ConsentRequest.
+      properties:
+        grant_scope: { type: array, items: { type: string } }
+        grant_access_token_audience: { type: array, items: { type: string } }
+        remember: { type: boolean }
+        remember_for: { type: integer }
+        session:
+          type: object
+          properties:
+            access_token: { type: [object, "null"] }
+            id_token: { type: [object, "null"] }
+      additionalProperties: true
+    Reject:
+      type: object
+      description: Hydra's RejectOAuth2Request.
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+        error_hint: { type: string }
+        error_debug: { type: string }
+        status_code: { type: integer }
+      additionalProperties: true

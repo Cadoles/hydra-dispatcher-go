@@ -645,7 +645,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		if err != nil {
 			return nil, err
 		}
-		admin.New(admin.Options{
+		adminAPI, err := admin.New(admin.Options{
 			Keys: s.adminKeys, Config: s.config, Issuer: cfg.Server.BaseURL, TokenTTL: cfg.Admin.API.TokenTTL.Std(),
 			AuthorizedHosts: hosts, RatePerMinute: cfg.Admin.API.RateLimitPerMinute,
 			Logger: logger, LogIP: cfg.Observability.LogIP, LogSample: logSample,
@@ -660,7 +660,11 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 			Token:  s.audit.Token,
 			Writer: s.adminWriter,
 			Wrote:  s.audit.Wrote,
-		}).Register(mux)
+		})
+		if err != nil {
+			return nil, err
+		}
+		adminAPI.Register(mux)
 	}
 	if cfg.Observability.Metrics.Listen == "" {
 		hosts, err := cfg.Security.MetricsAuthorizedHosts.Prefixes()

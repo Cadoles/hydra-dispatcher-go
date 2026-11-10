@@ -80,7 +80,7 @@ func newRig(t *testing.T) *rig {
 		store.APIClient{ID: clientID, SecretHash: clientHash(), Scopes: []string{ScopeFlows, ScopeApps}},
 		store.APIClient{ID: "reader", SecretHash: clientHash(), Scopes: []string{ScopeRead}},
 	)
-	r.api = New(Options{
+	r.api = mustNew(t, Options{
 		Keys:            mustKeys(t, pkcs8(t, ecKey(t, elliptic.P256())), ""),
 		Config:          r.config,
 		Issuer:          issuer,
@@ -455,4 +455,14 @@ func TestRetryAt(t *testing.T) {
 			t.Errorf("%s: %v, want %v", name, got, tt.want)
 		}
 	}
+}
+
+// mustNew is New, failing the test on an error.
+func mustNew(t testing.TB, o Options) *API {
+	t.Helper()
+	a, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }

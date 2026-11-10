@@ -1,0 +1,271 @@
+package admin
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/pb33f/libopenapi"
+	validator "github.com/pb33f/libopenapi-validator"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/api"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
+)
+
+// openAPI is the validator of the document, made once.
+var openAPI = sync.OnceValues(func() (validator.Validator, error) {
+	doc, err := api.JSON()
+	if err != nil {
+		return nil, err
+	}
+	d, err := libopenapi.NewDocument(doc)
+	if err != nil {
+		return nil, err
+	}
+	v, errs := validator.NewValidator(d)
+	if len(errs) > 0 {
+		return nil, errs[0]
+	}
+	return v, nil
+})
+
+func mustOpenAPI(t *testing.T) validator.Validator {
+	t.Helper()
+	v, err := openAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// The document is OpenAPI 3.1, valid against its schema.
+func TestOpenAPIDocument(t *testing.T) {
+	ok, errs := mustOpenAPI(t).ValidateDocument()
+	for _, e := range errs {
+		t.Errorf("%s: %s", e.Message, e.Reason)
+		for _, s := range e.SchemaValidationErrors {
+			t.Errorf("  %s at %s (line %d)", s.Reason, s.FieldPath, s.Line)
+		}
+	}
+	if !ok && len(errs) == 0 {
+		t.Error("invalid, without a reason")
+	}
+	var doc map[string]any
+	if data, err := api.JSON(); err != nil || json.Unmarshal(data, &doc) != nil || doc["openapi"] != "3.1.0" {
+		t.Errorf("docs.json: %v", err)
+	}
+}
+
+// Each route the admin API and the emulated API serve is in the document, and
+// each operation of the document is served: the files of the page of the
+// documentation apart.
+func TestOpenAPIRoutes(t *testing.T) {
+	data, err := api.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var documented []string
+	for path, ops := range doc.Paths {
+		for method := range ops {
+			if slices.Contains([]string{"get", "put", "post", "patch", "delete"}, method) {
+				documented = append(documented, strings.ToUpper(method)+" "+path)
+			}
+		}
+	}
+	r := newResources(t)
+	var served []string
+	for _, route := range append(r.api.Routes(), emulated.Routes(true)...) {
+		if !strings.HasPrefix(route, "GET "+Prefix+"/docs/") {
+			served = append(served, route)
+		}
+	}
+	slices.Sort(documented)
+	slices.Sort(served)
+	for _, route := range served {
+		if !slices.Contains(documented, route) {
+			t.Errorf("served, not in the document: %s", route)
+		}
+	}
+	for _, route := range documented {
+		if !slices.Contains(served, route) {
+			t.Errorf("in the document, not served: %s", route)
+		}
+	}
+	if len(served) < 40 {
+		t.Errorf("%d routes served: %q", len(served), served)
+	}
+}
+
+// exchange is a request of the tests and what to validate of it.
+type exchange struct {
+	token, method, path, contentType, body string
+	// requestToo validates the request as well; off for the requests the
+	// API must refuse.
+	requestToo bool
+}
+
+// Each answer of the admin API, success or error, is what the document says;
+// each valid request too.
+func TestOpenAPIResponses(t *testing.T) {
+	v := mustOpenAPI(t)
+	r := newResources(t)
+	r.withApps("a")
+	ok := func(token, method, path, ct, body string) exchange {
+		return exchange{token, method, path, ct, body, true}
+	}
+	bad := func(token, method, path, ct, body string) exchange {
+		return exchange{token, method, path, ct, body, false}
+	}
+	merge := "application/merge-patch+json"
+	for _, x := range []exchange{
+		ok(r.all, "POST", "/admin/v1/apps", "", appBody),
+		ok(r.all, "GET", "/admin/v1/apps", "", ""),
+		ok(r.all, "GET", "/admin/v1/apps?page=2", "", ""),
+		ok(r.reader, "GET", "/admin/v1/apps/sql", "", ""),
+		ok(r.all, "PATCH", "/admin/v1/apps/sql", merge, `{"receiveClaims": ["email"], "allowedSources": ["10.0.0.1"]}`),
+		ok(r.all, "PUT", "/admin/v1/apps/sql", "", appBody),
+		ok(r.all, "POST", "/admin/v1/flows", "", `{"id": "f", "title": {"fr": "F"}, "description": {"fr": "D"}, "steps": [{"appId": "sql", "stepOrder": 0}]}`),
+		ok(r.all, "GET", "/admin/v1/flows/f", "", ""),
+		ok(r.all, "PATCH", "/admin/v1/flows/f", "application/json", `{"acr": "loa2", "iconUrl": {"fr": "http://i/f.svg"}}`),
+		ok(r.all, "PUT", "/admin/v1/flows/f", "", `{"title": {"fr": "F"}, "description": {"fr": "D"}, "steps": [{"id": "a", "order": "1"}]}`),
+		ok(r.all, "GET", "/admin/v1/flows", "", ""),
+		ok(r.all, "POST", "/admin/v1/oauth2-clients", "", `{"id": "ci", "secret": "s3cret", "scopes": ["admin:read"]}`),
+		ok(r.all, "GET", "/admin/v1/oauth2-clients", "", ""),
+		ok(r.all, "PUT", "/admin/v1/oauth2-clients/ci", "", `{"scopes": ["admin:read", "admin:flows"]}`),
+		ok(r.all, "GET", "/admin/v1/settings", "", ""),
+		ok(r.all, "PATCH", "/admin/v1/settings", merge, `{"appAutoSelect": true, "sessionTtl": 1800}`),
+		ok(r.all, "PUT", "/admin/v1/settings", "", `{"loginAcceptWebhookUrl": null}`),
+		ok(r.all, "DELETE", "/admin/v1/flows/f", "", ""),
+		ok(r.all, "DELETE", "/admin/v1/oauth2-clients/ci", "", ""),
+		ok("", "GET", "/admin/v1/docs.json", "", ""),
+		ok("", "GET", "/admin/v1/docs", "", ""),
+		bad(r.all, "POST", "/admin/v1/apps", "", appBody),               // 409
+		bad(r.all, "POST", "/admin/v1/apps", "", `{"id": "x", "y": 1}`), // 422
+		bad(r.all, "POST", "/admin/v1/apps", "", `{"id": 1}`),           // 400
+		bad(r.all, "POST", "/admin/v1/apps", "text/plain", appBody),     // 415
+		bad(r.all, "GET", "/admin/v1/apps/nope", "", ""),                // 404
+		bad(r.all, "GET", "/admin/v1/apps?page=0", "", ""),              // 400
+		bad(r.reader, "POST", "/admin/v1/apps", "", appBody),            // 403
+		bad("", "GET", "/admin/v1/apps", "", ""),                        // 401
+		bad(r.all, "DELETE", "/admin/v1/apps/a", "", ""),                // 204
+	} {
+		w := r.do(x.token, x.method, x.path, x.contentType, x.body)
+		req := httptest.NewRequest(x.method, x.path, strings.NewReader(x.body))
+		if x.token != "" {
+			req.Header.Set("Authorization", "Bearer "+x.token)
+		}
+		if x.body != "" {
+			req.Header.Set("Content-Type", cmpOr(x.contentType, "application/json"))
+		}
+		resp := w.Result()
+		resp.Body = io.NopCloser(bytes.NewReader(w.Body.Bytes()))
+		var ok bool
+		var errs []string
+		if x.requestToo {
+			valid, verrs := v.ValidateHttpRequestResponse(req, resp)
+			ok = valid
+			for _, e := range verrs {
+				errs = append(errs, e.Message+": "+e.Reason)
+			}
+		} else {
+			valid, verrs := v.ValidateHttpResponse(req, resp)
+			ok = valid
+			for _, e := range verrs {
+				errs = append(errs, e.Message+": "+e.Reason)
+			}
+		}
+		if !ok {
+			t.Errorf("%s %s (%d): %s\n%s", x.method, x.path, w.Code, strings.Join(errs, "; "), truncate(w.Body.String(), 300))
+		}
+	}
+}
+
+// The validator refuses what the document does not say: the tests above can
+// fail.
+func TestOpenAPIRefuses(t *testing.T) {
+	v := mustOpenAPI(t)
+	for name, x := range map[string]struct {
+		method, path, contentType, body string
+		status                          int
+	}{
+		"an app without its fields": {"GET", "/admin/v1/apps/sql", "application/json; charset=utf-8", `{"id": "sql"}`, 200},
+		"an id that is a number":    {"GET", "/admin/v1/apps/sql", "application/json; charset=utf-8", `{"id": 1, "loginUrl": "", "consentUrl": "", "logoutUrl": "", "method": "", "authMode": "network", "allowedSources": [], "clientCertFingerprint": null, "receiveClaims": null}`, 200},
+		"a status not documented":   {"GET", "/admin/v1/apps/sql", "application/json", `{}`, 418},
+		"a problem without status":  {"GET", "/admin/v1/apps/nope", "application/problem+json", `{"type": "/errors/404", "title": "x", "detail": "y"}`, 404},
+	} {
+		req := httptest.NewRequest(x.method, x.path, nil)
+		req.Header.Set("Authorization", "Bearer x")
+		resp := &http.Response{StatusCode: x.status, Header: http.Header{"Content-Type": {x.contentType}}, Body: io.NopCloser(strings.NewReader(x.body))}
+		if ok, _ := v.ValidateHttpResponse(req, resp); ok {
+			t.Errorf("%s: valid", name)
+		}
+	}
+	req := httptest.NewRequest("POST", "/admin/v1/apps", strings.NewReader(`{"id": "x", "recieveClaims": []}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer x")
+	if ok, _ := v.ValidateHttpRequest(req); ok {
+		t.Error("a request with an unknown field: valid")
+	}
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func truncate(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
+}
+
+// The page of the documentation: its CSP, its files, served without a token.
+func TestDocsPage(t *testing.T) {
+	r := newResources(t)
+	w := r.do("", http.MethodGet, "/admin/v1/docs", "", "")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Security-Policy") != docsCSP || !strings.Contains(w.Body.String(), `<script src="docs/scalar.js">`) {
+		t.Fatalf("page: %d %v", w.Code, w.Header())
+	}
+	for path, ct := range map[string]string{
+		"/admin/v1/docs/scalar.js": "text/javascript; charset=utf-8",
+		"/admin/v1/docs/init.js":   "text/javascript; charset=utf-8",
+		"/admin/v1/docs.json":      "application/json",
+	} {
+		w := r.do("", http.MethodGet, path, "", "")
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != ct || w.Header().Get("ETag") == "" || w.Body.Len() == 0 {
+			t.Errorf("%s: %d %v", path, w.Code, w.Header())
+			continue
+		}
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "10.1.2.3:1"
+		req.Header.Set("If-None-Match", w.Header().Get("ETag"))
+		again := httptest.NewRecorder()
+		r.handler.ServeHTTP(again, req)
+		if again.Code != http.StatusNotModified {
+			t.Errorf("%s again: %d", path, again.Code)
+		}
+	}
+	// The allowlist holds for them too.
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/docs", nil)
+	req.RemoteAddr = "203.0.113.7:1"
+	w = httptest.NewRecorder()
+	r.handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("outside the allowlist: %d", w.Code)
+	}
+}
