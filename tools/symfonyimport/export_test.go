@@ -174,6 +174,18 @@ func TestExportWarns(t *testing.T) {
 	}
 }
 
+// A DSN given to accounts as an argument is not printed: it holds a password
+// (revue R39).
+func TestAccountsArgumentNotPrinted(t *testing.T) {
+	for _, args := range [][]string{{"postgres://u:s3cret@h/db"}, {"-symfony-dsn-stdin=postgres://u:s3cret@h/db"}, {"-dry-run=s3cret"}} {
+		var out, errOut bytes.Buffer
+		err := run(context.Background(), append([]string{"accounts"}, args...), &out, &errOut, strings.NewReader(""))
+		if !errors.Is(err, errUsage) || strings.Contains(errOut.String(), "s3cret") {
+			t.Errorf("%q: %v\n%s", args, err, errOut.String())
+		}
+	}
+}
+
 func TestExportRefused(t *testing.T) {
 	srv, _ := fakeSymfony(t)
 	dir := t.TempDir()
@@ -191,6 +203,10 @@ func TestExportRefused(t *testing.T) {
 		"no url":             {args: []string{"-client-id", "test"}, usage: true},
 		"a secret argument":  {args: []string{"-url", srv.URL, "-client-id", "test", "-client-secret", "s3cret"}, usage: true},
 		"an argument beside": {args: []string{"-url", srv.URL, "-client-id", "test", "extra"}, usage: true},
+		// What the flag package quoted, a secret among it (revue R39).
+		"a secret to a boolean": {args: []string{"-url", srv.URL, "-client-id", "test", "-client-secret-stdin=s3cret"}, usage: true},
+		"a secret with a dash":  {args: []string{"-url", srv.URL, "-client-id", "test", "-s3cret"}, usage: true},
+		"a secret beside":       {args: []string{"-url", srv.URL, "-client-id", "test", "s3cret"}, usage: true},
 	} {
 		var out, errOut bytes.Buffer
 		err := run(context.Background(), append([]string{"export"}, tt.args...), &out, &errOut, strings.NewReader(""))
@@ -201,6 +217,8 @@ func TestExportRefused(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, tt.err)
 		case out.Len() > 0:
 			t.Errorf("%s: a seed written:\n%s", name, out.String())
+		case strings.Contains(errOut.String(), "s3cret"):
+			t.Errorf("%s: the secret printed:\n%s", name, errOut.String())
 		}
 	}
 }

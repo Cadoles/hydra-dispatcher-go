@@ -64,15 +64,29 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, stdin io.
 }
 
 // parse parses the flags of a command, which takes no argument.
+// What it refuses, the flag package quoted: a DSN given as an argument
+// (accounts postgres://u:pass@h/db), a secret given to a boolean flag
+// (-client-secret-stdin=S3cret), or one that starts with a dash. Nothing of
+// it is printed (revue R39); a flag that lacks its value is named, the
+// command defines it.
 func parse(fs *flag.FlagSet, args []string) error {
-	if err := fs.Parse(args); err != nil {
-		return errUsage
+	out := fs.Output()
+	fs.SetOutput(io.Discard)
+	err := fs.Parse(args)
+	fs.SetOutput(out)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+	case err != nil && strings.HasPrefix(err.Error(), "flag needs an argument: "):
+		fmt.Fprintln(out, err)
+	case err != nil:
+		fmt.Fprintln(out, "a flag or its value refused, not printed: a DSN or a secret never goes in an argument")
+	case fs.NArg() > 0:
+		fmt.Fprintln(out, "an argument too many, not printed: a DSN or a secret never goes in an argument")
+	default:
+		return nil
 	}
-	if fs.NArg() > 0 {
-		fmt.Fprintf(fs.Output(), "unexpected argument %q\n", fs.Arg(0))
-		return errUsage
-	}
-	return nil
+	fs.Usage()
+	return errUsage
 }
 
 // readSecret reads a secret from a file, the spaces around it trimmed, or

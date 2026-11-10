@@ -154,11 +154,13 @@ func readLimited(path string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	data, err := io.ReadAll(io.LimitReader(f, maxSecretInput+1))
+	// Room for the end of the line, which the limit does not count, as on the
+	// standard input (revue R39).
+	data, err := io.ReadAll(io.LimitReader(f, maxSecretInput+3))
 	if err != nil {
 		return "", err
 	}
-	if len(data) > maxSecretInput {
+	if len(strings.TrimRight(string(data), "\r\n")) > maxSecretInput {
 		return "", errors.New("more than 64 KiB")
 	}
 	return string(data), nil

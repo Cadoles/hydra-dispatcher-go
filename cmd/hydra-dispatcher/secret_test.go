@@ -54,6 +54,7 @@ func TestSecretInput(t *testing.T) {
 		"file missing":          {args: []string{"-secret-file", filepath.Join(dir, "none")}, err: "-secret-file: open"},
 		"file too large":        {args: []string{"-secret-file", file(strings.Repeat("s", maxSecretInput+1))}, err: "more than 64 KiB"},
 		"file of two lines":     {args: []string{"-secret-file", file("a\nb\n")}, err: "holds more than one line"},
+		"file at the limit":     {args: []string{"-secret-file", file(strings.Repeat("s", maxSecretInput) + "\r\n")}, want: strings.Repeat("s", maxSecretInput)},
 		"stdin of spaces":       {args: []string{"-secret-stdin"}, input: "   \n", err: "-secret-stdin: is empty"},
 		"stdin at the limit":    {args: []string{"-secret-stdin"}, input: strings.Repeat("s", maxSecretInput) + "\r\n", want: strings.Repeat("s", maxSecretInput)},
 		"stdin over the limit":  {args: []string{"-secret-stdin"}, input: strings.Repeat("s", maxSecretInput+1) + "\n", err: "more than 65536 bytes"},
