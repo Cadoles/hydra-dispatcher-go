@@ -231,16 +231,17 @@ func TestAPIOnPostgres(t *testing.T) {
 	// A client created on one instance obtains a token on the other; deleted,
 	// its token is refused there within a second.
 	expect("POST client", one.do(token, http.MethodPost, "/admin/v1/oauth2-clients", `{"id": "ci", "secret": "ci-secret", "scopes": ["admin:read"]}`), http.StatusCreated)
-	var ciToken string
-	if !within(time.Second, func() bool {
-		w := two.do("", http.MethodPost, "/admin/v1/token", "grant_type=client_credentials&client_id=ci&client_secret=ci-secret")
-		if w.Code == http.StatusOK {
-			ciToken = decodeInto[map[string]any](t, w)["access_token"].(string)
-		}
-		return w.Code == http.StatusOK
-	}) {
-		t.Fatal("the client created gets no token on the second instance")
+	// The wait is on the snapshot, the token asked once after: each request of
+	// /token computes a bcrypt, 0.8 s under -race, the first one the dummy hash
+	// as well; a second fitted one attempt, sometimes none.
+	if !within(time.Second, func() bool { _, ok := two.live.Snapshot().APIClient("ci"); return ok }) {
+		t.Fatal("the client created is not on the second instance")
 	}
+	w = two.do("", http.MethodPost, "/admin/v1/token", "grant_type=client_credentials&client_id=ci&client_secret=ci-secret")
+	if w.Code != http.StatusOK {
+		t.Fatalf("the client created gets no token on the second instance: %d %s", w.Code, w.Body)
+	}
+	ciToken := decodeInto[map[string]any](t, w)["access_token"].(string)
 	expect("ci reads", two.do(ciToken, http.MethodGet, "/admin/v1/apps", ""), http.StatusOK)
 	expect("ci writes", two.do(ciToken, http.MethodPost, "/admin/v1/apps", appBody), http.StatusForbidden)
 	expect("DELETE client", one.do(token, http.MethodDelete, "/admin/v1/oauth2-clients/ci", ""), http.StatusNoContent)
