@@ -185,6 +185,10 @@ func readTokenRequest(r *http.Request) tokenRequest {
 	return tokenRequest{f.Get("grant_type"), f.Get("client_id"), f.Get("client_secret"), f.Get("scope")}
 }
 
+// secretMatches compares a secret with a hash, the dummy one for an unknown
+// client included; the tests count its calls.
+var secretMatches = domain.SecretMatches
+
 // invalidClient stands at the audit for a client_id no client can have: it is
 // not an id (domain.ValidID), so it names none.
 const invalidClient = "(invalid)"
@@ -221,7 +225,7 @@ func (a *API) token(w http.ResponseWriter, r *http.Request) {
 	if known {
 		hash = client.SecretHash
 	}
-	if !domain.SecretMatches(hash, req.clientSecret) || !known {
+	if !secretMatches(hash, req.clientSecret) || !known {
 		refuse(http.StatusUnauthorized, "invalid_client", "Invalid client credentials.")
 		return
 	}

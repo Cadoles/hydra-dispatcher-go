@@ -115,6 +115,11 @@ func pemBlock(s string) (*pem.Block, error) {
 		s = string(decoded)
 	}
 	block, rest := pem.Decode([]byte(s))
+	// openssl ecparam -genkey writes the parameters of the curve before the key,
+	// without -noout: the key names its curve itself.
+	for block != nil && block.Type == "EC PARAMETERS" {
+		block, rest = pem.Decode(rest)
+	}
 	switch {
 	case block == nil:
 		return nil, errors.New("is neither a PEM nor the base64 of a PEM")

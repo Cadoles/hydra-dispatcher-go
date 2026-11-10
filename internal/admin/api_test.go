@@ -218,6 +218,16 @@ func TestToken(t *testing.T) {
 			t.Errorf("%s: %d %v", name, tt.w.Code, got)
 		}
 	}
+	// One bcrypt whether the client exists or not: the dummy hash for an
+	// unknown one (revue R34).
+	var compared []string
+	saved := secretMatches
+	secretMatches = func(hash, secret string) bool { compared = append(compared, hash); return saved(hash, secret) }
+	r.tokenForm(form("grant_type", "client_credentials", "client_id", "nobody", "client_secret", "x"))
+	secretMatches = saved
+	if len(compared) != 1 || compared[0] != dummyHash() {
+		t.Errorf("an unknown client compared %d hashes", len(compared))
+	}
 	// One description whether the client exists or not.
 	unknown := decode(t, r.tokenForm(form("grant_type", "client_credentials", "client_id", "nobody", "client_secret", "x")))
 	wrong := decode(t, r.tokenForm(form("grant_type", "client_credentials", "client_id", clientID, "client_secret", "x")))

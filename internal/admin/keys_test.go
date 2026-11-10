@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -140,6 +141,7 @@ func TestParseKeys(t *testing.T) {
 		"EC in SEC 1":             {pemOf(t, "EC PRIVATE KEY", sec1), "", "ES256"},
 		"EC in base64":            {base64.StdEncoding.EncodeToString([]byte(pkcs8(t, ec))), base64.StdEncoding.EncodeToString([]byte(pkix(t, &ec.PublicKey))), "ES256"},
 		"spaces around":           {"\n  " + pkcs8(t, ec) + "\n\n", "", "ES256"},
+		"openssl ecparam -genkey": {pemOf(t, "EC PARAMETERS", []byte{0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07}) + pemOf(t, "EC PRIVATE KEY", sec1), "", "ES256"},
 		"RSA in PKCS#1":           {pemOf(t, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(r2048)), pemOf(t, "RSA PUBLIC KEY", x509.MarshalPKCS1PublicKey(&r2048.PublicKey)), "PS256"},
 		"base64 without padding":  {base64.RawStdEncoding.EncodeToString([]byte(pkcs8(t, ec))), "", "ES256"},
 		"RSA public in PKIX form": {pkcs8(t, r2048), pkix(t, &r2048.PublicKey), "PS256"},
@@ -287,5 +289,19 @@ func TestRotation(t *testing.T) {
 	ps, _ := symfony.Issue(issuer, "c", nil, time.Hour, now)
 	if _, err := mixed.Verify(ps, issuer, now); err != nil {
 		t.Errorf("PS256 of a previous RSA key: %v", err)
+	}
+}
+
+// The windows of the addresses silent for two windows are forgotten, at most a
+// minute after (revue R34).
+func TestRateLimiterSweeps(t *testing.T) {
+	l := newRateLimiter(10)
+	now := time.Unix(1_800_000_000, 0)
+	for i := range 3 {
+		l.take(netip.AddrFrom4([4]byte{10, 0, 0, byte(i)}), now)
+	}
+	l.take(netip.MustParseAddr("10.0.1.1"), now.Add(2*rateWindow+time.Second))
+	if n := len(l.windows); n != 1 {
+		t.Errorf("%d windows kept, want 1", n)
 	}
 }

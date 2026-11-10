@@ -159,12 +159,21 @@ func costly(t *testing.T, cost int) string {
 // A hash of a cost over MaxSecretCost is never computed: the test would hold a
 // CPU for hours otherwise.
 func TestSecretCost(t *testing.T) {
-	start := time.Now()
-	if SecretMatches(costly(t, 31), "s3cret") || !SecretCostTooHigh(costly(t, 31)) || SecretCostTooHigh(costly(t, 14)) || SecretCostTooHigh("not a hash") {
-		t.Error("SecretMatches or SecretCostTooHigh")
+	// In a goroutine: a regression would compute 2^31 rounds, and the test
+	// fails after a second rather than hold the suite (revue R34).
+	matched := make(chan bool, 1)
+	hash := costly(t, 31)
+	go func() { matched <- SecretMatches(hash, "s3cret") }()
+	select {
+	case m := <-matched:
+		if m {
+			t.Error("a hash of cost 31 matches")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SecretMatches computes a hash of cost 31")
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("%v to refuse a hash of cost 31", d)
+	if !SecretCostTooHigh(hash) || SecretCostTooHigh(costly(t, 14)) || SecretCostTooHigh("not a hash") {
+		t.Error("SecretCostTooHigh")
 	}
 }
 
