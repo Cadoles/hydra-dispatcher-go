@@ -108,6 +108,62 @@ func TestOpenAPIRoutes(t *testing.T) {
 	}
 }
 
+// Each route of a resource answers by the scopes its operation in the document
+// requires, and no other: a route attached to another resource fails here
+// (revue R35). Authorization comes before the body, so any body will do.
+func TestRouteScopes(t *testing.T) {
+	data, err := api.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	r := newResources(t)
+	tokens := map[string]string{}
+	for _, scope := range Scopes {
+		tokens[scope] = r.tokenOf(t, "only-"+strings.ReplaceAll(scope, ":", "-"), scope)
+	}
+	checked := 0
+	for path, ops := range doc.Paths {
+		if !strings.HasPrefix(path, Prefix+"/") {
+			continue
+		}
+		for method, raw := range ops {
+			if !slices.Contains([]string{"get", "put", "post", "patch", "delete"}, method) {
+				continue // the parameters of the path
+			}
+			var op struct {
+				Security []map[string][]string `json:"security"`
+			}
+			if err := json.Unmarshal(raw, &op); err != nil {
+				t.Fatal(err)
+			}
+			var allowed []string
+			for _, req := range op.Security {
+				allowed = append(allowed, req["bearer"]...)
+			}
+			if len(allowed) == 0 {
+				continue // /token and the documentation
+			}
+			concrete := strings.ReplaceAll(path, "{id}", "x")
+			for _, scope := range Scopes {
+				w := r.do(tokens[scope], strings.ToUpper(method), concrete, "application/json", `{}`)
+				if refused := w.Code == http.StatusForbidden; refused == slices.Contains(allowed, scope) {
+					t.Errorf("%s %s with %s: %d, the document allows %q", strings.ToUpper(method), path, scope, w.Code, allowed)
+				}
+			}
+			checked++
+		}
+	}
+	if checked != 21 {
+		t.Errorf("%d operations checked, want 21", checked)
+	}
+}
+
 // exchange is a request of the tests and what to validate of it.
 type exchange struct {
 	token, method, path, contentType, body string

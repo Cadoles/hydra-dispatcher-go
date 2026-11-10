@@ -221,13 +221,15 @@ func (a *API) registerFlows() {
 		writeResource(w, http.StatusOK, items)
 	}))
 	a.Handle("GET "+Prefix+"/flows/{id}", Flows, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		i := slices.IndexFunc(a.o.Config.Snapshot().Flows, func(f store.Flow) bool { return f.ID == id })
+		// One snapshot read: a refresh between two reads would give another
+		// flow, or an index past the end (revue R35).
+		id, flows := r.PathValue("id"), a.o.Config.Snapshot().Flows
+		i := slices.IndexFunc(flows, func(f store.Flow) bool { return f.ID == id })
 		if i < 0 {
 			a.fail(w, r, "", store.ErrNotFound)
 			return
 		}
-		writeResource(w, http.StatusOK, flowOf(a.o.Config.Snapshot().Flows[i]))
+		writeResource(w, http.StatusOK, flowOf(flows[i]))
 	}))
 	a.Handle("POST "+Prefix+"/flows", Flows, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, err := readBody(w, r)

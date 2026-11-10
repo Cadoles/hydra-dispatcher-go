@@ -223,6 +223,7 @@ func (f *fakeWriter) UpdateSettings(_ context.Context, by string, values map[str
 // alone.
 type resources struct {
 	api     *API
+	keys    *Keys
 	handler http.Handler
 	writer  *fakeWriter
 	all     string
@@ -257,7 +258,7 @@ func newResources(t *testing.T) *resources {
 	})
 	mux := http.NewServeMux()
 	api.Register(mux)
-	r.api = api
+	r.api, r.keys = api, keys
 	r.handler = httpx.Chain(mux, httpx.RealIP(nil))
 	now := time.Now()
 	for _, c := range []struct {
@@ -780,5 +781,69 @@ func TestViolationPaths(t *testing.T) {
 	v := refusedViolations(fmt.Errorf("%w\n%w", fmt.Errorf("setting login_accept_webhook_url: is in http://, which needs tls.allow_http"), fmt.Errorf("read apps: boom")))
 	if len(v) != 2 || v[0].Field != "login_accept_webhook_url" || v[1].Field != "" {
 		t.Errorf("refused: %+v", v)
+	}
+}
+
+// tokenOf adds to the writer a client holding scopes, and gives its token.
+func (r *resources) tokenOf(t *testing.T, id string, scopes ...string) string {
+	t.Helper()
+	r.writer.mu.Lock()
+	r.writer.clients = append(r.writer.clients, store.APIClient{ID: id, SecretHash: clientHash(), Scopes: scopes})
+	r.writer.publish()
+	r.writer.mu.Unlock()
+	tok, err := r.keys.Issue(issuer, id, scopes, 15*time.Minute, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// flipping gives another snapshot at each read: a refresh between two.
+type flipping struct {
+	mu   sync.Mutex
+	n    int
+	snap [2]*store.Snapshot
+}
+
+func (f *flipping) Snapshot() *store.Snapshot {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n++
+	return f.snap[f.n%2]
+}
+
+// A read of a flow takes one snapshot: one refreshed between two reads gave
+// another flow, or a panic (revue R35).
+func TestFlowReadOneSnapshot(t *testing.T) {
+	flow := func(id string) store.Flow {
+		return store.Flow{ID: id, Title: map[string]string{"fr": id}, Description: map[string]string{"fr": id}, Enabled: true,
+			Steps: []store.Step{{AppID: "a", Position: 0, SubjectCheck: "none"}}}
+	}
+	clients := []store.APIClient{{ID: "all", SecretHash: clientHash(), Scopes: Scopes}}
+	config := &flipping{snap: [2]*store.Snapshot{
+		store.NewSnapshot(nil, []store.Flow{flow("a"), flow("b")}, store.DefaultSettings()).WithAPIClients(clients),
+		store.NewSnapshot(nil, []store.Flow{flow("c")}, store.DefaultSettings()).WithAPIClients(clients),
+	}}
+	keys := mustKeys(t, pkcs8(t, ecKey(t, elliptic.P256())), "")
+	api := mustNew(t, Options{Keys: keys, Config: config, Issuer: issuer, TokenTTL: time.Minute,
+		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, RatePerMinute: 100000, Writer: &fakeWriter{config: &snapshots{}}})
+	mux := http.NewServeMux()
+	api.Register(mux)
+	h := httpx.Chain(mux, httpx.RealIP(nil))
+	tok, _ := keys.Issue(issuer, "all", Scopes, time.Minute, time.Now())
+	for range 20 {
+		for _, id := range []string{"a", "b", "c"} {
+			req := httptest.NewRequest(http.MethodGet, "/admin/v1/flows/"+id, nil)
+			req.RemoteAddr = "10.1.2.3:1"
+			req.Header.Set("Authorization", "Bearer "+tok)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			switch {
+			case w.Code == http.StatusOK && decodeInto[flowJSON](t, w).ID != id:
+				t.Fatalf("GET /flows/%s gave %s", id, w.Body)
+			case w.Code != http.StatusOK && w.Code != http.StatusNotFound:
+				t.Fatalf("GET /flows/%s: %d %s", id, w.Code, w.Body)
+			}
+		}
 	}
 }
