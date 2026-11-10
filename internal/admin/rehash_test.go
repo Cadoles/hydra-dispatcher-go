@@ -155,3 +155,55 @@ func TestObjectForAList(t *testing.T) {
 		}
 	}
 }
+
+// A place among the bcrypts comes back after a refused secret and after a
+// rehash: with one place, a place kept would hold the next token for good
+// (revue R38).
+func TestBcryptPlaceGivenBack(t *testing.T) {
+	r := newRig(t)
+	r.api.bcrypt = make(chan struct{}, 1)
+	r.api.o.Rehash = func(context.Context, string, string, string) error { return nil }
+	token := func(secret string) int {
+		done := make(chan int, 1)
+		go func() {
+			done <- r.tokenForm(form("grant_type", "client_credentials", "client_id", clientID, "client_secret", secret)).Code
+		}()
+		select {
+		case code := <-done:
+			return code
+		case <-time.After(10 * time.Second):
+			t.Fatal("/token held: a place among the bcrypts was kept")
+			return 0
+		}
+	}
+	for range 2 { // the second would wait for the place the first kept
+		if token("wrong") != http.StatusUnauthorized {
+			t.Fatal("refusal")
+		}
+	}
+	if token(clientSecret) != http.StatusOK { // its hash, of cost 4, hashed again
+		t.Fatal("token")
+	}
+	waitRehashed(t, r.api, clientID)
+	if token(clientSecret) != http.StatusOK {
+		t.Fatal("token after a rehash")
+	}
+}
+
+// A hash changed meanwhile, by another instance or a new secret, is no
+// failure: an instance whose snapshot is behind tries at each token, and
+// warned each time (revue R38).
+func TestRehashOfAHashChanged(t *testing.T) {
+	r := newRig(t)
+	r.api.o.Rehash = func(context.Context, string, string, string) error { return store.ErrNotFound }
+	if code := r.tokenForm(form("grant_type", "client_credentials", "client_id", clientID, "client_secret", clientSecret)).Code; code != http.StatusOK {
+		t.Fatalf("token: %d", code)
+	}
+	time.Sleep(10 * time.Millisecond)
+	waitRehashed(t, r.api, clientID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.Contains(r.logs.String(), "admin.rehash_failed") {
+		t.Errorf("a warning:\n%s", r.logs.String())
+	}
+}

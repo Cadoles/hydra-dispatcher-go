@@ -81,22 +81,23 @@ func accounts(ctx context.Context, args []string, stdout, stderr io.Writer, stdi
 		}
 		return errFailed
 	}
-	for _, line := range plan.lines {
-		fmt.Fprintln(stdout, line)
-	}
 	if *dryRun {
+		for _, e := range plan.entries {
+			fmt.Fprintln(stdout, e.line)
+		}
 		fmt.Fprintln(stderr, "Dry run: nothing written.")
 		return nil
 	}
-	for _, u := range plan.users {
-		if err := db.CreateAdmin(ctx, u); err != nil && !errors.Is(err, store.ErrExists) {
-			return fmt.Errorf("admin account %s: %w", u.Username, err)
+	// Each line printed once its write is done: a stop in the middle, the
+	// database out of reach, says what was written (revue R38). Played again,
+	// the import keeps it and goes on.
+	for _, e := range plan.entries {
+		if e.write != nil {
+			if err := e.write(ctx, db); err != nil && !errors.Is(err, store.ErrExists) {
+				return fmt.Errorf("stopped at %q: %w; the lines above were written, play the import again once it is corrected", e.line, err)
+			}
 		}
-	}
-	for _, c := range plan.clients {
-		if err := db.CreateAPIClient(ctx, importAuthor, c); err != nil && !errors.Is(err, store.ErrExists) {
-			return fmt.Errorf("API client %s: %w", c.ID, err)
-		}
+		fmt.Fprintln(stdout, e.line)
 	}
 	fmt.Fprintf(stderr, "Written: %d admin accounts, %d API clients.\n", len(plan.users), len(plan.clients))
 	return nil
@@ -173,11 +174,18 @@ func readSymfony(ctx context.Context, dsn string) ([]symfonyUser, []symfonyClien
 
 // importPlan is what the import writes, and why not the rest.
 type importPlan struct {
+	entries  []entry
 	users    []store.AdminUser
 	clients  []store.APIClient
-	lines    []string // one per entry, as bootstrap prints its changes
 	warnings []string
 	refused  []string
+}
+
+// entry is a line of the import, as bootstrap prints its changes, and its
+// write, nil for what is kept or left out.
+type entry struct {
+	line  string
+	write func(ctx context.Context, db *store.Postgres) error
 }
 
 // planImport translates the rows of Symfony and checks them by the rules of
@@ -204,17 +212,24 @@ func planImport(ctx context.Context, db *store.Postgres, users []symfonyUser, cl
 			continue
 		}
 		if slices.ContainsFunc(haveUsers, func(h store.AdminUser) bool { return h.Username == u.Username }) {
-			p.lines = append(p.lines, fmt.Sprintf("keep    admin_user %s (in the Go database already: left as it is)", u.Username))
+			p.entries = append(p.entries, entry{line: fmt.Sprintf("keep    admin_user %s (in the Go database already: left as it is)", u.Username)})
+			continue
+		}
+		// The column is unique: the database refused it in the middle of the
+		// writes (revue R38).
+		if i := slices.IndexFunc(haveUsers, func(h store.AdminUser) bool { return u.OIDCSub != "" && h.OIDCSub == u.OIDCSub }); i >= 0 {
+			p.refused = append(p.refused, fmt.Sprintf("admin account %q: its oidc_sub is that of the account %q of the Go database", u.Username, haveUsers[i].Username))
 			continue
 		}
 		p.users = append(p.users, u)
-		p.lines = append(p.lines, fmt.Sprintf("create  admin_user %s (%s)", u.Username, u.Role))
+		p.entries = append(p.entries, entry{line: fmt.Sprintf("create  admin_user %s (%s)", u.Username, u.Role),
+			write: func(ctx context.Context, db *store.Postgres) error { return db.CreateAdmin(ctx, u) }})
 	}
 	for _, sc := range clients {
 		if !domain.IsHash(sc.secret) {
 			// Q117: Symfony's CLI kept it in clear; the client never got a token.
 			p.warnings = append(p.warnings, fmt.Sprintf("API client %s left out: its secret is not a bcrypt hash (kept in clear by Symfony's CLI, it never got a token)", sc.id))
-			p.lines = append(p.lines, fmt.Sprintf("skip    api_client %s (its secret is not a hash)", sc.id))
+			p.entries = append(p.entries, entry{line: fmt.Sprintf("skip    api_client %s (its secret is not a hash)", sc.id)})
 			continue
 		}
 		c := store.APIClient{ID: sc.id, SecretHash: sc.secret, Scopes: []string{}}
@@ -239,7 +254,7 @@ func planImport(ctx context.Context, db *store.Postgres, users []symfonyUser, cl
 			continue
 		}
 		if slices.ContainsFunc(haveClients, func(h store.APIClient) bool { return h.ID == c.ID }) {
-			p.lines = append(p.lines, fmt.Sprintf("keep    api_client %s (in the Go database already: left as it is)", c.ID))
+			p.entries = append(p.entries, entry{line: fmt.Sprintf("keep    api_client %s (in the Go database already: left as it is)", c.ID)})
 			continue
 		}
 		p.clients = append(p.clients, c)
@@ -247,7 +262,8 @@ func planImport(ctx context.Context, db *store.Postgres, users []symfonyUser, cl
 		if scopes == "" {
 			scopes = "no scope"
 		}
-		p.lines = append(p.lines, fmt.Sprintf("create  api_client %s (%s)", c.ID, scopes))
+		p.entries = append(p.entries, entry{line: fmt.Sprintf("create  api_client %s (%s)", c.ID, scopes),
+			write: func(ctx context.Context, db *store.Postgres) error { return db.CreateAPIClient(ctx, importAuthor, c) }})
 	}
 	return p, nil
 }

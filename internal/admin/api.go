@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"math"
 	"net/http"
@@ -252,13 +253,10 @@ func (a *API) token(w http.ResponseWriter, r *http.Request) {
 	if known {
 		hash = client.SecretHash
 	}
-	select {
-	case a.bcrypt <- struct{}{}:
-	case <-r.Context().Done():
+	var matches bool
+	if !a.withBcrypt(r.Context(), func() { matches = secretMatches(hash, req.clientSecret) }) {
 		return // the client left while its turn came
 	}
-	matches := secretMatches(hash, req.clientSecret)
-	<-a.bcrypt
 	if !matches || !known {
 		refuse(http.StatusUnauthorized, "invalid_client", "Invalid client credentials.")
 		return
@@ -298,6 +296,20 @@ func (a *API) token(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// withBcrypt runs f with a place among a.bcrypt, given back on every way out
+// of f, a panic included: a place kept would take /token one bcrypt nearer to
+// a halt (revue R38). False when ctx ended before a place came.
+func (a *API) withBcrypt(ctx context.Context, f func()) bool {
+	select {
+	case a.bcrypt <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
+	defer func() { <-a.bcrypt }()
+	f()
+	return true
+}
+
 // rehashTimeout bounds the hash and the write of a rehash.
 const rehashTimeout = 10 * time.Second
 
@@ -315,17 +327,18 @@ func (a *API) rehash(ctx context.Context, c store.APIClient, secret string) {
 		defer a.rehashing.Delete(c.ID)
 		ctx, cancel := context.WithTimeout(ctx, rehashTimeout)
 		defer cancel()
-		select {
-		case a.bcrypt <- struct{}{}:
-		case <-ctx.Done():
+		var hash string
+		var err error
+		if !a.withBcrypt(ctx, func() { hash, err = domain.HashSecret(secret) }) {
 			return
 		}
-		hash, err := domain.HashSecret(secret)
-		<-a.bcrypt
 		if err == nil {
 			err = a.o.Rehash(ctx, c.ID, c.SecretHash, hash)
 		}
-		if a.o.Logger == nil {
+		if a.o.Logger == nil || errors.Is(err, store.ErrNotFound) {
+			// The hash changed meanwhile: hashed again by another instance, or
+			// a new secret. An instance whose snapshot is behind tries at each
+			// token until it refreshes: no warning for that (revue R38).
 			return
 		}
 		if err != nil {

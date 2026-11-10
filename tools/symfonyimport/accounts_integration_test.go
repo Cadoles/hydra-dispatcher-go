@@ -187,4 +187,28 @@ func TestAccounts(t *testing.T) {
 	if users, _ := p.Admins(ctx); len(users) != 2 {
 		t.Errorf("an account written before the refusal: %+v", users)
 	}
+
+	// An oidc_sub another account of the Go database holds: refused before any
+	// write, where the database refused it in the middle of them (revue R38).
+	if _, err := symfony.Exec(`DELETE FROM dispatcher_oauth2_client WHERE id = 'bad/id';
+		INSERT INTO dispatcher_admin_user (username, super_admin, oidc_sub) VALUES ('carol', FALSE, 'sub-2')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CreateAdmin(ctx, store.AdminUser{Username: "zed", OIDCSub: "sub-2", Role: domain.RoleViewer}); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, err = importRun()
+	if !errors.Is(err, errFailed) || !strings.Contains(errOut, `refused: admin account "carol": its oidc_sub is that of the account "zed"`) {
+		t.Errorf("an oidc_sub taken: %v\n%s", err, errOut)
+	}
+	if users, _ := p.Admins(ctx); len(users) != 3 {
+		t.Errorf("an account written before the refusal: %+v", users)
+	}
+	// Corrected, the import goes on: bob and the client new.
+	if _, err := symfony.Exec(`UPDATE dispatcher_admin_user SET oidc_sub = 'sub-3' WHERE username = 'carol'`); err != nil {
+		t.Fatal(err)
+	}
+	if out, errOut, err = importRun(); err != nil || !strings.Contains(out, "create  admin_user bob (viewer)") || !strings.Contains(out, "create  api_client new (no scope)") {
+		t.Errorf("the import corrected: %v\n%s\n%s", err, out, errOut)
+	}
 }

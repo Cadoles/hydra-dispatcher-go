@@ -89,8 +89,14 @@ call GET "/admin/v1/apps/$app"
 check "app read" 200 '.loginUrl == "http://apitest/login" and .logoutUrl == "http://apitest/logout"'
 call PATCH "/admin/v1/apps/$app" "$M" '{"method":"otp"}'
 check "app patched" 200 '.method == "otp" and .loginUrl == "http://apitest/login"'
+# Read back after each write: an answer right over a write left undone
+# passed (revue R38).
+call GET "/admin/v1/apps/$app"
+check "app patched, read back" 200 '.method == "otp" and .loginUrl == "http://apitest/login"'
 call PUT "/admin/v1/apps/$app" "$J" "{\"id\":\"$app\",\"loginUrl\":\"http://apitest/login2\",\"consentUrl\":\"http://apitest/consent2\",\"logoutUrl\":\"http://apitest/logout\",\"method\":\"pwd\"}"
 check "app replaced" 200 '.loginUrl == "http://apitest/login2" and .method == "pwd"'
+call GET "/admin/v1/apps/$app"
+check "app replaced, read back" 200 '.loginUrl == "http://apitest/login2" and .consentUrl == "http://apitest/consent2" and .method == "pwd"'
 call POST /admin/v1/apps text/plain "{\"id\":\"$id-other\"}"
 check "app, a body not JSON" 415
 call GET /admin/v1/apps/zz-apitest-none
@@ -103,8 +109,12 @@ call GET "/admin/v1/flows/$flow"
 check "flow read" 200 '.title.fr == "A" and .enabled == true'
 call PATCH "/admin/v1/flows/$flow" "$M" '{"enabled":false,"title":{"en":"E"}}'
 check "flow patched" 200 '.enabled == false and .title == {"en":"E"} and .description.fr == "D"'
+call GET "/admin/v1/flows/$flow"
+check "flow patched, read back" 200 '.enabled == false and .title == {"en":"E"} and .description.fr == "D"'
 call PUT "/admin/v1/flows/$flow" "$J" "{\"id\":\"$flow\",\"title\":{\"fr\":\"B\"},\"description\":{\"fr\":\"D2\"},\"enabled\":true,\"steps\":[{\"appId\":\"$app\",\"stepOrder\":0}]}"
 check "flow replaced" 200 '.title == {"fr":"B"} and .enabled == true'
+call GET "/admin/v1/flows/$flow"
+check "flow replaced, read back" 200 '.title == {"fr":"B"} and .description == {"fr":"D2"} and .enabled == true and .steps[0].appId == "'"$app"'"'
 
 # The settings, read.
 call GET /admin/v1/settings
