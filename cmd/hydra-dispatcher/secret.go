@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"golang.org/x/term"
 )
@@ -24,11 +26,38 @@ type secretInput struct {
 // maxSecretInput bounds what the standard input or a file may hold.
 const maxSecretInput = 64 << 10
 
+// errInterrupted is a prompt left by Ctrl-C.
+var errInterrupted = errors.New("interrupted")
+
 // readTerminal reads a line from the terminal without echo; the tests
-// replace it.
+// replace it. Ctrl-C gives the terminal its echo back and stops: main
+// catches SIGINT for its context, and term.ReadPassword waited for Enter
+// (revue R37).
 var readTerminal = func() (string, error) {
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
-	return string(b), err
+	fd := int(os.Stdin.Fd())
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", err
+	}
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupt)
+	type line struct {
+		value string
+		err   error
+	}
+	read := make(chan line, 1)
+	go func() {
+		b, err := term.ReadPassword(fd)
+		read <- line{string(b), err}
+	}()
+	select {
+	case l := <-read:
+		return l.value, l.err
+	case <-interrupt:
+		_ = term.Restore(fd, state)
+		return "", errInterrupted
+	}
 }
 
 func newSecretInput(fs *flag.FlagSet, what string) *secretInput {
@@ -61,21 +90,25 @@ func (in *secretInput) read(twice bool) (string, error) {
 			return "", fmt.Errorf("-%s-file: %w", in.what, err)
 		}
 		v := strings.TrimSpace(data)
-		if v == "" {
+		switch {
+		case v == "":
 			return "", fmt.Errorf("-%s-file: is empty", in.what)
+		case strings.ContainsAny(v, "\r\n"):
+			// As the standard input refuses it (revue R37).
+			return "", fmt.Errorf("-%s-file: holds more than one line", in.what)
 		}
 		return v, nil
 	case in.stdin:
-		data, err := io.ReadAll(io.LimitReader(stdin, maxSecretInput+1))
+		// Room for the end of the line, which the limit does not count.
+		data, err := io.ReadAll(io.LimitReader(stdin, maxSecretInput+3))
 		if err != nil {
 			return "", fmt.Errorf("-%s-stdin: %w", in.what, err)
 		}
-		if len(data) > maxSecretInput {
-			return "", fmt.Errorf("-%s-stdin: more than %d bytes", in.what, maxSecretInput)
-		}
 		v := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
 		switch {
-		case v == "":
+		case len(v) > maxSecretInput:
+			return "", fmt.Errorf("-%s-stdin: more than %d bytes", in.what, maxSecretInput)
+		case strings.TrimSpace(v) == "":
 			return "", fmt.Errorf("-%s-stdin: is empty", in.what)
 		case strings.ContainsAny(v, "\r\n"):
 			return "", fmt.Errorf("-%s-stdin: holds more than one line", in.what)
@@ -90,7 +123,7 @@ func (in *secretInput) read(twice bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if v == "" {
+	if strings.TrimSpace(v) == "" {
 		return "", fmt.Errorf("the %s is empty", in.what)
 	}
 	if twice {

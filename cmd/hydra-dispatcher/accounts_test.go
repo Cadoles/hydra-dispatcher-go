@@ -161,6 +161,14 @@ func TestClientCommands(t *testing.T) {
 				}
 			},
 		},
+		"update, a scope twice": {
+			args: []string{"client", "update", "ci", "-scopes", "admin:read, admin:read,admin:flows"}, clients: ci(),
+			check: func(t *testing.T, f *fakeStore, _ string) {
+				if c := client(t, f, "ci"); !slices.Equal(c.Scopes, []string{"admin:read", "admin:flows"}) {
+					t.Errorf("client = %+v", c)
+				}
+			},
+		},
 		"update, no scope": {
 			args: []string{"client", "update", "ci", "-scopes", ""}, clients: ci(),
 			check: func(t *testing.T, f *fakeStore, _ string) {

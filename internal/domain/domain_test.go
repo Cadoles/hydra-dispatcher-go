@@ -161,16 +161,20 @@ func costly(t *testing.T, cost int) string {
 func TestSecretCost(t *testing.T) {
 	// In a goroutine: a regression would compute 2^31 rounds, and the test
 	// fails after a second rather than hold the suite (revue R34).
-	matched := make(chan bool, 1)
 	hash := costly(t, 31)
-	go func() { matched <- SecretMatches(hash, "s3cret") }()
-	select {
-	case m := <-matched:
-		if m {
-			t.Error("a hash of cost 31 matches")
+	// Of the form IsHash takes, and of another one that bcrypt computes all
+	// the same (revue R37).
+	for _, h := range []string{hash, strings.Replace(hash, "$2a$", "$2x$", 1), hash + "x"} {
+		matched := make(chan bool, 1)
+		go func() { matched <- SecretMatches(h, "s3cret") }()
+		select {
+		case m := <-matched:
+			if m {
+				t.Errorf("%s matches", h)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("SecretMatches computes %s", h)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("SecretMatches computes a hash of cost 31")
 	}
 	if !SecretCostTooHigh(hash) || SecretCostTooHigh(costly(t, 14)) || SecretCostTooHigh("not a hash") {
 		t.Error("SecretCostTooHigh")

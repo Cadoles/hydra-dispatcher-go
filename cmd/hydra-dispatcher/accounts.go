@@ -151,7 +151,8 @@ func (l *listFlag) String() string { return strings.Join(l.list, ",") }
 func (l *listFlag) Set(s string) error {
 	l.list, l.set = []string{}, true
 	for item := range strings.SplitSeq(s, ",") {
-		if item = strings.TrimSpace(item); item != "" {
+		// Once each: a, a gave the client the same scope twice (revue R37).
+		if item = strings.TrimSpace(item); item != "" && !slices.Contains(l.list, item) {
 			l.list = append(l.list, item)
 		}
 	}

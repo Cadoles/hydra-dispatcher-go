@@ -435,9 +435,11 @@ func NeedsRehash(hash string) bool {
 }
 
 // SecretMatches tells whether secret is the one hash holds.
-// A hash of a cost over MaxSecretCost matches nothing, without being computed.
+// A hash of a cost over MaxSecretCost, or of another form than IsHash's,
+// matches nothing, without being computed: $2x$31$, which bcrypt computes,
+// held /token for hours (revue R37).
 func SecretMatches(hash, secret string) bool {
-	if SecretCostTooHigh(hash) {
+	if !IsHash(hash) || SecretCostTooHigh(hash) {
 		return false
 	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), BcryptInput(secret)) == nil
