@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/netip"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -63,6 +64,10 @@ type Options struct {
 	Refused     func(ctx context.Context)
 	RateLimited func(ctx context.Context)
 	Token       func(ctx context.Context, client, result, reason string)
+	// Rehash replaces the hash old of the client id by new, the same secret
+	// at the current cost (store.RehashAPIClient, Q118); nil, a hash of
+	// another cost stays.
+	Rehash func(ctx context.Context, id, old, new string) error
 	// Writer writes the resources; nil, the API serves /token alone.
 	Writer Writer
 	// Wrote, nil for none, is told of each write done: the audit (admin.write),
@@ -77,6 +82,12 @@ type API struct {
 	o     Options
 	mux   *http.ServeMux
 	limit *rateLimiter
+	// bcrypt bounds the bcrypts at once, one per processor: 100 requests of
+	// /token on a client of cost 13 held sixteen cores 4 s, the pages with
+	// them (revue R34).
+	bcrypt chan struct{}
+	// rehashing are the clients whose secret is being hashed again.
+	rehashing sync.Map
 	// routes are the patterns served, for the test that compares them with
 	// the OpenAPI document.
 	routes []string
@@ -88,7 +99,7 @@ func New(o Options) (*API, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	a := &API{o: o, mux: http.NewServeMux(), limit: newRateLimiter(o.RatePerMinute)}
+	a := &API{o: o, mux: http.NewServeMux(), limit: newRateLimiter(o.RatePerMinute), bcrypt: make(chan struct{}, runtime.GOMAXPROCS(0))}
 	a.route("POST "+Prefix+"/token", http.HandlerFunc(a.token))
 	a.mux.HandleFunc(Prefix+"/", a.notFound)
 	if err := a.registerDocs(); err != nil {
@@ -241,9 +252,19 @@ func (a *API) token(w http.ResponseWriter, r *http.Request) {
 	if known {
 		hash = client.SecretHash
 	}
-	if !secretMatches(hash, req.clientSecret) || !known {
+	select {
+	case a.bcrypt <- struct{}{}:
+	case <-r.Context().Done():
+		return // the client left while its turn came
+	}
+	matches := secretMatches(hash, req.clientSecret)
+	<-a.bcrypt
+	if !matches || !known {
 		refuse(http.StatusUnauthorized, "invalid_client", "Invalid client credentials.")
 		return
+	}
+	if a.o.Rehash != nil && domain.NeedsRehash(client.SecretHash) {
+		a.rehash(r.Context(), client, req.clientSecret)
 	}
 	granted := client.Scopes
 	if requested := strings.Fields(req.scope); len(requested) > 0 {
@@ -275,6 +296,44 @@ func (a *API) token(w http.ResponseWriter, r *http.Request) {
 		"expires_in":   int64(a.o.TokenTTL / time.Second),
 		"scope":        strings.Join(granted, " "),
 	})
+}
+
+// rehashTimeout bounds the hash and the write of a rehash.
+const rehashTimeout = 10 * time.Second
+
+// rehash hashes again, at the current cost, the secret of the client a token
+// was just granted to, whose hash has another cost: one of Symfony, at 13
+// (Q118). The time of /token then no longer tells an imported client from an
+// unknown id. In the background, once per client at a time, among the bcrypts
+// of a.bcrypt; a failure is logged and the token stays.
+func (a *API) rehash(ctx context.Context, c store.APIClient, secret string) {
+	if _, busy := a.rehashing.LoadOrStore(c.ID, true); busy {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		defer a.rehashing.Delete(c.ID)
+		ctx, cancel := context.WithTimeout(ctx, rehashTimeout)
+		defer cancel()
+		select {
+		case a.bcrypt <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		hash, err := domain.HashSecret(secret)
+		<-a.bcrypt
+		if err == nil {
+			err = a.o.Rehash(ctx, c.ID, c.SecretHash, hash)
+		}
+		if a.o.Logger == nil {
+			return
+		}
+		if err != nil {
+			a.o.Logger.WarnContext(ctx, "admin.rehash_failed", "client_id", c.ID, "cause", err.Error())
+			return
+		}
+		a.o.Logger.InfoContext(ctx, "admin.secret_rehashed", "client_id", c.ID)
+	}()
 }
 
 // callerKey keys the caller of a request in its context.

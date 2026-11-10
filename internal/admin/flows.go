@@ -132,7 +132,7 @@ func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error)
 	for i, entry := range entries {
 		path := fmt.Sprintf("steps[%d]", i)
 		var e body
-		if kind(entry) != "array" || json.Unmarshal(entry, &e) != nil || e == nil || strings.HasPrefix(strings.TrimSpace(string(entry)), "[") {
+		if kind(entry) != "object" || json.Unmarshal(entry, &e) != nil || e == nil {
 			v = append(v, domain.Violation{Field: path, Message: "is not an object"})
 			continue
 		}

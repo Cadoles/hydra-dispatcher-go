@@ -57,6 +57,7 @@ x-shared-responses:
     "415": { $ref: "#/components/responses/UnsupportedMediaType" }
     "422": { $ref: "#/components/responses/Invalid" }
     "429": { $ref: "#/components/responses/RateLimited" }
+    "500": { $ref: "#/components/responses/ServerError" }
   deletes: &deletes
     "204": { description: 'Deleted.' }
     "401": { $ref: "#/components/responses/Unauthorized" }
@@ -64,6 +65,7 @@ x-shared-responses:
     "404": { $ref: "#/components/responses/NotFound" }
     "409": { $ref: "#/components/responses/Conflict" }
     "429": { $ref: "#/components/responses/RateLimited" }
+    "500": { $ref: "#/components/responses/ServerError" }
   settingsWrites: &settingsWrites
     "200":
       description: The document of the settings, as written.
@@ -77,6 +79,7 @@ x-shared-responses:
     "415": { $ref: "#/components/responses/UnsupportedMediaType" }
     "422": { $ref: "#/components/responses/Invalid" }
     "429": { $ref: "#/components/responses/RateLimited" }
+    "500": { $ref: "#/components/responses/ServerError" }
   emulatedWrites: &emulatedWrites
     "200":
       description: Where the app sends the browser.
@@ -201,6 +204,7 @@ paths:
         "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "422": { $ref: "#/components/responses/Invalid" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/ServerError" }
   /admin/v1/apps/{id}:
     parameters: [{ $ref: "#/components/parameters/id" }]
     get:
@@ -296,6 +300,7 @@ paths:
         "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "422": { $ref: "#/components/responses/Invalid" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/ServerError" }
   /admin/v1/flows/{id}:
     parameters: [{ $ref: "#/components/parameters/id" }]
     get:
@@ -390,6 +395,7 @@ paths:
         "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "422": { $ref: "#/components/responses/Invalid" }
         "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/ServerError" }
   /admin/v1/oauth2-clients/{id}:
     parameters: [{ $ref: "#/components/parameters/id" }]
     get:
@@ -815,6 +821,14 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
     Conflict:
       description: An id taken, or an app a flow has as a step.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ServerError:
+      description: |
+        A write that failed for a cause of the dispatcher's own (the database
+        out of reach, a lock that waited too long), logged as
+        admin.write_failed; the detail names only the trace.
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }

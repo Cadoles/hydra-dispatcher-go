@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,40 +24,70 @@ var YAML []byte
 func JSON() ([]byte, error) { return toJSON(YAML) }
 
 func toJSON(data []byte) ([]byte, error) {
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var root, more yaml.Node
+	if err := dec.Decode(&root); err != nil {
 		return nil, err
 	}
+	// A second document would be left out without a word (revue R36).
+	if err := dec.Decode(&more); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("openapi.yaml: one document, not more (%v)", err)
+	}
+	c := converter{path: map[*yaml.Node]bool{}}
 	var b bytes.Buffer
-	if err := writeJSON(&b, &root); err != nil {
+	if err := c.writeJSON(&b, &root); err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil
 }
 
-func writeJSON(b *bytes.Buffer, n *yaml.Node) error {
+// converter writes a YAML node in JSON; path holds the mappings and
+// sequences being written, so that an alias to one of them, which would
+// write it inside itself without end, is an error rather than an overflow of
+// the stack (revue R36).
+type converter struct {
+	path map[*yaml.Node]bool
+}
+
+func (c converter) enter(n *yaml.Node) error {
+	if c.path[n] {
+		return fmt.Errorf("openapi.yaml line %d: an alias to a node that holds it", n.Line)
+	}
+	c.path[n] = true
+	return nil
+}
+
+func (c converter) writeJSON(b *bytes.Buffer, n *yaml.Node) error {
 	switch n.Kind {
 	case yaml.DocumentNode:
 		if len(n.Content) != 1 {
 			return errors.New("openapi.yaml: one document")
 		}
-		return writeJSON(b, n.Content[0])
+		return c.writeJSON(b, n.Content[0])
 	case yaml.AliasNode:
-		return writeJSON(b, n.Alias)
+		return c.writeJSON(b, n.Alias)
+	}
+	if n.Kind == yaml.SequenceNode || n.Kind == yaml.MappingNode {
+		if err := c.enter(n); err != nil {
+			return err
+		}
+		defer delete(c.path, n)
+	}
+	switch n.Kind {
 	case yaml.SequenceNode:
 		b.WriteByte('[')
 		for i, item := range n.Content {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			if err := writeJSON(b, item); err != nil {
+			if err := c.writeJSON(b, item); err != nil {
 				return err
 			}
 		}
 		b.WriteByte(']')
 		return nil
 	case yaml.MappingNode:
-		pairs, err := mappingPairs(n)
+		pairs, err := c.mappingPairs(n)
 		if err != nil {
 			return err
 		}
@@ -68,7 +99,7 @@ func writeJSON(b *bytes.Buffer, n *yaml.Node) error {
 			key, _ := json.Marshal(p.key)
 			b.Write(key)
 			b.WriteByte(':')
-			if err := writeJSON(b, p.value); err != nil {
+			if err := c.writeJSON(b, p.value); err != nil {
 				return err
 			}
 		}
@@ -95,8 +126,9 @@ type pair struct {
 }
 
 // mappingPairs gives the keys of a mapping in their order, those of a merge
-// (<<) after them, unless the mapping sets them itself.
-func mappingPairs(n *yaml.Node) ([]pair, error) {
+// (<<) after them, unless the mapping sets them itself. A merge takes
+// mappings alone: a list of anything else was read as pairs (revue R36).
+func (c converter) mappingPairs(n *yaml.Node) ([]pair, error) {
 	var pairs, merged []pair
 	seen := map[string]bool{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
@@ -110,7 +142,14 @@ func mappingPairs(n *yaml.Node) ([]pair, error) {
 				for src.Kind == yaml.AliasNode {
 					src = src.Alias
 				}
-				more, err := mappingPairs(src)
+				if src.Kind != yaml.MappingNode {
+					return nil, fmt.Errorf("openapi.yaml line %d: a merge (<<) of something else than a mapping", src.Line)
+				}
+				if err := c.enter(src); err != nil {
+					return nil, err
+				}
+				more, err := c.mappingPairs(src)
+				delete(c.path, src)
 				if err != nil {
 					return nil, err
 				}

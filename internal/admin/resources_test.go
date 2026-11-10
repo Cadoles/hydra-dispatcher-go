@@ -32,6 +32,8 @@ type fakeWriter struct {
 	clients  []store.APIClient
 	settings map[string]json.RawMessage // the last UpdateSettings
 	authors  []string
+	// fail fails CreateApp, as the database out of reach would.
+	fail error
 }
 
 func (f *fakeWriter) publish() {
@@ -45,6 +47,9 @@ func (f *fakeWriter) by(by string) {
 }
 
 func (f *fakeWriter) CreateApp(_ context.Context, by string, a store.App) error {
+	if f.fail != nil {
+		return f.fail
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if v := domain.Collect(a.Check); v != nil {

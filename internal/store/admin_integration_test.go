@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
@@ -192,5 +194,42 @@ dispatcher:
 	}
 	if _, err := reader.Bootstrap(ctx, seed, Force, false); err == nil || !strings.Contains(err.Error(), "permission denied") {
 		t.Errorf("dry run as a reader: %v, want permission denied", err)
+	}
+}
+
+// Q118: the hash replaced while it is still the old one, without a change of
+// author; the instances told; a hash changed in between stays.
+func TestRehashAPIClient(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	old, err := bcrypt.GenerateFromPassword(domain.BcryptInput("s3cret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CreateAPIClient(ctx, "api_client:ci", APIClient{ID: "c", SecretHash: string(old), Scopes: []string{"admin:read"}}); err != nil {
+		t.Fatal(err)
+	}
+	notified := listener(t, p)
+	current, err := domain.HashSecret("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.RehashAPIClient(ctx, "c", string(old), current); err != nil {
+		t.Fatal(err)
+	}
+	if !notified(5 * time.Second) {
+		t.Error("the instances not told")
+	}
+	if c, _ := snapshot(t, p).APIClient("c"); c.SecretHash != current || author(t, p, "api_client", "c") != "api_client:ci" {
+		t.Errorf("client %+v, by %q", c, author(t, p, "api_client", "c"))
+	}
+	if err := p.RehashAPIClient(ctx, "c", string(old), current); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the hash changed meanwhile: %v", err)
+	}
+	if err := p.RehashAPIClient(ctx, "nobody", current, current); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown client: %v", err)
+	}
+	if err := p.RehashAPIClient(ctx, "c", current, "s3cret"); err == nil {
+		t.Error("a secret in clear taken for a hash")
 	}
 }

@@ -160,7 +160,7 @@ func serve(ctx context.Context, args []string) error {
 
 	var draining atomic.Bool
 	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker,
-		draining: draining.Load, theme: theme, adminKeys: adminKeys, adminWriter: writerOf(db)})
+		draining: draining.Load, theme: theme, adminKeys: adminKeys, adminWriter: writerOf(db), adminRehash: rehasherOf(db)})
 	if err != nil {
 		stop()
 		return err
@@ -447,11 +447,27 @@ const commitRefreshTimeout = 10 * time.Second
 // store.Postgres writes the resources of the admin API.
 var _ admin.Writer = (*store.Postgres)(nil)
 
+// The rehash of rehasherOf, which a type assertion would otherwise miss.
+var _ interface {
+	RehashAPIClient(ctx context.Context, id, old, new string) error
+} = (*store.Postgres)(nil)
+
 // writerOf is the writer of the admin API in db: store.Postgres; nil for a
 // store that does not write, the fake of the tests.
 func writerOf(db configStore) admin.Writer {
 	w, _ := db.(admin.Writer)
 	return w
+}
+
+// rehasherOf is the rehash of a client's secret by the store (Q118), nil when
+// the store does not write.
+func rehasherOf(db configStore) func(ctx context.Context, id, old, new string) error {
+	if r, ok := db.(interface {
+		RehashAPIClient(ctx context.Context, id, old, new string) error
+	}); ok {
+		return r.RehashAPIClient
+	}
+	return nil
 }
 
 // webhookCheck refuses a snapshot whose webhooks cannot be called
@@ -525,6 +541,9 @@ type services struct {
 	adminKeys *admin.Keys
 	// adminWriter writes its resources; nil, it serves /token alone.
 	adminWriter admin.Writer
+	// adminRehash hashes again a secret of another cost (Q118); nil without a
+	// store that writes.
+	adminRehash func(ctx context.Context, id, old, new string) error
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -658,6 +677,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 				s.audit.AdminRateLimited(c)
 			},
 			Token:  s.audit.Token,
+			Rehash: s.adminRehash,
 			Writer: s.adminWriter,
 			Wrote:  s.audit.Wrote,
 		})

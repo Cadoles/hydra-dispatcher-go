@@ -24,32 +24,37 @@ func clientOf(c store.APIClient) clientJSON {
 
 var clientFields = []string{"id", "secret", "scopes"}
 
-// applyClient writes the fields of b into c. A secret in clear is hashed, a
-// bcrypt hash taken as it is; absent from a PUT or a PATCH, the secret stays
-// (Q112), and so do the scopes (Q107); a client created without scopes has
-// none (Q111).
-func applyClient(b body, c *store.APIClient, mode writeMode) error {
+// secretHashOf is the hash of the secret b brings, "" when it brings none: a
+// secret in clear is hashed, a bcrypt hash taken as it is. It runs before the
+// write: bcrypt under the lock of the writes held the others (revue R35).
+func secretHashOf(b body, mode writeMode) (string, error) {
 	if err := b.unknown(clientFields); err != nil {
-		return err
+		return "", err
 	}
 	switch {
 	case b.has("secret") && !b.null("secret"):
 		secret, err := b.str("secret")
-		if err != nil {
-			return err
-		}
 		switch {
+		case err != nil:
+			return "", err
 		case secret == "":
-			return domain.Violations{{Field: "secret", Message: "is required"}}
+			return "", domain.Violations{{Field: "secret", Message: "is required"}}
 		case domain.IsHash(secret):
-			c.SecretHash = secret // the check bounds its cost
-		default:
-			if c.SecretHash, err = domain.HashSecret(secret); err != nil {
-				return err
-			}
+			return secret, nil // the check bounds its cost
 		}
+		return domain.HashSecret(secret)
 	case mode == create || b.null("secret"):
-		return domain.Violations{{Field: "secret", Message: "is required"}}
+		return "", domain.Violations{{Field: "secret", Message: "is required"}}
+	}
+	return "", nil
+}
+
+// applyClient writes the fields of b into c, the secret hashed by
+// secretHashOf; absent from a PUT or a PATCH, the secret stays (Q112), and so
+// do the scopes (Q107); a client created without scopes has none (Q111).
+func applyClient(b body, hash string, c *store.APIClient) error {
+	if hash != "" {
+		c.SecretHash = hash
 	}
 	if b.has("scopes") {
 		scopes, err := b.strs("scopes")
@@ -98,7 +103,11 @@ func (a *API) registerClients() {
 				return
 			}
 		}
-		if err := applyClient(b, &c, create); err != nil {
+		hash, err := secretHashOf(b, create)
+		if err == nil {
+			err = applyClient(b, hash, &c)
+		}
+		if err != nil {
 			a.fail(w, r, "", err)
 			return
 		}
@@ -117,13 +126,17 @@ func (a *API) registerClients() {
 			if err == nil {
 				err = checkPathID(b, id)
 			}
+			var hash string
+			if err == nil {
+				hash, err = secretHashOf(b, mode)
+			}
 			if err != nil {
 				a.fail(w, r, "", err)
 				return
 			}
 			var written store.APIClient
 			err = a.o.Writer.UpdateAPIClient(r.Context(), author(r), id, func(c *store.APIClient) error {
-				if err := applyClient(b, c, mode); err != nil {
+				if err := applyClient(b, hash, c); err != nil {
 					return err
 				}
 				written = *c

@@ -251,6 +251,9 @@ func TestIsHash(t *testing.T) {
 			t.Errorf("IsHash(%q) = %v", s, !want)
 		}
 	}
+	if !NeedsRehash(symfonyHash) || NeedsRehash(hash) || NeedsRehash("s3cret") || !NeedsRehash(costly(t, 13)) {
+		t.Error("NeedsRehash")
+	}
 	if SecretCostTooHigh("$2x$31$" + body) {
 		t.Error("SecretCostTooHigh of what is not a hash")
 	}

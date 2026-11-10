@@ -74,7 +74,9 @@ func readBody(w http.ResponseWriter, r *http.Request) (body, error) {
 	return b, nil
 }
 
-// kind names the JSON type of raw, as Symfony's messages do.
+// kind names the JSON type of raw, as Symfony's messages do, but for an
+// object: PHP calls it an array, and an object passed for a list then passed
+// the check of its type (revue R35).
 func kind(raw json.RawMessage) string {
 	switch t := bytes.TrimSpace(raw); {
 	case len(t) == 0:
@@ -82,7 +84,7 @@ func kind(raw json.RawMessage) string {
 	case t[0] == '"':
 		return "string"
 	case t[0] == '{':
-		return "array" // PHP's word for an object
+		return "object"
 	case t[0] == '[':
 		return "array"
 	case t[0] == 't' || t[0] == 'f':

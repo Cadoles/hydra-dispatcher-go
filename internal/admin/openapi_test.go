@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/elliptic"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -288,6 +289,23 @@ func TestOpenAPIRefuses(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer x")
 	if ok, _ := v.ValidateHttpRequest(req); ok {
 		t.Error("a request with an unknown field: valid")
+	}
+}
+
+// A write that fails for a cause of the dispatcher's own: a 500 the document
+// says, which names the trace and not the cause (revue R36).
+func TestOpenAPIServerError(t *testing.T) {
+	v := mustOpenAPI(t)
+	r := newResources(t)
+	r.writer.fail = errors.New("dial tcp 10.0.0.5:5432: connection refused")
+	w := r.do(r.all, http.MethodPost, "/admin/v1/apps", "", appBody)
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/apps", strings.NewReader(appBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+r.all)
+	resp := w.Result()
+	resp.Body = io.NopCloser(bytes.NewReader(w.Body.Bytes()))
+	if ok, errs := v.ValidateHttpResponse(req, resp); !ok || w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "10.0.0.5") {
+		t.Errorf("%d %s: %v", w.Code, w.Body, errs)
 	}
 }
 

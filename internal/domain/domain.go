@@ -426,6 +426,14 @@ func HashSecret(secret string) (string, error) {
 	return string(h), nil
 }
 
+// NeedsRehash tells whether hash, a bcrypt hash, has another cost than
+// HashSecret's: one of Symfony, at 13. The first token granted hashes its
+// secret again (Q118).
+func NeedsRehash(hash string) bool {
+	cost, err := bcrypt.Cost([]byte(hash))
+	return IsHash(hash) && err == nil && cost != bcrypt.DefaultCost
+}
+
 // SecretMatches tells whether secret is the one hash holds.
 // A hash of a cost over MaxSecretCost matches nothing, without being computed.
 func SecretMatches(hash, secret string) bool {

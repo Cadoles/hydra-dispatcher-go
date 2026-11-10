@@ -333,6 +333,27 @@ func (p *Postgres) APIClients(ctx context.Context) ([]APIClient, error) {
 	return clients, nil
 }
 
+// RehashAPIClient replaces the hash of the secret of the client id by new,
+// the same secret at the current cost (Q118), if the hash is still old: a
+// secret changed meanwhile stays. Neither updated_by nor updated_at change:
+// the client is the same. ErrNotFound when the client is gone or its hash
+// changed.
+func (p *Postgres) RehashAPIClient(ctx context.Context, id, old, new string) error {
+	if !domain.IsHash(new) {
+		return errors.New("rehash: not a bcrypt hash")
+	}
+	return p.write(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `UPDATE api_client SET secret_hash = $3 WHERE id = $1 AND secret_hash = $2`, id, old, new)
+		if err != nil {
+			return fmt.Errorf("rehash %s: %w", id, err)
+		}
+		if n, err := r.RowsAffected(); err != nil || n == 0 {
+			return cmpErr(err, ErrNotFound)
+		}
+		return nil
+	})
+}
+
 // DeleteAPIClient deletes the API client id: ErrNotFound when there is none.
 func (p *Postgres) DeleteAPIClient(ctx context.Context, id string) error {
 	return p.write(ctx, func(tx *sql.Tx) error {
