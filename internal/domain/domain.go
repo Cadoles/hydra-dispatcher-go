@@ -242,6 +242,13 @@ func (c APIClient) Check(fail Fail) {
 // hours (revue R33). Symfony hashes at 13 by default; HashSecret at 10.
 const MaxSecretCost = 14
 
+// IsHash tells whether s is a bcrypt hash: the admin API takes one as it is,
+// for the import of Symfony's clients, as Symfony did.
+func IsHash(s string) bool {
+	_, err := bcrypt.Cost([]byte(s))
+	return err == nil
+}
+
 // SecretCostTooHigh tells whether hash is a bcrypt hash of a cost over
 // MaxSecretCost, which SecretMatches never computes.
 func SecretCostTooHigh(hash string) bool {

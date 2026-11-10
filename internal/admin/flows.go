@@ -65,8 +65,8 @@ var (
 
 // applyFlow writes the fields of b into f, as mode says.
 func applyFlow(b body, f *store.Flow, mode writeMode) error {
-	if v := b.unknown(flowFields); v != nil {
-		return v
+	if err := b.unknown(flowFields); err != nil {
+		return err
 	}
 	if mode == replace {
 		f.Title, f.Description, f.IconURL, f.Enabled = map[string]string{}, map[string]string{}, nil, true
@@ -128,7 +128,7 @@ func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error)
 		had[s.AppID] = s.SubjectCheck
 	}
 	var steps []store.Step
-	var v domain.Violations
+	var v requestViolations
 	for i, entry := range entries {
 		path := fmt.Sprintf("steps[%d]", i)
 		var e body
@@ -156,7 +156,7 @@ func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error)
 			}
 			step.AppID = app
 		default:
-			v = append(v, domain.Violation{Field: path + ".app_id", Message: "is required"})
+			v = append(v, domain.Violation{Field: path + ".appId", Message: "is required"})
 		}
 		orderKey := "stepOrder"
 		if !e.has(orderKey) || e.null(orderKey) {
@@ -164,11 +164,11 @@ func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error)
 		}
 		switch position, ok, err := stepOrder(e[orderKey]); {
 		case !e.has(orderKey) || e.null(orderKey):
-			v = append(v, domain.Violation{Field: path + ".step_order", Message: "is required"})
+			v = append(v, domain.Violation{Field: path + ".stepOrder", Message: "is required"})
 		case err != nil:
 			return nil, err
 		case !ok:
-			v = append(v, domain.Violation{Field: path + "." + strings.ReplaceAll(orderKey, "O", "_o"), Message: "is not an integer"})
+			v = append(v, domain.Violation{Field: path + "." + orderKey, Message: "is not an integer"})
 		default:
 			step.Position = position
 		}

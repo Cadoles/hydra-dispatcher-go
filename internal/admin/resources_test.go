@@ -1,10 +1,13 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"crypto/elliptic"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -226,6 +229,7 @@ type resources struct {
 	flows   string
 	mu      sync.Mutex
 	wrote   []string
+	logs    bytes.Buffer
 }
 
 func newResources(t *testing.T) *resources {
@@ -243,6 +247,7 @@ func newResources(t *testing.T) *resources {
 		Keys: keys, Config: config, Issuer: issuer, TokenTTL: 15 * time.Minute,
 		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, RatePerMinute: 100000,
 		Writer: writer,
+		Logger: slog.New(slog.NewJSONHandler(&r.logs, nil)),
 		Wrote: func(_ context.Context, client, resource, id, method string, fields []string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -605,5 +610,173 @@ func TestFlows(t *testing.T) {
 	}
 	if got := decodeInto[[]flowJSON](t, r.do(r.reader, http.MethodGet, "/admin/v1/flows", "", "")); len(got) != 1 {
 		t.Errorf("collection: %+v", got)
+	}
+}
+
+// OAuth2ClientApiCreateTest and OAuth2ClientApiValidationTest of Symfony, and the
+// contract of the doc for the clients.
+func TestClients(t *testing.T) {
+	r := newResources(t)
+	w := r.do(r.all, http.MethodPost, "/admin/v1/oauth2-clients", "", `{"id": "ci", "secret": "s3cret"}`)
+	if got := strings.TrimSpace(w.Body.String()); w.Code != http.StatusCreated || got != `{"id":"ci","scopes":[]}` || w.Header().Get("Location") != "/admin/v1/oauth2-clients/ci" {
+		t.Fatalf("POST: %d %s", w.Code, got)
+	}
+	c, _ := r.writer.config.Snapshot().APIClient("ci")
+	if !domain.SecretMatches(c.SecretHash, "s3cret") || len(c.Scopes) != 0 {
+		t.Errorf("client written: %+v", c)
+	}
+	// A hash of Symfony, taken as it is for the import.
+	w = r.do(r.all, http.MethodPost, "/admin/v1/oauth2-clients", "", `{"id": "symfony", "secret": "`+clientHash()+`", "scopes": ["admin:read"]}`)
+	if c, _ := r.writer.config.Snapshot().APIClient("symfony"); w.Code != http.StatusCreated || c.SecretHash != clientHash() {
+		t.Errorf("hash: %d %s", w.Code, w.Body)
+	}
+	for name, tt := range map[string]struct {
+		method, path, body string
+		status             int
+		paths              []string
+	}{
+		"invalid id":        {"POST", "/admin/v1/oauth2-clients", `{"id": "a/b", "secret": "s"}`, 422, []string{"id"}},
+		"blank id":          {"POST", "/admin/v1/oauth2-clients", `{"id": "", "secret": "s"}`, 422, []string{"id"}},
+		"no secret":         {"POST", "/admin/v1/oauth2-clients", `{"id": "x"}`, 422, []string{"secret"}},
+		"empty secret":      {"POST", "/admin/v1/oauth2-clients", `{"id": "x", "secret": ""}`, 422, []string{"secret"}},
+		"hash of cost 31":   {"POST", "/admin/v1/oauth2-clients", `{"id": "x", "secret": "` + strings.Replace(clientHash(), "$04$", "$31$", 1) + `"}`, 422, []string{"secret"}},
+		"scope with space":  {"POST", "/admin/v1/oauth2-clients", `{"id": "x", "secret": "s", "scopes": ["admin flows"]}`, 422, []string{"scopes[0]"}},
+		"taken":             {"POST", "/admin/v1/oauth2-clients", `{"id": "ci", "secret": "s"}`, 409, nil},
+		"PATCH slash in id": {"PATCH", "/admin/v1/oauth2-clients/ci", `{"id": "a/b"}`, 422, []string{"id"}},
+		"PATCH blank id":    {"PATCH", "/admin/v1/oauth2-clients/ci", `{"id": ""}`, 422, []string{"id"}},
+		"secret null":       {"PATCH", "/admin/v1/oauth2-clients/ci", `{"secret": null}`, 422, []string{"secret"}},
+		"secret a number":   {"PATCH", "/admin/v1/oauth2-clients/ci", `{"secret": 42}`, 400, nil},
+		"groups of Symfony": {"PATCH", "/admin/v1/oauth2-clients/ci", `{"groups": []}`, 422, []string{"groups"}},
+	} {
+		w := r.do(r.all, tt.method, tt.path, "", tt.body)
+		if w.Code != tt.status {
+			t.Errorf("%s: %d, want %d: %s", name, w.Code, tt.status, w.Body)
+			continue
+		}
+		if tt.paths != nil && !slices.Equal(paths(t, w), tt.paths) {
+			t.Errorf("%s: paths %q", name, paths(t, w))
+		}
+	}
+	// PATCH of the scopes; PUT without secret nor scopes keeps both (Q107, Q112).
+	if w := r.do(r.all, http.MethodPatch, "/admin/v1/oauth2-clients/ci", "", `{"scopes": ["admin:apps", "admin:read"]}`); w.Code != http.StatusOK {
+		t.Fatalf("PATCH: %d %s", w.Code, w.Body)
+	}
+	before, _ := r.writer.config.Snapshot().APIClient("ci")
+	if w := r.do(r.all, http.MethodPut, "/admin/v1/oauth2-clients/ci", "", `{"id": "ci"}`); w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"id":"ci","scopes":["admin:apps","admin:read"]}` {
+		t.Errorf("PUT: %d %s", w.Code, w.Body)
+	}
+	if after, _ := r.writer.config.Snapshot().APIClient("ci"); after.SecretHash != before.SecretHash {
+		t.Error("PUT without secret changed it")
+	}
+	if w := r.do(r.all, http.MethodPut, "/admin/v1/oauth2-clients/ci", "", `{"secret": "n3w"}`); w.Code != http.StatusOK {
+		t.Errorf("PUT secret: %d", w.Code)
+	}
+	if after, _ := r.writer.config.Snapshot().APIClient("ci"); !domain.SecretMatches(after.SecretHash, "n3w") || len(after.Scopes) != 2 {
+		t.Errorf("PUT secret: %+v", after)
+	}
+	// Never the secret, never its hash.
+	for _, path := range []string{"/admin/v1/oauth2-clients", "/admin/v1/oauth2-clients/ci", "/admin/v1/oauth2-clients/symfony"} {
+		if w := r.do(r.reader, http.MethodGet, path, "", ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "$2") || strings.Contains(w.Body.String(), "secret") {
+			t.Errorf("GET %s: %d %s", path, w.Code, w.Body)
+		}
+	}
+	// Q96: only admin:clients writes a client; admin:flows reads none.
+	if w := r.do(r.flows, http.MethodGet, "/admin/v1/oauth2-clients", "", ""); w.Code != http.StatusForbidden {
+		t.Errorf("admin:flows reads the clients: %d", w.Code)
+	}
+	if w := r.do(r.reader, http.MethodPost, "/admin/v1/oauth2-clients", "", `{"id": "x", "secret": "s"}`); w.Code != http.StatusForbidden {
+		t.Errorf("admin:read creates a client: %d", w.Code)
+	}
+	// DELETE deletes, where Symfony answered 204 and kept the client (Q95).
+	if w := r.do(r.all, http.MethodDelete, "/admin/v1/oauth2-clients/ci", "", ""); w.Code != http.StatusNoContent {
+		t.Errorf("DELETE: %d", w.Code)
+	}
+	if _, ok := r.writer.config.Snapshot().APIClient("ci"); ok {
+		t.Error("client still there")
+	}
+	r.mu.Lock()
+	audit := strings.Join(r.wrote, "\n")
+	r.mu.Unlock()
+	if strings.Contains(audit, "s3cret") || strings.Contains(audit, "n3w") || !strings.Contains(audit, "all PUT oauth2-clients ci secret") {
+		t.Errorf("audit:\n%s", audit)
+	}
+}
+
+// DispatcherSettingsApiTest of Symfony, and the document of Q105.
+func TestSettings(t *testing.T) {
+	r := newResources(t)
+	w := r.do(r.reader, http.MethodGet, "/admin/v1/settings", "", "")
+	want := `{"appAutoSelect":false,"consentAutoAccept":false,"aggregateAmrFromLoginRequest":false,"challengeTtl":3600,"remember":true,` +
+		`"loginRememberFor":86400,"consentRememberFor":2629800,"loginAcceptWebhookUrl":null,"consentAcceptWebhookUrl":null,` +
+		`"supportedLocales":["fr","en"],"defaultLocale":"fr","fallbackLocale":"en"}`
+	if got := strings.TrimSpace(w.Body.String()); w.Code != http.StatusOK || got != want {
+		t.Fatalf("GET: %d\n%s\nwant\n%s", w.Code, got, want)
+	}
+	for _, method := range []string{http.MethodPatch, http.MethodPut} {
+		r.writer.settings = nil
+		w := r.do(r.all, method, "/admin/v1/settings", "", `{"id": 1, "appAutoSelect": true, "sessionTtl": 1800, "hydraPublicUrl": "http://public", "adminAuthorizedHosts": [], "loginAcceptWebhookUrl": null}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", method, w.Code, w.Body)
+		}
+		got := map[string]string{}
+		for k, v := range r.writer.settings {
+			got[k] = string(v)
+		}
+		if want := map[string]string{"app_auto_select": "true", "login_remember_for": "1800", "login_accept_webhook_url": "null"}; !maps.Equal(got, want) {
+			t.Errorf("%s: written %v, want %v", method, got, want)
+		}
+	}
+	if !strings.Contains(r.logs.String(), `"msg":"admin.settings_ignored","fields":["adminAuthorizedHosts","hydraPublicUrl","id"]`) {
+		t.Errorf("logs: %s", r.logs.String())
+	}
+	for name, tt := range map[string]struct {
+		body   string
+		status int
+		paths  []string
+	}{
+		"both TTLs":           {`{"sessionTtl": 1800, "loginRememberFor": 3600}`, 422, []string{"sessionTtl"}},
+		"unknown":             {`{"apAutoSelect": true}`, 422, []string{"apAutoSelect"}},
+		"in snake_case":       {`{"app_auto_select": true}`, 422, []string{"app_auto_select"}},
+		"int as a string":     {`{"challengeTtl": "abc"}`, 400, nil},
+		"locales as a string": {`{"supportedLocales": "fr"}`, 400, nil},
+		"bool as an int":      {`{"remember": 1}`, 400, nil},
+	} {
+		w := r.do(r.all, http.MethodPatch, "/admin/v1/settings", "", tt.body)
+		if w.Code != tt.status {
+			t.Errorf("%s: %d, want %d: %s", name, w.Code, tt.status, w.Body)
+			continue
+		}
+		if tt.paths != nil && !slices.Equal(paths(t, w), tt.paths) {
+			t.Errorf("%s: paths %q", name, paths(t, w))
+		}
+	}
+	if w := r.do(r.all, http.MethodPatch, "/admin/v1/settings", "", `{"sessionTtl": 1800, "loginRememberFor": 1800}`); w.Code != http.StatusOK {
+		t.Errorf("both TTLs equal: %d", w.Code)
+	}
+	if w := r.do(r.flows, http.MethodGet, "/admin/v1/settings", "", ""); w.Code != http.StatusForbidden {
+		t.Errorf("admin:flows reads the settings: %d", w.Code)
+	}
+	if w := r.do(r.reader, http.MethodPatch, "/admin/v1/settings", "", `{"remember": false}`); w.Code != http.StatusForbidden {
+		t.Errorf("admin:read writes the settings: %d", w.Code)
+	}
+	if w := r.do(r.all, http.MethodDelete, "/admin/v1/settings", "", ""); w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD, PUT, PATCH" {
+		t.Errorf("DELETE /settings: %d %v", w.Code, w.Header())
+	}
+}
+
+// The violations of the store, under their keys in snake_case, come out in
+// camelCase, and a configuration refused names its setting.
+func TestViolationPaths(t *testing.T) {
+	for in, want := range map[string]string{
+		"login_url": "loginUrl", "steps[1].subject_check": "steps[1].subjectCheck", "receive_claims[0]": "receiveClaims[0]",
+		"id": "id", "": "", "challenge_ttl": "challengeTtl", "login_accept_webhook_url": "loginAcceptWebhookUrl",
+	} {
+		if got := camel(in); got != want {
+			t.Errorf("camel(%q) = %q, want %q", in, got, want)
+		}
+	}
+	v := refusedViolations(fmt.Errorf("%w\n%w", fmt.Errorf("setting login_accept_webhook_url: is in http://, which needs tls.allow_http"), fmt.Errorf("read apps: boom")))
+	if len(v) != 2 || v[0].Field != "login_accept_webhook_url" || v[1].Field != "" {
+		t.Errorf("refused: %+v", v)
 	}
 }

@@ -174,12 +174,15 @@ func (b body) strs(field string) ([]string, error) {
 // unknown refuses the fields of the body that are none of known, nor of
 // ignored, the read-only fields of the representation and those of Symfony
 // left out (Q110).
-func (b body) unknown(known []string, ignored ...string) domain.Violations {
-	var v domain.Violations
+func (b body) unknown(known []string, ignored ...string) error {
+	var v requestViolations
 	for _, field := range slices.Sorted(maps.Keys(b)) {
 		if !slices.Contains(known, field) && !slices.Contains(ignored, field) {
 			v = append(v, domain.Violation{Field: field, Message: "is not a field of this resource"})
 		}
+	}
+	if v == nil {
+		return nil
 	}
 	return v
 }

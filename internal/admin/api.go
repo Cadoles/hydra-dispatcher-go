@@ -90,6 +90,8 @@ func New(o Options) *API {
 	if o.Writer != nil {
 		a.registerApps()
 		a.registerFlows()
+		a.registerClients()
+		a.registerSettings()
 	}
 	return a
 }

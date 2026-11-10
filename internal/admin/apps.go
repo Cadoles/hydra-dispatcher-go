@@ -56,8 +56,8 @@ const (
 // applyApp writes the fields of b into a, as mode says; a null field takes its
 // default.
 func applyApp(b body, a *store.App, mode writeMode) error {
-	if v := b.unknown(appFields); v != nil {
-		return v
+	if err := b.unknown(appFields); err != nil {
+		return err
 	}
 	if mode == replace {
 		a.LoginURL, a.ConsentURL, a.LogoutURL, a.Method = "", "", "", ""
@@ -91,7 +91,7 @@ func applyApp(b body, a *store.App, mode writeMode) error {
 		}
 		prefixes, err := domain.ParsePrefixes(sources)
 		if err != nil {
-			return domain.Violations{{Field: "allowed_sources", Message: err.Error()}}
+			return requestViolations{{Field: "allowedSources", Message: err.Error()}}
 		}
 		a.AllowedSources = nil
 		if len(prefixes) > 0 {

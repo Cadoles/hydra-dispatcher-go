@@ -52,13 +52,23 @@ func writeProblemBody(w http.ResponseWriter, p problem) {
 	_ = json.NewEncoder(w).Encode(p)
 }
 
+// requestViolations are violations of the request itself, their paths those of
+// the API as the client wrote them; domain.Violations, those of the domain and
+// of the settings, have paths in snake_case, written in camelCase.
+type requestViolations domain.Violations
+
+func (v requestViolations) Error() string { return domain.Violations(v).Error() }
+
 // writeViolations answers 422, each violation under the path of its field in
-// camelCase (Q94).
-func writeViolations(w http.ResponseWriter, v domain.Violations) {
+// camelCase (Q94), converted from the domain's unless asIs.
+func writeViolations(w http.ResponseWriter, v domain.Violations, asIs bool) {
 	p := problem{Type: "/validation_errors", Title: "An error occurred", Status: http.StatusUnprocessableEntity}
 	var lines []string
 	for _, x := range v {
-		path := camel(x.Field)
+		path := x.Field
+		if !asIs {
+			path = camel(path)
+		}
 		p.Violations = append(p.Violations, violation{PropertyPath: path, Message: x.Message})
 		if path == "" {
 			lines = append(lines, x.Message)
@@ -112,16 +122,19 @@ func refusedViolations(err error) domain.Violations {
 // the log with the trace id.
 func (a *API) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
 	var he *httpError
+	var rv requestViolations
 	var v domain.Violations
 	var ref *store.ReferencedError
 	var refused *store.RefusedError
 	switch {
 	case errors.As(err, &he):
 		writeProblem(w, he.status, he.detail)
+	case errors.As(err, &rv):
+		writeViolations(w, domain.Violations(rv), true)
 	case errors.As(err, &v):
-		writeViolations(w, v)
+		writeViolations(w, v, false)
 	case errors.As(err, &refused):
-		writeViolations(w, refusedViolations(refused.Err))
+		writeViolations(w, refusedViolations(refused.Err), false)
 	case errors.Is(err, store.ErrNotFound):
 		writeProblem(w, http.StatusNotFound, "Not Found")
 	case errors.Is(err, store.ErrExists):
