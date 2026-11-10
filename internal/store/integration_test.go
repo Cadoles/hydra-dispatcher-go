@@ -468,6 +468,7 @@ func TestSnapshotCollation(t *testing.T) {
 		exec(t, p, `INSERT INTO app (id, login_url, consent_url, method) VALUES ($1, 'http://a', 'http://a', 'pwd')`, id)
 		exec(t, p, `INSERT INTO flow (id) VALUES ($1)`, id)
 		exec(t, p, `INSERT INTO flow_step (flow_id, app_id, position) VALUES ($1, $1, 0)`, id)
+		exec(t, p, `INSERT INTO api_client (id, secret_hash, scopes) VALUES ($1, 'x', '{admin:read}')`, id)
 	}
 	s, err := p.Snapshot(ctx)
 	if err != nil {
@@ -481,8 +482,15 @@ func TestSnapshotCollation(t *testing.T) {
 			t.Errorf("flow %s: steps %+v", f.ID, f.Steps)
 		}
 	}
-	if !slices.Equal(apps, want) || !slices.Equal(flows, want) {
-		t.Errorf("apps %q, flows %q; want %q", apps, flows, want)
+	var clients []string
+	for _, c := range s.APIClients {
+		clients = append(clients, c.ID)
+		if got, ok := s.APIClient(c.ID); !ok || !slices.Equal(got.Scopes, []string{"admin:read"}) {
+			t.Errorf("client %s: %+v", c.ID, got)
+		}
+	}
+	if !slices.Equal(apps, want) || !slices.Equal(flows, want) || !slices.Equal(clients, want) {
+		t.Errorf("apps %q, flows %q, clients %q; want %q", apps, flows, clients, want)
 	}
 }
 

@@ -526,6 +526,12 @@ func TestIdentifiedWarnings(t *testing.T) {
 	if _, err := (identified{Source: &fakeStore{snapshotErr: errors.New("down")}}).Snapshot(context.Background()); err == nil {
 		t.Error("the source's error lost")
 	}
+	// An API client with a scope of Symfony the admin API does not know (Q96).
+	clients := store.NewSnapshot(nil, nil, store.DefaultSettings()).WithAPIClients([]store.APIClient{{ID: "c", Scopes: []string{"admin:config"}}})
+	if s, err := (identified{Source: snapshotSource{clients}}).Snapshot(context.Background()); err != nil ||
+		!slices.ContainsFunc(s.Warnings, func(w string) bool { return strings.HasPrefix(w, "API client c: scopes admin:config grant nothing") }) {
+		t.Errorf("warnings %q, err %v", s.Warnings, err)
+	}
 }
 
 // A webhook that could not be called refuses the snapshot, at startup as later on

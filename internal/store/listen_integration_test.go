@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
 // lockedBuffer is a buffer for the logs of several goroutines.
@@ -114,6 +116,25 @@ func TestListen(t *testing.T) {
 	}
 	if !within(time.Second, func() bool { _, ok := other.live.Snapshot().App("a"); return !ok }) {
 		t.Error("a write after the reconnection was not seen within 1 s")
+	}
+
+	// An API client created, then deleted, shows and goes on the other instance
+	// within a second: the admin API reads it there at each request (Q101).
+	hash, err := domain.HashSecret("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CreateAPIClient(ctx, "cli", APIClient{ID: "c", SecretHash: hash, Scopes: []string{"admin:apps"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !within(time.Second, func() bool { c, ok := other.live.Snapshot().APIClient("c"); return ok && c.SecretHash == hash }) {
+		t.Error("the client created was not seen within 1 s")
+	}
+	if err := p.DeleteAPIClient(ctx, "c"); err != nil {
+		t.Fatal(err)
+	}
+	if !within(time.Second, func() bool { _, ok := other.live.Snapshot().APIClient("c"); return !ok }) {
+		t.Error("the client deleted was still seen after 1 s")
 	}
 }
 

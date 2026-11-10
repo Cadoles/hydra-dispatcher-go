@@ -403,7 +403,8 @@ func startConfig(ctx context.Context, cfg *config.Config, db configStore, logs l
 // identification against security.emulated_api_authorized_hosts, which the
 // store does not know (emulated.Warnings), that of a webhook run as a local
 // program while secrets come from the environment (webhook.ProgramWarnings),
-// and those of the locales the theme has no catalog for (Q92).
+// those of the locales the theme has no catalog for (Q92), and those of the scopes
+// of API clients the admin API does not know (Q96).
 type identified struct {
 	store.Source
 	hosts     []netip.Prefix
@@ -427,6 +428,7 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	c := *s
 	c.Warnings = append(slices.Clip(s.Warnings), emulated.Warnings(s.Apps, i.hosts)...)
 	c.Warnings = append(c.Warnings, webhook.ProgramWarnings(s.Settings, i.secrets)...)
+	c.Warnings = append(c.Warnings, admin.Warnings(s.APIClients)...)
 	if i.theme != nil {
 		c.Warnings = append(c.Warnings, front.LocaleWarnings(i.theme, s.Settings)...)
 	}

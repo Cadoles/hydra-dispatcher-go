@@ -56,6 +56,12 @@ func Open(ctx context.Context, dsn string) (*Postgres, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store.dsn: %w", err)
 	}
+	// Each statement described, none kept prepared: a migration that changes
+	// the type of a column the snapshot reads (00004, api_client.id) would
+	// otherwise fail the next read of every instance with a statement cached
+	// before it ("cached plan must not change result type"). The configuration
+	// is read every 60 s and written rarely: the round trip it costs is nothing.
+	cfg.DefaultQueryExecMode = pgx.QueryExecModeDescribeExec
 	db := stdlib.OpenDB(*cfg)
 	// The configuration is read every 60 s and written by bootstrap and the
 	// admin: a few connections are plenty.
@@ -171,11 +177,15 @@ type Snapshot struct {
 	Apps     []App
 	Flows    []Flow
 	Settings Settings
+	// APIClients are the clients of the admin API, by id in byte order:
+	// the admin API reads them at each request (Q101).
+	APIClients []APIClient
 	// Warnings are what this version sets aside of the setting table:
 	// unknown keys, locales without a catalog. serve adds those of the apps'
 	// identification on the emulated API (emulated.Warnings).
 	Warnings []string
 	apps     map[string]int
+	clients  map[string]int
 }
 
 // NewSnapshot returns the snapshot of apps, flows and settings read
@@ -195,6 +205,28 @@ func (s *Snapshot) index() {
 	for i, a := range s.Apps {
 		s.apps[a.ID] = i
 	}
+	s.clients = make(map[string]int, len(s.APIClients))
+	for i, c := range s.APIClients {
+		s.clients[c.ID] = i
+	}
+}
+
+// WithAPIClients returns a copy of s with clients as its API clients, sorted
+// by id in byte order (tests, other sources).
+func (s *Snapshot) WithAPIClients(clients []APIClient) *Snapshot {
+	c := *s
+	c.APIClients = slices.SortedFunc(slices.Values(clients), func(a, b APIClient) int { return strings.Compare(a.ID, b.ID) })
+	c.index()
+	return &c
+}
+
+// APIClient returns the API client id.
+func (s *Snapshot) APIClient(id string) (APIClient, bool) {
+	i, ok := s.clients[id]
+	if !ok {
+		return APIClient{}, false
+	}
+	return s.APIClients[i], true
 }
 
 // App returns the app id.
@@ -211,8 +243,8 @@ type querier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// Snapshot reads the whole configuration, in a read-only transaction that
-// sees one state of the tables.
+// Snapshot reads the whole configuration, API clients included, in a
+// read-only transaction that sees one state of the tables.
 func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
@@ -228,6 +260,9 @@ func readSnapshot(ctx context.Context, q querier) (*Snapshot, error) {
 	s := &Snapshot{}
 	if s.Apps, err = readApps(ctx, q); err != nil {
 		return nil, fmt.Errorf("read apps: %w", err)
+	}
+	if s.APIClients, err = readAPIClients(ctx, q); err != nil {
+		return nil, fmt.Errorf("read API clients: %w", err)
 	}
 	s.index()
 	if s.Flows, err = readFlows(ctx, q); err != nil {
