@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -35,6 +36,9 @@ func Write(w io.Writer, snap *store.Snapshot, want map[string]bool, o Options, h
 	if err != nil {
 		return err
 	}
+	if err := escape(doc.Content[1], "dispatcher"); err != nil {
+		return err
+	}
 	for _, line := range header {
 		if _, err := fmt.Fprintln(w, "# "+line); err != nil {
 			return err
@@ -46,6 +50,37 @@ func Write(w io.Writer, snap *store.Snapshot, want map[string]bool, o Options, h
 		return err
 	}
 	return enc.Close()
+}
+
+// escape makes each value under n read back as written. The loader replaces a
+// reference to a variable, a dollar and a brace, by the environment in any
+// value of the seed, and reads a doubled dollar before the brace as the
+// literal: a value of the database naming the home directory, or the
+// challenge key that an API client may write into a title, came back expanded
+// (revue R37). Each such reference gets its dollar doubled, the exact inverse
+// of the loader. Symfony's %env( has no escape, and the loader refuses it:
+// the field is named. The keys, locales of a map, are not expanded.
+func escape(n *yaml.Node, path string) error {
+	switch n.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if err := escape(n.Content[i+1], path+"."+n.Content[i].Value); err != nil {
+				return err
+			}
+		}
+	case yaml.SequenceNode:
+		for i, item := range n.Content {
+			if err := escape(item, fmt.Sprintf("%s[%d]", path, i)); err != nil {
+				return err
+			}
+		}
+	case yaml.ScalarNode:
+		if strings.Contains(n.Value, "%env(") {
+			return fmt.Errorf("%s holds %%env(, which a seed cannot hold: the loader refuses it, and it has no escape; correct it first", path)
+		}
+		n.Value = strings.ReplaceAll(n.Value, "${", "$${")
+	}
+	return nil
 }
 
 type app struct {

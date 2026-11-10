@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -112,17 +113,43 @@ func usage(w io.Writer) {
 // error. No subcommand takes an argument: one is refused rather than ignored
 // (serve dispatcher.yaml would run without its file).
 func parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
+	if err := boolValues(fs, args); err != nil {
+		return false, err
+	}
 	switch err := fs.Parse(args); {
 	case errors.Is(err, flag.ErrHelp):
 		return true, nil
 	case err != nil:
 		return false, errUsage
 	case fs.NArg() > 0:
-		fmt.Fprintf(fs.Output(), "unexpected argument %q\n", fs.Arg(0))
+		// Not quoted: a password given as Symfony's commands took it
+		// (admin create alice S3cret!) would land in the logs (revue R37).
+		fmt.Fprintln(fs.Output(), "an argument too many, not printed: values go in flags, and a password or a secret never in an argument")
 		fs.Usage()
 		return false, errUsage
 	}
 	return false, nil
+}
+
+// boolValues refuses a value given to a boolean flag, as -password=S3cret!:
+// the flag package would quote it in its error (revue R37).
+func boolValues(fs *flag.FlagSet, args []string) error {
+	for _, a := range args {
+		if a == "--" {
+			return nil
+		}
+		name, _, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if !strings.HasPrefix(a, "-") || !hasValue {
+			continue
+		}
+		if f := fs.Lookup(name); f != nil {
+			if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+				fmt.Fprintf(fs.Output(), "-%s takes no value, and the one given is not printed\n", name)
+				return errUsage
+			}
+		}
+	}
+	return nil
 }
 
 // healthcheck lets a distroless image (no shell, no curl) run a HEALTHCHECK.

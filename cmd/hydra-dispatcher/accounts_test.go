@@ -147,10 +147,11 @@ func TestClientCommands(t *testing.T) {
 		"create, an id refused": {
 			args: []string{"client", "create", ".ci"}, err: errFailed, stderr: `API client ".ci": id: ".ci" is not an id`,
 		},
-		"create, no id":           {args: []string{"client", "create"}, err: errUsage, stderr: "missing the client id"},
-		"create, two ids":         {args: []string{"client", "create", "a", "b"}, err: errUsage, stderr: `unexpected argument "b"`},
-		"create, a secret twice":  {args: []string{"client", "create", "ci", "-secret-stdin", "-secret-file", secretFile}, err: errUsage},
-		"create, -secret refused": {args: []string{"client", "create", "ci", "-secret", "s3cret"}, err: errUsage},
+		"create, no id":                  {args: []string{"client", "create"}, err: errUsage, stderr: "missing the client id"},
+		"create, two ids":                {args: []string{"client", "create", "a", "b"}, err: errUsage, stderr: "an argument too many, not printed"},
+		"update, a value to -new-secret": {args: []string{"client", "update", "ci", "-new-secret=s3cret"}, err: errUsage, stderr: "-new-secret takes no value"},
+		"create, a secret twice":         {args: []string{"client", "create", "ci", "-secret-stdin", "-secret-file", secretFile}, err: errUsage},
+		"create, -secret refused":        {args: []string{"client", "create", "ci", "-secret", "s3cret"}, err: errUsage},
 		"update, the scopes": {
 			args: []string{"client", "update", "ci", "-scopes", "admin:flows"}, clients: ci(), stderr: `API client "ci" updated.`,
 			calls: []string{"update client ci by cli", "close"},
@@ -278,13 +279,18 @@ func TestAdminCommands(t *testing.T) {
 			args: []string{"admin", "create", "bob", "-role", "admin"}, terminal: true, answers: []string{"s3cret", "s3cre"}, err: errOther,
 			calls: []string{},
 		},
-		"create, no role":              {args: []string{"admin", "create", "bob"}, err: errUsage, stderr: "missing -role: admin or viewer"},
-		"create, a role unknown":       {args: []string{"admin", "create", "bob", "-role", "super_admin"}, err: errUsage, stderr: `-role "super_admin": admin or viewer`},
-		"create, no password, no tty":  {args: []string{"admin", "create", "bob", "-role", "admin"}, err: errUsage, stderr: "no password: give -password-stdin or -password-file"},
-		"create, -password refused":    {args: []string{"admin", "create", "bob", "-role", "admin", "-password", "x"}, err: errUsage},
-		"create, a name taken":         {args: []string{"admin", "create", "alice", "-role", "admin", "-password-stdin"}, input: "s3cret", admins: alice(), err: errFailed, stderr: `Admin account "alice" already exists.`},
-		"create, a name refused":       {args: []string{"admin", "create", "bob ", "-role", "admin", "-password-stdin"}, input: "s3cret", err: errFailed, stderr: `username: "bob " starts or ends with a space`},
-		"update, the role of the last": {args: []string{"admin", "update", "alice", "-role", "viewer"}, admins: alice(), err: errFailed, stderr: `Admin account "alice": the last admin account keeps the admin role.`},
+		"create, no role":             {args: []string{"admin", "create", "bob"}, err: errUsage, stderr: "missing -role: admin or viewer"},
+		"create, a role unknown":      {args: []string{"admin", "create", "bob", "-role", "super_admin"}, err: errUsage, stderr: `-role "super_admin": admin or viewer`},
+		"create, no password, no tty": {args: []string{"admin", "create", "bob", "-role", "admin"}, err: errUsage, stderr: "no password: give -password-stdin or -password-file"},
+		"create, -password refused":   {args: []string{"admin", "create", "bob", "-role", "admin", "-password", "x"}, err: errUsage},
+		// Symfony's form, the password after the name: refused, not printed
+		// (revue R37).
+		"create, Symfony's password argument": {args: []string{"admin", "create", "alice", "s3cret-pass", "-role", "admin"}, err: errUsage, stderr: "not printed", calls: []string{}},
+		"update, a value to -password":        {args: []string{"admin", "update", "alice", "-password=s3cret-pass"}, err: errUsage, stderr: "-password takes no value", calls: []string{}},
+		"update, a value to -password-stdin":  {args: []string{"admin", "update", "alice", "-password-stdin=s3cret-pass"}, err: errUsage, calls: []string{}},
+		"create, a name taken":                {args: []string{"admin", "create", "alice", "-role", "admin", "-password-stdin"}, input: "s3cret", admins: alice(), err: errFailed, stderr: `Admin account "alice" already exists.`},
+		"create, a name refused":              {args: []string{"admin", "create", "bob ", "-role", "admin", "-password-stdin"}, input: "s3cret", err: errFailed, stderr: `username: "bob " starts or ends with a space`},
+		"update, the role of the last":        {args: []string{"admin", "update", "alice", "-role", "viewer"}, admins: alice(), err: errFailed, stderr: `Admin account "alice": the last admin account keeps the admin role.`},
 		"update, the password asked": {
 			args: []string{"admin", "update", "alice", "-password"}, terminal: true, answers: []string{"s3cret", "s3cret"}, admins: alice(), stderr: `Admin account "alice" updated.`,
 			check: func(t *testing.T, f *fakeStore, _ string) {
@@ -353,6 +359,7 @@ func TestBootstrapCreateAdmin(t *testing.T) {
 			stderr: "-create-admin takes the name alone: the password comes from the terminal, -password-stdin or -password-file", calls: []string{},
 		},
 		"a password without an account": {args: []string{"bootstrap", "-password-stdin"}, err: errUsage, stderr: "go with -create-admin"},
+		"a password after the name":     {args: []string{"bootstrap", "-create-admin", "alice", "s3cret-pass"}, err: errUsage, stderr: "not printed", calls: []string{}},
 		"no password out of a terminal": {
 			args: []string{"bootstrap", "-create-admin", "alice"}, err: errUsage, stderr: "no password",
 			calls: []string{"read admins", "close"},

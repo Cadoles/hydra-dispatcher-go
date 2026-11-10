@@ -65,6 +65,9 @@ func subcommand(ctx context.Context, name string, subs []command, args []string)
 // parseWithArg parses the flags of a subcommand that takes one argument, an id
 // or a name, before or after its flags.
 func parseWithArg(fs *flag.FlagSet, args []string, what string) (help bool, arg string, err error) {
+	if err := boolValues(fs, args); err != nil {
+		return false, "", err
+	}
 	switch err := fs.Parse(args); {
 	case errors.Is(err, flag.ErrHelp):
 		return true, "", nil

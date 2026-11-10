@@ -247,3 +247,56 @@ dispatcher:
 		t.Errorf("a file missing: %v", err)
 	}
 }
+
+// A value of the database that names a variable reads back as written, not
+// expanded: the dump doubles the dollar the loader reads (revue R37). The
+// variables are set, for an expansion to show; the challenge key among them,
+// which an API client could have written into a title.
+func TestConfigDumpEscapes(t *testing.T) {
+	keepLoggers(t)
+	commandEnv(t)
+	db := cliDatabase(t)
+	t.Setenv("PRICE", "42")
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed.yaml")
+	dollar := "$"
+	ref := func(name string) string { return dollar + dollar + "{" + name + "}" }
+	if err := os.WriteFile(seed, []byte(`
+dispatcher:
+  apps:
+    - { id: a, login_url: "http://d/login?x=`+ref("HOME")+`", consent_url: http://d/consent, method: pwd }
+  flows:
+    - id: f
+      title: { fr: "Deux facteurs `+ref("PRICE")+`", en: "`+dollar+ref("PRICE")+`" }
+      description: { fr: "`+ref("DISPATCHER_SECRETS_CHALLENGE_KEY")+`" }
+      steps: [{ id: a, order: 0 }]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := func(want error, args ...string) string {
+		t.Helper()
+		out, errOut, err := onPostgres(t, "", args...)
+		if !errors.Is(err, want) || (want == nil) != (err == nil) {
+			t.Fatalf("%q: err = %v, want %v\n%s\n%s", args, err, want, out, errOut)
+		}
+		return out
+	}
+	cmd(nil, "bootstrap", "-config", seed, "-force")
+	dump := cmd(nil, "config", "dump", "-section", "apps,flows")
+	dumped := filepath.Join(dir, "dump.yaml")
+	if err := os.WriteFile(dumped, []byte(dump), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := cmd(nil, "config", "diff", "-config", dumped); !strings.HasSuffix(out, "same 2\n") || strings.Contains(out, "42") || strings.Contains(out, "cdcd") {
+		t.Errorf("the dump reloaded:\n%s\n%s", out, dump)
+	}
+
+	// Symfony's %env( has no escape: the dump names the field and stops.
+	if _, err := db.Exec(`UPDATE flow SET description = '{"fr": "%env(SECRET)%"}' WHERE id = 'f'`); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := onPostgres(t, "", "config", "dump")
+	if err == nil || !strings.Contains(err.Error(), "dispatcher.flows[0].description.fr holds %env(") {
+		t.Errorf("a %%env( dumped: %v", err)
+	}
+}
