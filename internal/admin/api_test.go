@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,6 +245,21 @@ func TestToken(t *testing.T) {
 	if w := r.do(http.MethodGet, "/admin/v1/nope", admin, ""); w.Code != http.StatusNotFound || decode(t, w)["status"] != float64(404) {
 		t.Errorf("unknown path: %d %s", w.Code, w.Body)
 	}
+	// A client_id no client can have goes to the audit as a marker, whatever
+	// its size (revue R34): the body may hold 64 KiB of it.
+	r.advance(2 * rateWindow) // a new count of the rate limit
+	r.mu.Lock()
+	before := len(r.tokens)
+	r.mu.Unlock()
+	for _, id := range []string{strings.Repeat("\x01", 20000), strings.Repeat("a", 129), "a/b", "\xff"} {
+		r.tokenForm(form("grant_type", "client_credentials", "client_id", id))
+	}
+	r.mu.Lock()
+	if told := r.tokens[before:]; len(told) != 4 || slices.ContainsFunc(told, func(s string) bool { return !strings.HasPrefix(s, "(invalid) refused ") }) {
+		t.Errorf("tokens told: %.300q", told)
+	}
+	r.mu.Unlock()
+
 	// The audit is told of each token, granted or refused, never of a secret.
 	r.mu.Lock()
 	tokens := strings.Join(r.tokens, "\n")

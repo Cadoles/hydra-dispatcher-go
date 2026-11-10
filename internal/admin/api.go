@@ -185,14 +185,25 @@ func readTokenRequest(r *http.Request) tokenRequest {
 	return tokenRequest{f.Get("grant_type"), f.Get("client_id"), f.Get("client_secret"), f.Get("scope")}
 }
 
+// invalidClient stands at the audit for a client_id no client can have: it is
+// not an id (domain.ValidID), so it names none.
+const invalidClient = "(invalid)"
+
 // token is POST /admin/v1/token, the client_credentials grant of Symfony.
 func (a *API) token(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Pragma", "no-cache")
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	req := readTokenRequest(r)
+	// The id as the audit holds it: one a client may have, never what the body
+	// brings, up to 64 KiB that the JSON of the audit would make six times
+	// larger (revue R34).
+	audited := req.clientID
+	if !domain.ValidID(audited) {
+		audited = invalidClient
+	}
 	refuse := func(status int, code, description string) {
 		if a.o.Token != nil {
-			a.o.Token(r.Context(), req.clientID, "refused", code)
+			a.o.Token(r.Context(), audited, "refused", code)
 		}
 		writeError(w, status, code, description)
 	}
