@@ -52,7 +52,7 @@ func (in *secretInput) check(fs *flag.FlagSet) error {
 
 // read reads the value from the file or the standard input its flags name,
 // else from the terminal without echo: twice when twice, for a new password.
-// Without a flag or a terminal, it fails.
+// Without a flag or a terminal, it is a usage error.
 func (in *secretInput) read(twice bool) (string, error) {
 	switch {
 	case in.file != "":
@@ -82,7 +82,9 @@ func (in *secretInput) read(twice bool) (string, error) {
 		}
 		return v, nil
 	case !stdinIsTerminal():
-		return "", fmt.Errorf("no %s: give -%s-stdin or -%s-file out of a terminal", in.what, in.what, in.what)
+		// A usage error, exit 2: the command lacks a flag.
+		fmt.Fprintf(os.Stderr, "no %s: give -%s-stdin or -%s-file out of a terminal\n", in.what, in.what, in.what)
+		return "", errUsage
 	}
 	v, err := prompt(capitalize(in.what) + ": ")
 	if err != nil {

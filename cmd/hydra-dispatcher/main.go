@@ -42,6 +42,8 @@ var commands = []command{
 	{"serve", "run the HTTP server", serve},
 	{"migrate", "apply the database migrations; migrate down rolls back the last one", migrate},
 	{"bootstrap", "write the seed of the configuration file to the database", bootstrap},
+	{"client", "client create|update|delete|list: the API clients of the admin API", client},
+	{"admin", "admin create|update|list: the accounts of the admin UI", adminAccounts},
 	{"healthcheck", "probe /health of a local server (container HEALTHCHECK)", healthcheck},
 	{"theme", "theme check <dir>: render the pages of a theme as serve does, one line by problem", theme},
 	{"version", "print the version", printVersion},

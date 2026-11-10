@@ -200,3 +200,10 @@ func (l *Log) AdminRateLimited(ctx context.Context) {
 func (l *Log) Wrote(ctx context.Context, client, resource, id, method string, fields []string) {
 	l.logger.InfoContext(ctx, "admin.write", "client_id", client, "resource", resource, "id", id, "method", method, "fields", fields, "ip", clientIP(ctx))
 }
+
+// CLIWrote writes a write of the CLI done, as Wrote does those of the admin
+// API: the client is cli (Q114), the command takes the place of the method,
+// and there is no address.
+func (l *Log) CLIWrote(ctx context.Context, resource, id, command string, fields []string) {
+	l.logger.InfoContext(ctx, "admin.write", "client_id", "cli", "resource", resource, "id", id, "command", command, "fields", fields)
+}

@@ -60,7 +60,7 @@ func TestSecretInput(t *testing.T) {
 		"stdin two lines":       {args: []string{"-secret-stdin"}, input: "a\nb\n", err: "more than one line"},
 		"stdin too large":       {args: []string{"-secret-stdin"}, input: strings.Repeat("s", maxSecretInput+1), err: "more than 65536 bytes"},
 		"stdin in a terminal":   {args: []string{"-secret-stdin"}, terminal: true, input: "s3cret\n", want: "s3cret"},
-		"no terminal":           {err: "no secret: give -secret-stdin or -secret-file out of a terminal"},
+		"no terminal":           {err: "usage error"},
 		"terminal":              {terminal: true, answers: []string{"s3cret"}, want: "s3cret"},
 		"terminal empty":        {terminal: true, answers: []string{""}, err: "the secret is empty"},
 		"terminal twice":        {terminal: true, twice: true, answers: []string{"s3cret", "s3cret"}, want: "s3cret"},

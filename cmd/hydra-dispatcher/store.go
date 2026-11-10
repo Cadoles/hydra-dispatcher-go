@@ -3,18 +3,21 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -30,6 +33,15 @@ type configStore interface {
 	SetCheck(check func(*store.Snapshot) error)
 	OnCommit(committed func(context.Context))
 	Listen(ctx context.Context, changed func(), logger *slog.Logger)
+
+	// Those of the CLI.
+	APIClients(ctx context.Context) ([]store.APIClient, error)
+	CreateAPIClient(ctx context.Context, by string, c store.APIClient) error
+	UpdateAPIClient(ctx context.Context, by, id string, change func(*store.APIClient) error) error
+	DeleteAPIClient(ctx context.Context, id string) error
+	Admins(ctx context.Context) ([]store.AdminUser, error)
+	CreateAdmin(ctx context.Context, u store.AdminUser) error
+	UpdateAdmin(ctx context.Context, username string, change func(*store.AdminUser) error) error
 }
 
 // openStore opens the configuration store at dsn. The tests replace it:
@@ -137,8 +149,27 @@ func bootstrap(ctx context.Context, args []string) error {
 	force := fs.Bool("force", false, "rewrite too what the database holds of the seed, and reset the settings and receive_claims it sets to ~")
 	dryRun := fs.Bool("dry-run", false, "print the changes and write nothing")
 	yes := fs.Bool("yes", false, "with -force in a terminal, write without asking")
+	createAdmin := fs.String("create-admin", "", "after the seed, create the admin account of this name, unless it exists; its password from the terminal, -password-stdin or -password-file")
+	password := newSecretInput(fs, "password")
 	if help, err := parseFlags(fs, args); help || err != nil {
 		return err
+	}
+	switch {
+	case strings.Contains(*createAdmin, ":"):
+		// Symfony's user:pass: a password in an argument (Q113).
+		fmt.Fprintln(fs.Output(), "-create-admin takes the name alone: the password comes from the terminal, -password-stdin or -password-file")
+		return errUsage
+	case password.given() && *createAdmin == "":
+		fmt.Fprintln(fs.Output(), "-password-stdin and -password-file go with -create-admin")
+		return errUsage
+	}
+	if err := password.check(fs); err != nil {
+		return err
+	}
+	if *createAdmin != "" {
+		if v := domain.Collect(func(fail domain.Fail) { domain.CheckUsername(fail, *createAdmin) }); v != nil {
+			return refused(v, fmt.Sprintf("Admin account %q", *createAdmin))
+		}
 	}
 	// stdout holds the changes alone: the log lines, a fatal error included,
 	// go to stderr.
@@ -156,6 +187,12 @@ func bootstrap(ctx context.Context, args []string) error {
 	if *force {
 		mode = store.Force
 	}
+	// The account, read and its password asked before anything is written:
+	// none for an account that exists, or in a dry run.
+	admin, err := prepareAdmin(ctx, db, *createAdmin, password, *dryRun)
+	if err != nil {
+		return err
+	}
 
 	// -force rewrites: in a terminal, the changes are shown and confirmed.
 	ask := *force && !*yes && stdinIsTerminal()
@@ -165,9 +202,9 @@ func bootstrap(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		printChanges(os.Stdout, changes)
+		printChanges(out(), changes)
 		if *dryRun || !writes(changes) {
-			return nil
+			return admin.create(ctx, cfg, logs, *dryRun)
 		}
 		if !confirm(stdin, os.Stderr, "Write these changes?") {
 			fmt.Fprintln(os.Stderr, "Nothing written.")
@@ -181,17 +218,85 @@ func bootstrap(ctx context.Context, args []string) error {
 	}
 	switch {
 	case confirmed == nil:
-		printChanges(os.Stdout, changes)
+		printChanges(out(), changes)
 	case reflect.DeepEqual(changes, confirmed):
 		fmt.Fprintln(os.Stderr, "Written.")
 	default:
 		// Another replica, or the admin, wrote in between: the lock is not
 		// held while the question waits.
 		fmt.Fprintln(os.Stderr, "The database changed after the question; written instead:")
-		printChanges(os.Stdout, changes)
+		printChanges(out(), changes)
 	}
 	warnWidened(ctx, changes, logs.app)
 	warnOverwrites(ctx, changes, logs.app)
+	return admin.create(ctx, cfg, logs, false)
+}
+
+// newAdmin is the account bootstrap -create-admin creates.
+type newAdmin struct {
+	db       configStore
+	username string
+	// hash is its password hashed, "" when nothing is to be created: no
+	// account asked, one that exists, or a dry run.
+	hash   string
+	exists bool
+}
+
+// prepareAdmin reads whether the account of -create-admin exists and, unless
+// it does or in a dry run, asks its password.
+func prepareAdmin(ctx context.Context, db configStore, username string, password *secretInput, dryRun bool) (*newAdmin, error) {
+	a := &newAdmin{db: db, username: username}
+	if username == "" {
+		return a, nil
+	}
+	users, err := db.Admins(ctx)
+	if err != nil {
+		return nil, err
+	}
+	a.exists = slices.ContainsFunc(users, func(u store.AdminUser) bool { return u.Username == username })
+	if a.exists || dryRun {
+		return a, nil
+	}
+	value, err := password.read(true)
+	if err != nil {
+		return nil, err
+	}
+	if a.hash, err = domain.HashSecret(value); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// create creates the account, an admin like Symfony's super admin (Q115),
+// and says so on stderr: stdout holds the changes of the seed alone.
+func (a *newAdmin) create(ctx context.Context, cfg *config.Config, logs loggers, dryRun bool) error {
+	what := fmt.Sprintf("Admin account %q", a.username)
+	switch {
+	case a.username == "":
+		return nil
+	case a.exists:
+		fmt.Fprintf(os.Stderr, "%s exists: left as it is.\n", what)
+		return nil
+	case dryRun:
+		fmt.Fprintf(os.Stderr, "%s would be created.\n", what)
+		return nil
+	}
+	err := a.db.CreateAdmin(ctx, store.AdminUser{Username: a.username, PasswordHash: a.hash, Role: domain.RoleAdmin})
+	if errors.Is(err, store.ErrExists) {
+		// Created in between, by another: left as it is too.
+		fmt.Fprintf(os.Stderr, "%s exists: left as it is.\n", what)
+		return nil
+	}
+	if err := refused(err, what); err != nil {
+		return err
+	}
+	auditLog, drain, err := newAudit(cfg, os.Stderr, logs.app, func() {})
+	if err != nil {
+		return err
+	}
+	auditLog.CLIWrote(ctx, "admin-users", a.username, "bootstrap", []string{"role", "password"})
+	drain()
+	fmt.Fprintf(os.Stderr, "%s created.\n", what)
 	return nil
 }
 

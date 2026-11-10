@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -50,6 +51,13 @@ type fakeStore struct {
 	// check is that of SetCheck, committed that of OnCommit.
 	check     func(*store.Snapshot) error
 	committed func(context.Context)
+
+	// clients and admins are those the CLI reads and writes, as the store
+	// does: its rules, ErrExists, ErrNotFound, ErrLastAdmin. writeErr fails
+	// their writes.
+	clients  []store.APIClient
+	admins   []store.AdminUser
+	writeErr error
 }
 
 func (f *fakeStore) record(call string) {
@@ -553,4 +561,105 @@ func TestServeWithoutDatabase(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "connection refused") || strings.Contains(logs, "server.started") {
 		t.Errorf("err = %v, logs:\n%s", err, logs)
 	}
+}
+
+func (f *fakeStore) APIClients(context.Context) ([]store.APIClient, error) {
+	f.record("read clients")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.clients), nil
+}
+
+func (f *fakeStore) CreateAPIClient(_ context.Context, by string, c store.APIClient) error {
+	f.record("create client " + c.ID + " by " + by)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.writeErr != nil:
+		return f.writeErr
+	case slices.ContainsFunc(f.clients, func(x store.APIClient) bool { return x.ID == c.ID }):
+		return store.ErrExists
+	}
+	if v := domain.Collect(c.Check); v != nil {
+		return v
+	}
+	f.clients = append(f.clients, c)
+	return nil
+}
+
+func (f *fakeStore) UpdateAPIClient(_ context.Context, by, id string, change func(*store.APIClient) error) error {
+	f.record("update client " + id + " by " + by)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.clients, func(x store.APIClient) bool { return x.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	c := f.clients[i]
+	c.Scopes = slices.Clone(c.Scopes)
+	if err := change(&c); err != nil {
+		return err
+	}
+	if v := domain.Collect(c.Check); v != nil {
+		return v
+	}
+	f.clients[i] = c
+	return f.writeErr
+}
+
+func (f *fakeStore) DeleteAPIClient(_ context.Context, id string) error {
+	f.record("delete client " + id)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.clients, func(x store.APIClient) bool { return x.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.clients = slices.Delete(f.clients, i, i+1)
+	return nil
+}
+
+func (f *fakeStore) Admins(context.Context) ([]store.AdminUser, error) {
+	f.record("read admins")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.admins), nil
+}
+
+func (f *fakeStore) CreateAdmin(_ context.Context, u store.AdminUser) error {
+	f.record("create admin " + u.Username + " " + u.Role)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if v := domain.Collect(u.Check); v != nil {
+		return v
+	}
+	if slices.ContainsFunc(f.admins, func(x store.AdminUser) bool { return x.Username == u.Username }) {
+		return store.ErrExists
+	}
+	u.CreatedAt = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	f.admins = append(f.admins, u)
+	return nil
+}
+
+func (f *fakeStore) UpdateAdmin(_ context.Context, username string, change func(*store.AdminUser) error) error {
+	f.record("update admin " + username)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.admins, func(x store.AdminUser) bool { return x.Username == username })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	u := f.admins[i]
+	if err := change(&u); err != nil {
+		return err
+	}
+	if v := domain.Collect(u.Check); v != nil {
+		return v
+	}
+	others := slices.ContainsFunc(f.admins, func(x store.AdminUser) bool { return x.Username != username && x.Role == domain.RoleAdmin })
+	if f.admins[i].Role == domain.RoleAdmin && u.Role != domain.RoleAdmin && !others {
+		return store.ErrLastAdmin
+	}
+	f.admins[i] = u
+	return nil
 }

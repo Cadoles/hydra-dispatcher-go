@@ -322,6 +322,17 @@ func (p *Postgres) UpdateAPIClient(ctx context.Context, by, id string, change fu
 	})
 }
 
+// APIClients reads the API clients, by id, without the rest of the
+// configuration: the CLI lists or deletes them on a database whose snapshot
+// another row makes unreadable.
+func (p *Postgres) APIClients(ctx context.Context) ([]APIClient, error) {
+	clients, err := readAPIClients(ctx, p.db)
+	if err != nil {
+		return nil, fmt.Errorf("read API clients: %w", err)
+	}
+	return clients, nil
+}
+
 // DeleteAPIClient deletes the API client id: ErrNotFound when there is none.
 func (p *Postgres) DeleteAPIClient(ctx context.Context, id string) error {
 	return p.write(ctx, func(tx *sql.Tx) error {
