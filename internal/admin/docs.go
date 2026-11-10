@@ -73,6 +73,9 @@ func (a *API) registerDocs() error {
 	a.route("GET "+Prefix+"/docs.json", newAsset("application/json", doc))
 	a.route("GET "+Prefix+"/docs", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", docsCSP)
+		// The page links out (Scalar's own site): the dispatcher's address
+		// does not go with a click (revue R36).
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		page.ServeHTTP(w, r)
 	}))
 	a.route("GET "+Prefix+"/docs/scalar.js", newAsset("text/javascript; charset=utf-8", scalar))

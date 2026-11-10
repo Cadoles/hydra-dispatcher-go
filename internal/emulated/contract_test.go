@@ -184,6 +184,8 @@ type player struct {
 	// calls through, if any: 10.0.1.7 directly for the others.
 	app   string
 	addrs map[string][2]string
+	// seen are the answers checked against the OpenAPI document.
+	seen *seen
 }
 
 func newPlayer(t *testing.T, xs []exchange, prefix string) *player {
@@ -214,7 +216,7 @@ func newPlayer(t *testing.T, xs []exchange, prefix string) *player {
 		LegacyV1Paths:   true,
 		Logger:          slog.New(slog.DiscardHandler),
 	})
-	p.api = httpx.Chain(httpx.Routes(mux), httpx.RealIP(nil), httpx.Trace(nil))
+	p.api, p.seen = documented(t, httpx.Chain(httpx.Routes(mux), httpx.RealIP(nil), httpx.Trace(nil)))
 	return p
 }
 
@@ -720,6 +722,8 @@ type logoutFixture struct {
 	keys   flow.Keys
 	ref    string
 	stored state.StateStore
+	// seen are the answers checked against the OpenAPI document.
+	seen *seen
 }
 
 func newLogoutFixture(t *testing.T, rec *flow.LogoutRecord) *logoutFixture {
@@ -746,7 +750,9 @@ func newLogoutFixture(t *testing.T, rec *flow.LogoutRecord) *logoutFixture {
 		BaseURL: "http://dispatcher.hydra.test", LoginConsentTTL: 30 * time.Minute, Keys: f.keys}
 	mux := http.NewServeMux()
 	Register(mux, Options{Engine: f.o, AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}, LegacyV1Paths: true, Logger: slog.New(slog.DiscardHandler)})
-	srv := httptest.NewServer(httpx.Chain(httpx.Routes(mux), httpx.RealIP(nil), httpx.Trace(nil)))
+	var handler http.Handler
+	handler, f.seen = documented(t, httpx.Chain(httpx.Routes(mux), httpx.RealIP(nil), httpx.Trace(nil)))
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	f.url = srv.URL
 	cfg := ory.NewConfiguration()

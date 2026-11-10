@@ -86,7 +86,6 @@ x-shared-responses:
     "400": { $ref: "#/components/responses/EmulatedError" }
     "403": { $ref: "#/components/responses/EmulatedError" }
     "404": { $ref: "#/components/responses/EmulatedError" }
-    "410": { $ref: "#/components/responses/EmulatedError" }
     "413": { $ref: "#/components/responses/EmulatedError" }
     "500": { $ref: "#/components/responses/EmulatedError" }
     "503": { $ref: "#/components/responses/EmulatedError" }
@@ -99,7 +98,9 @@ x-shared-responses:
     "400": { $ref: "#/components/responses/EmulatedError" }
     "403": { $ref: "#/components/responses/EmulatedError" }
     "404": { $ref: "#/components/responses/EmulatedError" }
-    "410": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/BackToFlow" }
+    "500": { $ref: "#/components/responses/EmulatedError" }
+    "503": { $ref: "#/components/responses/EmulatedError" }
   consentReads: &consentReads
     "200":
       description: The consent request of the step.
@@ -109,7 +110,9 @@ x-shared-responses:
     "400": { $ref: "#/components/responses/EmulatedError" }
     "403": { $ref: "#/components/responses/EmulatedError" }
     "404": { $ref: "#/components/responses/EmulatedError" }
-    "410": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/BackToFlow" }
+    "500": { $ref: "#/components/responses/EmulatedError" }
+    "503": { $ref: "#/components/responses/EmulatedError" }
   logoutReads: &logoutReads
     "200":
       description: The logout request.
@@ -119,7 +122,9 @@ x-shared-responses:
     "400": { $ref: "#/components/responses/EmulatedError" }
     "403": { $ref: "#/components/responses/EmulatedError" }
     "404": { $ref: "#/components/responses/EmulatedError" }
-    "410": { $ref: "#/components/responses/EmulatedError" }
+    "410": { $ref: "#/components/responses/BackToFlow" }
+    "500": { $ref: "#/components/responses/EmulatedError" }
+    "503": { $ref: "#/components/responses/EmulatedError" }
 
 paths:
   /admin/v1/token:
@@ -563,12 +568,11 @@ paths:
       operationId: rejectLogoutRequest
       summary: Reject a logout request
       parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
-      responses:
-        "204": { description: 'Rejected.' }
-        "400": { $ref: "#/components/responses/EmulatedError" }
-        "403": { $ref: "#/components/responses/EmulatedError" }
-        "404": { $ref: "#/components/responses/EmulatedError" }
-        "410": { $ref: "#/components/responses/EmulatedError" }
+      description: |
+        Answered in 200 with the redirect_to that carries the logout on to the
+        next app, where Hydra answers 204: an app that stopped there would end
+        the chain (Q49).
+      responses: *emulatedWrites
 
   /oauth2/auth/requests/login:
     get:
@@ -652,14 +656,11 @@ paths:
       operationId: rejectLogoutRequestV1
       summary: Reject a logout request (v1)
       deprecated: true
-      description: Use PUT /admin/oauth2/auth/requests/logout/reject.
+      description: |
+        Use PUT /admin/oauth2/auth/requests/logout/reject. Answered in 200 with
+        the redirect_to, as there (Q49).
       parameters: [{ $ref: "#/components/parameters/logout_challenge" }]
-      responses:
-        "204": { description: 'Rejected.' }
-        "400": { $ref: "#/components/responses/EmulatedError" }
-        "403": { $ref: "#/components/responses/EmulatedError" }
-        "404": { $ref: "#/components/responses/EmulatedError" }
-        "410": { $ref: "#/components/responses/EmulatedError" }
+      responses: *emulatedWrites
 
 components:
   securitySchemes:
@@ -837,6 +838,13 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/EmulatedError" }
+    BackToFlow:
+      description: |
+        The request was handled already: not an error. The app sends the
+        browser to redirect_to, back to the flow, which goes on (Q25).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/RedirectTo" }
 
   schemas:
     TokenRequest:

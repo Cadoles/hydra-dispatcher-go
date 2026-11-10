@@ -13,4 +13,6 @@ Scalar.createApiReference("#app", {
   agent: { disabled: true },
   mcp: { disabled: true },
   showDeveloperTools: "never",
+  // "Open API Client" sends the page's URL to client.scalar.com (revue R36).
+  hideClientButton: true,
 });
