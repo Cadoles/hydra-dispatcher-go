@@ -1,0 +1,327 @@
+=== GET /admin/v1/flows  
+HTTP/1.1 401 Unauthorized
+Content-Type: application/json
+Www-Authenticate: Bearer realm="Dispatcher Admin API"
+
+{"error":"invalid_token","error_description":"Authentication required."}
+
+=== GET /admin/v1/flows  
+HTTP/1.1 200 OK
+Accept-Post: application/json
+Allow: OPTIONS, HEAD, GET, POST
+Content-Type: application/json; charset=utf-8
+
+[{"title":{"fr":"Hydra OIDC","en":"Hydra OIDC"},"description":{"fr":"Authentification via un fournisseur OIDC externe","en":"Authentication via an external OIDC provider"},"enabled":true,"steps":[{"id":1,"appId":"hydra-oidc","stepOrder":0}],"id":"hydra-oidc"},{"title":{"fr":"Hydra SQL","en":"Hydra SQL"},"description":{"fr":"Authentification via SQL","en":"SQL Authentication"},"enabled":true,"steps":[{"id":2,"appId":"hydra-sql","stepOrder":0}],"id":"hydra-sql"},{"title":{"fr":"Hydra SQL 2FA","en":"Hydra SQL 2FA"},"description":{"fr":"Authentification via SQL double facteur","en":"SQL Authentication second factor"},"enabled":true,"steps":[{"id":3,"appId":"hydra-sql","stepOrder":0},{"id":4,"app
+
+=== GET /admin/v1/flows/hydra-sql-2fa  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"title":{"fr":"Hydra SQL 2FA","en":"Hydra SQL 2FA"},"description":{"fr":"Authentification via SQL double facteur","en":"SQL Authentication second factor"},"enabled":true,"steps":[{"id":3,"appId":"hydra-sql","stepOrder":0},{"id":4,"appId":"hydra-2fa","stepOrder":1}],"id":"hydra-sql-2fa"}
+
+=== GET /admin/v1/apps/hydra-sql  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"id":"hydra-sql","loginUrl":"http:\/\/sql.hydra.test\/login","consentUrl":"http:\/\/sql.hydra.test\/consent","logoutUrl":"http:\/\/sql.hydra.test\/logout","method":"pwd"}
+
+=== GET /admin/v1/oauth2-clients  
+HTTP/1.1 200 OK
+Accept-Post: application/json
+Allow: OPTIONS, HEAD, GET, POST
+Content-Type: application/json; charset=utf-8
+
+[{"id":"test"}]
+
+=== GET /admin/v1/settings  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH
+Content-Type: application/json; charset=utf-8
+
+{"id":1,"hydraPublicUrl":"http:\/\/public.hydra.test","appAutoSelect":false,"consentAutoAccept":false,"challengeTtl":3600,"sessionTtl":86400,"aggregateAmrFromLoginRequest":false,"adminAuthorizedHosts":[],"supportedLocales":["fr","en"],"defaultLocale":"fr","fallbackLocale":"en"}
+
+=== GET /admin/v1/apps?page=2  
+HTTP/1.1 200 OK
+Accept-Post: application/json
+Allow: OPTIONS, HEAD, GET, POST
+Content-Type: application/json; charset=utf-8
+
+[]
+
+=== GET /admin/v1/apps?page=0  
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"Page should not be less than 1","status":400,"type":"\/errors\/400"}
+
+=== GET /admin/v1/apps/unknown  
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"Not Found","status":404,"type":"\/errors\/404"}
+
+=== POST /admin/v1/apps [application/json] {"id":"zz-app","loginUrl":"http://x/login","consentUrl":"http://x/consent","logoutUrl":"","method":"pwd"}
+HTTP/1.1 201 Created
+Accept-Patch: application/merge-patch+json
+Accept-Post: application/json
+Allow: OPTIONS, HEAD, GET, POST
+Content-Location: /admin/v1/apps/zz-app.json
+Content-Type: application/json; charset=utf-8
+Location: /admin/v1/apps/zz-app
+
+{"id":"zz-app","loginUrl":"http:\/\/x\/login","consentUrl":"http:\/\/x\/consent","logoutUrl":"","method":"pwd"}
+
+=== POST /admin/v1/apps [application/json] {"id":"zz-app","loginUrl":"http://x/login","consentUrl":"http://x/consent","logoutUrl":"","method":"pwd"}
+HTTP/1.1 500 Internal Server Error
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"An exception occurred while executing a query: SQLSTATE[23505]: Unique violation: 7 ERROR:  duplicate key value violates unique constraint \"dispatcher_app_pkey\"\nDETAIL:  Key (id)=(zz-app) already exists.","status":500,"type":"\/errors\/500"}
+
+=== POST /admin/v1/apps [application/json] {"id":"bad/id","loginUrl":"not a url","consentUrl":"","method":""}
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/problem+json; charset=utf-8
+
+{"status":422,"violations":[{"propertyPath":"id","message":"The ID must start with a letter or digit and contain only letters, digits, \".\", \"_\" or \"-\".","code":"de1e3db3-5ed4-4941-aae4-59f3667cc3a3"}],"detail":"id: The ID must start with a letter or digit and contain only letters, digits, \".\", \"_\" or \"-\".","type":"\/validation_errors\/de1e3db3-5ed4-4941-aae4-59f3667cc3a3","title":"An error occurred"}
+
+=== POST /admin/v1/apps [application/json] {"id":"zz-app2","loginUrl":42}
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"The type of the \"loginUrl\" attribute must be \"string\", \"integer\" given.","status":400,"type":"\/errors\/400"}
+
+=== POST /admin/v1/apps [application/json] not json
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"Syntax error","status":400,"type":"\/errors\/400"}
+
+=== POST /admin/v1/apps [text/plain] {"id":"zz-app3"}
+HTTP/1.1 415 Unsupported Media Type
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"The content-type \"text\/plain\" is not supported. Supported MIME types are \"application\/json\".","status":415,"type":"\/errors\/415"}
+
+=== POST /admin/v1/flows [application/json] {"id":"zz-flow","title":{"fr":"Z"},"description":{"fr":"Z"},"enabled":true,"steps":[{"appId":"zz-app","stepOrder":0}]}
+HTTP/1.1 201 Created
+Accept-Patch: application/merge-patch+json
+Accept-Post: application/json
+Allow: OPTIONS, HEAD, GET, POST
+Content-Location: /admin/v1/flows/zz-flow.json
+Content-Type: application/json; charset=utf-8
+Location: /admin/v1/flows/zz-flow
+
+{"title":{"fr":"Z"},"description":{"fr":"Z"},"enabled":true,"steps":[{"id":5,"appId":"zz-app","stepOrder":0}],"id":"zz-flow"}
+
+=== PUT /admin/v1/flows/zz-flow [application/json] {"id":"zz-flow","title":{"fr":"Z2"},"description":{"fr":"Z2"},"enabled":true,"steps":[{"appId":"zz-app","stepOrder":0}]}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/flows/zz-flow.json
+Content-Type: application/json; charset=utf-8
+
+{"title":{"fr":"Z2"},"description":{"fr":"Z2"},"enabled":true,"steps":[{"id":6,"appId":"zz-app","stepOrder":0}],"id":"zz-flow"}
+
+=== PUT /admin/v1/flows/zz-flow [application/json] {"title":{"fr":"Z3"}}
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/problem+json; charset=utf-8
+
+{"status":422,"violations":[{"propertyPath":"id","message":"This value should not be blank.","code":"c1051bb4-d103-4f74-8988-acbcafc7fdc3"}],"detail":"id: This value should not be blank.","type":"\/validation_errors\/c1051bb4-d103-4f74-8988-acbcafc7fdc3","title":"An error occurred"}
+
+=== PATCH /admin/v1/flows/zz-flow [application/json] {"enabled":false}
+HTTP/1.1 415 Unsupported Media Type
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"The content-type \"application\/json\" is not supported. Supported MIME types are \"application\/merge-patch+json\".","status":415,"type":"\/errors\/415"}
+
+=== PATCH /admin/v1/flows/zz-flow [application/merge-patch+json] {"enabled":false,"title":{"en":"E"}}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/flows/zz-flow.json
+Content-Type: application/json; charset=utf-8
+
+{"title":{"en":"E"},"description":{"fr":"Z2"},"enabled":false,"steps":[{"id":6,"appId":"zz-app","stepOrder":0}],"id":"zz-flow"}
+
+=== PATCH /admin/v1/flows/zz-flow [application/merge-patch+json] {"steps":[{"id":"zz-app","order":"3"},"junk"]}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/flows/zz-flow.json
+Content-Type: application/json; charset=utf-8
+
+{"title":{"en":"E"},"description":{"fr":"Z2"},"enabled":false,"steps":[{"id":7,"appId":"zz-app","stepOrder":3}],"id":"zz-flow"}
+
+=== PATCH /admin/v1/flows/zz-flow [application/merge-patch+json] {"steps":[{"appId":"nope","stepOrder":0}]}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/flows/zz-flow.json
+Content-Type: application/json; charset=utf-8
+
+{"title":{"en":"E"},"description":{"fr":"Z2"},"enabled":false,"steps":[{"id":8,"appId":"nope","stepOrder":0}],"id":"zz-flow"}
+
+=== GET /admin/v1/flows/zz-flow  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"title":{"en":"E"},"description":{"fr":"Z2"},"enabled":false,"steps":[{"id":8,"appId":"nope","stepOrder":0}],"id":"zz-flow"}
+
+=== PUT /admin/v1/apps/zz-app [application/json] {"id":"zz-app","loginUrl":"http://y/login","consentUrl":"http://y/consent","logoutUrl":"","method":"otp"}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/apps/zz-app.json
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-app","loginUrl":"http:\/\/y\/login","consentUrl":"http:\/\/y\/consent","logoutUrl":"","method":"otp"}
+
+=== PUT /admin/v1/apps/zz-app [application/json] {"method":"otp2"}
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/problem+json; charset=utf-8
+
+{"status":422,"violations":[{"propertyPath":"id","message":"This value should not be blank.","code":"c1051bb4-d103-4f74-8988-acbcafc7fdc3"}],"detail":"id: This value should not be blank.","type":"\/validation_errors\/c1051bb4-d103-4f74-8988-acbcafc7fdc3","title":"An error occurred"}
+
+=== GET /admin/v1/apps/zz-app  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-app","loginUrl":"http:\/\/y\/login","consentUrl":"http:\/\/y\/consent","logoutUrl":"","method":"otp"}
+
+=== PATCH /admin/v1/apps/zz-app [application/merge-patch+json] {"id":"zz-renamed"}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/apps/zz-renamed.json
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-renamed","loginUrl":"http:\/\/y\/login","consentUrl":"http:\/\/y\/consent","logoutUrl":"","method":"otp"}
+
+=== GET /admin/v1/apps/zz-renamed  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-renamed","loginUrl":"http:\/\/y\/login","consentUrl":"http:\/\/y\/consent","logoutUrl":"","method":"otp"}
+
+=== POST /admin/v1/oauth2-clients [application/json] {"id":"zz-client","secret":"x"}
+HTTP/1.1 201 Created
+Accept-Patch: application/merge-patch+json
+Accept-Post: application/json
+Allow: OPTIONS, HEAD, GET, POST
+Content-Location: /admin/v1/oauth2-clients/zz-client.json
+Content-Type: application/json; charset=utf-8
+Location: /admin/v1/oauth2-clients/zz-client
+
+{"id":"zz-client"}
+
+=== PUT /admin/v1/oauth2-clients/zz-client [application/json] {"id":"zz-client","secret":"y"}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/oauth2-clients/zz-client.json
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-client"}
+
+=== PATCH /admin/v1/oauth2-clients/zz-client [application/merge-patch+json] {"secret":"z"}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/oauth2-clients/zz-client.json
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-client"}
+
+=== DELETE /admin/v1/oauth2-clients/zz-client  
+HTTP/1.1 204 No Content
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/oauth2-clients/zz-client.json
+
+
+=== GET /admin/v1/oauth2-clients/zz-client  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"id":"zz-client"}
+
+=== DELETE /admin/v1/flows/zz-flow  
+HTTP/1.1 204 No Content
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Location: /admin/v1/flows/zz-flow.json
+
+
+=== GET /admin/v1/flows/zz-flow  
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+Content-Type: application/json; charset=utf-8
+
+{"title":{"en":"E"},"description":{"fr":"Z2"},"enabled":false,"steps":[{"id":8,"appId":"nope","stepOrder":0}],"id":"zz-flow"}
+
+=== DELETE /admin/v1/apps/zz-app  
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"Not Found","status":404,"type":"\/errors\/404"}
+
+=== DELETE /admin/v1/apps/zz-renamed  
+HTTP/1.1 204 No Content
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH, DELETE
+
+
+=== GET /admin/v1/apps/zz-renamed  
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"Not Found","status":404,"type":"\/errors\/404"}
+
+=== PATCH /admin/v1/settings [application/merge-patch+json] {"appAutoSelect":false}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH
+Content-Location: /admin/v1/settings.json
+Content-Type: application/json; charset=utf-8
+
+{"id":1,"hydraPublicUrl":"http:\/\/public.hydra.test","appAutoSelect":false,"consentAutoAccept":false,"challengeTtl":3600,"sessionTtl":86400,"aggregateAmrFromLoginRequest":false,"adminAuthorizedHosts":[],"supportedLocales":["fr","en"],"defaultLocale":"fr","fallbackLocale":"en"}
+
+=== PUT /admin/v1/settings [application/json] {"challengeTtl":3600}
+HTTP/1.1 200 OK
+Accept-Patch: application/merge-patch+json
+Allow: OPTIONS, HEAD, GET, PUT, PATCH
+Content-Location: /admin/v1/settings.json
+Content-Type: application/json; charset=utf-8
+
+{"id":1,"hydraPublicUrl":"http:\/\/public.hydra.test","appAutoSelect":false,"consentAutoAccept":false,"challengeTtl":3600,"sessionTtl":86400,"aggregateAmrFromLoginRequest":false,"adminAuthorizedHosts":[],"supportedLocales":["fr","en"],"defaultLocale":"fr","fallbackLocale":"en"}
+
+=== PUT /admin/v1/settings [application/json] {"challengeTtl":"abc"}
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"The type of the \"challengeTtl\" attribute must be \"int\", \"string\" given.","status":400,"type":"\/errors\/400"}
+
+=== PATCH /admin/v1/settings [application/merge-patch+json] {"supportedLocales":"fr"}
+HTTP/1.1 400 Bad Request
+Content-Type: application/problem+json; charset=utf-8
+
+{"title":"An error occurred","detail":"The type of the \"supportedLocales\" attribute must be \"array\", \"string\" given.","status":400,"type":"\/errors\/400"}
+
+=== GET /admin/v1/docs.json  
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{"openapi":"3.1.0","info":{"title":"Dispatcher Admin API","description":"","version":"1.0.0"},"servers":[{"url":"\/","description":""}],"paths":{"\/admin\/v1\/apps":{"get":{"operationId":"api_apps_get …
