@@ -220,3 +220,76 @@ func TestParsePrefixes(t *testing.T) {
 	a.AllowedSources = got
 	wants(t, "parsed sources", violations(a.Check))
 }
+
+// A bcrypt hash is its whole form: what bcrypt.Cost alone took and stored as
+// it is matched nothing, or failed in Postgres (revue R35).
+func TestIsHash(t *testing.T) {
+	hash, err := HashSecret("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.TrimPrefix(hash, "$2a$10$")
+	for s, want := range map[string]bool{
+		hash:                           true,
+		symfonyHash:                    true,
+		"$2b$10$" + body:               true,
+		costly(t, 31):                  true,
+		"$2x$10$" + body:               false,
+		"$2$10$" + body:                false,
+		"$2a$03$" + body:               false,
+		"$2a$32$" + body:               false,
+		"$2a$1$" + body:                false,
+		hash + "x":                     false,
+		hash + "\n":                    false,
+		hash[:59]:                      false,
+		hash[:20] + "\x00" + hash[21:]: false,
+		hash[:20] + "!" + hash[21:]:    false,
+		"s3cret":                       false,
+		"":                             false,
+	} {
+		if IsHash(s) != want {
+			t.Errorf("IsHash(%q) = %v", s, !want)
+		}
+	}
+	if SecretCostTooHigh("$2x$31$" + body) {
+		t.Error("SecretCostTooHigh of what is not a hash")
+	}
+	wants(t, "junk after", violations(APIClient{ID: "c", SecretHash: hash + "x"}.Check), "secret: is not a bcrypt hash")
+}
+
+func TestNewSecret(t *testing.T) {
+	a, b := NewSecret(), NewSecret()
+	if len(a) != 43 || a == b || strings.ContainsAny(a, "+/=") || IsHash(a) {
+		t.Errorf("NewSecret: %q, %q", a, b)
+	}
+}
+
+func TestAdminUser(t *testing.T) {
+	hash, err := HashSecret("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tt := range map[string]struct {
+		u    AdminUser
+		want []string
+	}{
+		"admin":               {AdminUser{Username: "alice", PasswordHash: hash, Role: RoleAdmin}, nil},
+		"viewer by OIDC":      {AdminUser{Username: "bob@example.org", OIDCSub: "248289761001", Role: RoleViewer}, nil},
+		"Symfony's hash":      {AdminUser{Username: "admin", PasswordHash: symfonyHash, Role: RoleAdmin}, nil},
+		"a colon":             {AdminUser{Username: "a:b", Role: RoleViewer}, nil},
+		"180 characters":      {AdminUser{Username: strings.Repeat("é", 180), Role: RoleViewer}, nil},
+		"no name":             {AdminUser{Role: RoleAdmin}, []string{"username: is required"}},
+		"181 characters":      {AdminUser{Username: strings.Repeat("é", 181), Role: RoleViewer}, []string{"username: is longer than 180 characters"}},
+		"space at the end":    {AdminUser{Username: "alice ", Role: RoleViewer}, []string{`username: "alice " starts or ends with a space`}},
+		"NUL":                 {AdminUser{Username: "a\x00b", Role: RoleViewer}, []string{"username: contains a control character"}},
+		"new line":            {AdminUser{Username: "a\nb", Role: RoleViewer}, []string{"username: contains a control character"}},
+		"not UTF-8":           {AdminUser{Username: "a\xffb", Role: RoleViewer}, []string{"username: is not UTF-8"}},
+		"super_admin":         {AdminUser{Username: "a", Role: "super_admin"}, []string{`role: "super_admin" is not admin or viewer`}},
+		"no role":             {AdminUser{Username: "a"}, []string{`role: "" is not admin or viewer`}},
+		"plain password":      {AdminUser{Username: "a", PasswordHash: "s3cret", Role: RoleAdmin}, []string{"password: is not a bcrypt hash"}},
+		"password of cost 15": {AdminUser{Username: "a", PasswordHash: costly(t, 15), Role: RoleAdmin}, []string{"password: is a bcrypt hash of cost 15: 14 at most, each login computing it"}},
+		"long subject":        {AdminUser{Username: "a", OIDCSub: strings.Repeat("s", 256), Role: RoleViewer}, []string{"oidc_sub: is longer than 255 characters"}},
+	} {
+		wants(t, name, violations(tt.u.Check), tt.want...)
+	}
+}

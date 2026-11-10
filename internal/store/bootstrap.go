@@ -106,10 +106,33 @@ func (p *Postgres) Bootstrap(ctx context.Context, seed config.Seed, mode Mode, w
 }
 
 type bootstrap struct {
-	ctx     context.Context
-	tx      *sql.Tx
-	mode    Mode
+	ctx  context.Context
+	tx   *sql.Tx
+	mode Mode
+	// compare reads and writes nothing: Diff.
+	compare bool
 	changes []Change
+}
+
+// Diff gives the changes Bootstrap would make in Force mode, reading only, for
+// config diff: a READ ONLY transaction in repeatable read, one view of the
+// tables, without writeLock or the check of the instance, so that a role that
+// can only read runs it. The refusals of a write (a configuration serve would
+// refuse, the constraints of the schema) are those of Bootstrap without write,
+// which writes then rolls back.
+func (p *Postgres) Diff(ctx context.Context, seed config.Seed) ([]Change, error) {
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("diff: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	b := &bootstrap{ctx: ctx, tx: tx, mode: Force, compare: true}
+	for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients} {
+		if err := step(seed); err != nil {
+			return nil, fmt.Errorf("diff: %w", err)
+		}
+	}
+	return b.changes, nil
 }
 
 // decide records the change of an entry the database may hold (old), written
@@ -253,6 +276,9 @@ func (b *bootstrap) settings(seed config.Seed) error {
 	if err := check.Validate(); err != nil {
 		return err
 	}
+	if b.compare {
+		return nil
+	}
 	for _, st := range write {
 		if err := putSetting(b.ctx, b.tx, st, &next, bootstrapBy); err != nil {
 			return err
@@ -323,7 +349,7 @@ func (b *bootstrap) apps(seed config.Seed) error {
 			{name: "allowed_sources", old: old.AllowedSources, new: a.AllowedSources},
 			{name: "client_cert_fingerprint", old: old.ClientCertFingerprint, new: a.ClientCertFingerprint},
 			{name: "receive_claims", old: old.ReceiveClaims, new: a.ReceiveClaims},
-		}) {
+		}) || b.compare {
 			continue
 		}
 		if err := putApp(b.ctx, b.tx, a, bootstrapBy); err != nil {
@@ -363,7 +389,7 @@ func (b *bootstrap) flows(seed config.Seed) error {
 			{name: "enabled", old: old.Enabled, new: f.Enabled},
 			{name: "acr", old: old.ACR, new: f.ACR},
 			{name: "steps", old: old.Steps, new: f.Steps},
-		}) {
+		}) || b.compare {
 			continue
 		}
 		if err := putFlow(b.ctx, b.tx, f, bootstrapBy); err != nil {
@@ -404,7 +430,7 @@ func (b *bootstrap) clients(seed config.Seed) error {
 		if !b.decide("api_client", sc.ID, i >= 0, authors[sc.ID], []field{
 			{name: "secret", secret: func() bool { return sameSecret }},
 			{name: "scopes", old: old.Scopes, new: scopes},
-		}) {
+		}) || b.compare {
 			continue
 		}
 		// An unchanged secret keeps its hash: a new salt would show as a change.

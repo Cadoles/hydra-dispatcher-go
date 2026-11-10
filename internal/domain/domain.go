@@ -5,6 +5,7 @@
 package domain
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -228,13 +230,19 @@ func (f Flow) Check(fail Fail, app func(id string) bool) {
 // Check checks c, its id included.
 func (c APIClient) Check(fail Fail) {
 	CheckID(fail, c.ID)
-	switch cost, err := bcrypt.Cost([]byte(c.SecretHash)); {
-	case err != nil:
-		fail("secret", "is not a bcrypt hash")
-	case cost > MaxSecretCost:
-		fail("secret", "is a bcrypt hash of cost %d: %d at most, each token request computing it", cost, MaxSecretCost)
-	}
+	checkHash(fail, "secret", c.SecretHash, "each token request computing it")
 	CheckScopes(fail, c.Scopes)
+}
+
+// checkHash checks the bcrypt hash of a secret or a password: its whole form,
+// and a cost that a check of it may compute.
+func checkHash(fail Fail, field, hash, why string) {
+	switch cost, _ := bcrypt.Cost([]byte(hash)); {
+	case !IsHash(hash):
+		fail(field, "is not a bcrypt hash")
+	case cost > MaxSecretCost:
+		fail(field, "is a bcrypt hash of cost %d: %d at most, %s", cost, MaxSecretCost, why)
+	}
 }
 
 // MaxSecretCost is the highest cost of bcrypt a client secret may have:
@@ -242,18 +250,85 @@ func (c APIClient) Check(fail Fail) {
 // hours (revue R33). Symfony hashes at 13 by default; HashSecret at 10.
 const MaxSecretCost = 14
 
-// IsHash tells whether s is a bcrypt hash: the admin API takes one as it is,
-// for the import of Symfony's clients, as Symfony did.
-func IsHash(s string) bool {
-	_, err := bcrypt.Cost([]byte(s))
-	return err == nil
-}
+// hashForm is the whole form of a bcrypt hash: $2a$, $2b$ or $2y$, a cost of
+// two digits, then 53 characters of bcrypt's alphabet, its salt and its hash.
+// bcrypt.Cost reads the prefix and the cost alone: $2x$, a hash followed by
+// anything, or one holding a NUL passed it (revue R35).
+var hashForm = regexp.MustCompile(`^\$2[aby]\$(0[4-9]|[12][0-9]|3[01])\$[./A-Za-z0-9]{53}$`)
+
+// IsHash tells whether s is a bcrypt hash: the admin API and the CLI take one
+// as it is, for the import of Symfony's clients, as Symfony did; anything
+// else is a secret in clear, hashed.
+func IsHash(s string) bool { return hashForm.MatchString(s) }
 
 // SecretCostTooHigh tells whether hash is a bcrypt hash of a cost over
 // MaxSecretCost, which SecretMatches never computes.
 func SecretCostTooHigh(hash string) bool {
 	cost, err := bcrypt.Cost([]byte(hash))
-	return err == nil && cost > MaxSecretCost
+	return IsHash(hash) && err == nil && cost > MaxSecretCost
+}
+
+// NewSecret is a secret for an API client, when none is given: 32 bytes of
+// crypto/rand in base64url without padding, 43 characters.
+func NewSecret() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b) // never fails: it crashes the program rather
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// Roles of an admin account: admin does everything, viewer reads.
+const (
+	RoleAdmin  = "admin"
+	RoleViewer = "viewer"
+)
+
+// AdminUser is an account of the admin UI. It is not part of the
+// configuration: no instance reads it before the admin UI (phase 3).
+type AdminUser struct {
+	Username string
+	// PasswordHash is the bcrypt hash of its password, hashed as a client
+	// secret (HashSecret); "" for none, an account of the identity provider.
+	PasswordHash string
+	// OIDCSub is its subject at the identity provider, "" for none.
+	OIDCSub   string
+	Role      string
+	CreatedAt time.Time
+}
+
+// maxUsername and maxOIDCSub are the lengths of admin_user.
+const (
+	maxUsername = 180
+	maxOIDCSub  = 255
+)
+
+// Check checks u, its username included.
+func (u AdminUser) Check(fail Fail) {
+	CheckUsername(fail, u.Username)
+	if u.Role != RoleAdmin && u.Role != RoleViewer {
+		fail("role", "%q is not admin or viewer", u.Role)
+	}
+	if u.PasswordHash != "" {
+		checkHash(fail, "password", u.PasswordHash, "each login computing it")
+	}
+	text(fail, "oidc_sub", u.OIDCSub, maxOIDCSub)
+}
+
+// CheckUsername checks the name of an admin account: 1 to 180 characters,
+// without a control character or a space at either end. Symfony took any
+// string; its accounts are imported (P19).
+func CheckUsername(fail Fail, s string) {
+	switch {
+	case s == "":
+		fail("username", "is required")
+	case !utf8.ValidString(s):
+		fail("username", "is not UTF-8")
+	case strings.ContainsFunc(s, unicode.IsControl):
+		fail("username", "contains a control character")
+	case strings.TrimSpace(s) != s:
+		fail("username", "%q starts or ends with a space", s)
+	case utf8.RuneCountInString(s) > maxUsername:
+		fail("username", "is longer than %d characters", maxUsername)
+	}
 }
 
 // CheckScopes checks the scopes of an API client: a token request names them
