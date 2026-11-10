@@ -117,3 +117,17 @@ jobs:
           examples/theme-demo/build.sh
           git ls-files --error-unmatch examples/theme-demo/static/theme.css
           git diff --exit-code -- examples/theme-demo/static/theme.css
+
+  # web/scalar (P17): the bundle of /admin/v1/docs fetched again by fetch.sh,
+  # its integrity and its sum checked, the committed one the same.
+  scalar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: standalone.js fetched again
+        run: |
+          web/scalar/fetch.sh
+          git ls-files --error-unmatch web/scalar/standalone.js
+          git diff --exit-code -- web/scalar/standalone.js
+

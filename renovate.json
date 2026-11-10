@@ -45,6 +45,12 @@
       "matchDepNames": ["tailwindlabs/tailwindcss"],
       "groupName": null,
       "automerge": false
+    },
+    {
+      "description": "Scalar's API reference of web/scalar/fetch.sh, the page of /admin/v1/docs: its integrity and its sha256 by hand, standalone.js fetched again and committed, the page read in a browser for a violation of its CSP; the CI fails until the file is there.",
+      "matchDepNames": ["@scalar/api-reference"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "customManagers": [
@@ -60,6 +66,12 @@
       "description": "A version a comment names, in a shell script: the Tailwind CLI of examples/theme-demo/build.sh.",
       "managerFilePatterns": ["/(^|/)examples/[^/]+/build\\.sh$/"],
       "matchStrings": ["[A-Z_]+_VERSION=(?<currentValue>v[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
+    },
+    {
+      "customType": "regex",
+      "description": "Scalar's API reference of web/scalar/fetch.sh, a version a comment names.",
+      "managerFilePatterns": ["/(^|/)web/scalar/fetch\\.sh$/"],
+      "matchStrings": ["SCALAR_VERSION=(?<currentValue>[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
     }
   ]
 }
