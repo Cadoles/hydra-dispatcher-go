@@ -126,16 +126,19 @@ func (a *API) registerClients() {
 			if err == nil {
 				err = checkPathID(b, id)
 			}
-			var hash string
-			if err == nil {
-				hash, err = secretHashOf(b, mode)
-			}
 			if err != nil {
 				a.fail(w, r, "", err)
 				return
 			}
+			// Hashed out of the lock, its error answered from within the
+			// write: an absent client gets its 404 first, as before and as
+			// the apps and the flows (revue R38).
+			hash, hashErr := secretHashOf(b, mode)
 			var written store.APIClient
 			err = a.o.Writer.UpdateAPIClient(r.Context(), author(r), id, func(c *store.APIClient) error {
+				if hashErr != nil {
+					return hashErr
+				}
 				if err := applyClient(b, hash, c); err != nil {
 					return err
 				}
