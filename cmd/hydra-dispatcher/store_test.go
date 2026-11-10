@@ -663,3 +663,9 @@ func (f *fakeStore) UpdateAdmin(_ context.Context, username string, change func(
 	f.admins[i] = u
 	return nil
 }
+
+// Diff gives the changes of a dry run, without writing.
+func (f *fakeStore) Diff(ctx context.Context, _ config.Seed) ([]store.Change, error) {
+	f.record("diff")
+	return f.changes, f.bootstrapErr
+}

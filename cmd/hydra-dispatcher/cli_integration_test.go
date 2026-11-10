@@ -12,6 +12,8 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,5 +149,101 @@ func TestCLIOnPostgres(t *testing.T) {
 	}
 	if len(users) != 2 || users[0]["username"] != "alice" || users[0]["role"] != "viewer" || users[1]["username"] != "carol" || users[1]["role"] != "admin" || users[1]["password"] != true {
 		t.Errorf("accounts: %v", users)
+	}
+}
+
+// config diff reads the seed against the database as bootstrap -force would;
+// config dump writes the database as a seed, which bootstrap -force takes back
+// without a change.
+func TestConfigOnPostgres(t *testing.T) {
+	keepLoggers(t)
+	commandEnv(t)
+	cliDatabase(t)
+	dir := t.TempDir()
+	seed := filepath.Join(dir, "seed.yaml")
+	if err := os.WriteFile(seed, []byte(`
+dispatcher:
+  app_auto_select: true
+  challenge_ttl: 15m
+  consent_auto_accept: true
+  supported_locales: [fr, en]
+  apps:
+    - { id: sql, login_url: http://sql/login, consent_url: http://sql/consent, logout_url: http://sql/logout, method: pwd }
+    - id: otp
+      login_url: http://otp/login
+      consent_url: http://otp/consent
+      method: otp
+      receive_claims: [email]
+      allowed_sources: [10.0.1.0/24, "::ffff:10.0.2.0/120"]
+    - { id: none, login_url: http://none/login, consent_url: http://none/consent, method: pwd, receive_claims: [] }
+  flows:
+    - id: mfa
+      title: { fr: "Deux facteurs", en: "Two factors" }
+      description: { fr: "SQL puis OTP" }
+      icon_url: { fr: http://icons/mfa.svg }
+      acr: loa2
+      steps: [{ id: sql, order: 0 }, { id: otp, order: 1, subject_check: equal }]
+    - { id: off, title: Off, description: D, enabled: false, steps: [{ id: none, order: 3 }] }
+  oauth2_clients:
+    - { id: ci, secret: s3cret, scopes: [admin:read, admin:flows] }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := func(want error, args ...string) (string, string) {
+		t.Helper()
+		out, errOut, err := onPostgres(t, "", args...)
+		if !errors.Is(err, want) || (want == nil) != (err == nil) {
+			t.Fatalf("%q: err = %v, want %v\nstdout:\n%s\nstderr:\n%s", args, err, want, out, errOut)
+		}
+		return out, errOut
+	}
+	cmd(nil, "bootstrap", "-config", seed, "-force")
+	if out, _ := cmd(nil, "config", "diff", "-config", seed); !strings.HasSuffix(out, "same 10\n") {
+		t.Errorf("diff after the bootstrap:\n%s", out)
+	}
+
+	// The dump, its clients apart, is a seed that changes nothing.
+	dump, _ := cmd(nil, "config", "dump", "-section", "settings,apps,flows")
+	if strings.Contains(dump, "oauth2_clients") || strings.Contains(dump, "remember") || !strings.Contains(dump, "receive_claims: null") || !strings.Contains(dump, "receive_claims: []") ||
+		!strings.Contains(dump, "challenge_ttl: 900") || !strings.Contains(dump, "10.0.2.0/24") {
+		t.Errorf("dump:\n%s", dump)
+	}
+	dumped := filepath.Join(dir, "dump.yaml")
+	if err := os.WriteFile(dumped, []byte(dump), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := cmd(nil, "config", "diff", "-config", dumped); !strings.HasSuffix(out, "same 9, absent 1\n") || !strings.Contains(out, "absent  api_client ci") {
+		t.Errorf("diff of the dump:\n%s", out)
+	}
+	all, _ := cmd(nil, "config", "dump")
+	if !strings.Contains(all, "  oauth2_clients:\n    # secret: not dumped, the seed requires one\n    - id: ci\n") || strings.Contains(all, "$2a$") {
+		t.Errorf("dump of the clients:\n%s", all)
+	}
+
+	// A write of the CLI: the diff wants to undo it, names its author, exits 1.
+	cmd(nil, "client", "update", "ci", "-scopes", "admin:read")
+	out, _ := cmd(errFailed, "config", "diff", "-config", seed)
+	if !strings.Contains(out, "update  api_client ci (written by cli)\n          scopes: [\"admin:read\"] -> [\"admin:read\",\"admin:flows\"]") {
+		t.Errorf("diff after a write:\n%s", out)
+	}
+	out, _ = cmd(errFailed, "config", "diff", "-config", seed, "-format", "json")
+	var changes []map[string]any
+	if err := json.Unmarshal([]byte(out), &changes); err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(changes, func(c map[string]any) bool { return c["id"] == "ci" })
+	if i < 0 || changes[i]["action"] != "update" || changes[i]["by"] != "cli" {
+		t.Fatalf("json: %v", changes)
+	}
+	field := changes[i]["fields"].([]any)[0].(map[string]any)
+	if field["name"] != "scopes" || len(field["new"].([]any)) != 2 {
+		t.Errorf("json field: %v", field)
+	}
+
+	// An error exits 2, not 1: that is the differences.
+	_, _, err := onPostgres(t, "", "config", "diff", "-config", filepath.Join(dir, "none.yaml"))
+	var exit *exitError
+	if !errors.As(err, &exit) || exit.code != 2 {
+		t.Errorf("a file missing: %v", err)
 	}
 }

@@ -35,6 +35,7 @@ type configStore interface {
 	Listen(ctx context.Context, changed func(), logger *slog.Logger)
 
 	// Those of the CLI.
+	Diff(ctx context.Context, seed config.Seed) ([]store.Change, error)
 	APIClients(ctx context.Context) ([]store.APIClient, error)
 	CreateAPIClient(ctx context.Context, by string, c store.APIClient) error
 	UpdateAPIClient(ctx context.Context, by, id string, change func(*store.APIClient) error) error

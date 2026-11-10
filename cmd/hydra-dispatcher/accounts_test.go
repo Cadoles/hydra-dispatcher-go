@@ -181,7 +181,12 @@ func TestClientCommands(t *testing.T) {
 		"update, unknown":           {args: []string{"client", "update", "nope", "-new-secret"}, err: errFailed, stderr: `API client "nope" not found.`},
 		"update, a scope refused":   {args: []string{"client", "update", "ci", "-scopes", "admin flows"}, clients: ci(), err: errFailed, stderr: `scopes[0]: "admin flows" contains a space`},
 		"delete, out of a terminal": {args: []string{"client", "delete", "ci"}, clients: ci(), stderr: `API client "ci" deleted.`, calls: []string{"read clients", "delete client ci", "close"}},
-		"delete, asked, yes":        {args: []string{"client", "delete", "ci"}, terminal: true, input: "y\n", clients: ci(), stderr: `Delete API client "ci"? [y/N] API client "ci" deleted.`},
+		// The prompt alone: the audit, written by its queue, may come before
+		// the message.
+		"delete, asked, yes": {
+			args: []string{"client", "delete", "ci"}, terminal: true, input: "y\n", clients: ci(), stderr: `Delete API client "ci"? [y/N] `,
+			calls: []string{"read clients", "delete client ci", "close"},
+		},
 		"delete, asked, no": {
 			args: []string{"client", "delete", "ci"}, terminal: true, input: "\n", clients: ci(), stderr: "Nothing deleted.",
 			calls: []string{"read clients", "close"},
@@ -366,5 +371,74 @@ func TestBootstrapCreateAdmin(t *testing.T) {
 	_, errOut, err := runCLI(t, f, true, "n\n", []string{"s3cret", "s3cret"}, "bootstrap", "-force", "-create-admin", "alice")
 	if err != nil || len(f.admins) != 0 || !strings.Contains(errOut, "Nothing written.") {
 		t.Errorf("refused: %v, accounts %+v\n%s", err, f.admins, errOut)
+	}
+}
+
+// config diff: the changes alone on stdout; exit 0 for nothing to write, 1
+// for changes, 2 in error.
+func TestConfigCommands(t *testing.T) {
+	unchanged := []store.Change{{Kind: "app", ID: "hydra-sql", Action: store.Same}, {Kind: "flow", ID: "legacy", Action: store.Absent}}
+	for name, tt := range map[string]struct {
+		cliCase
+		changes []store.Change
+	}{
+		"changes":          {cliCase{args: []string{"config", "diff"}, err: errFailed, stdout: printed(someChanges), calls: []string{"diff", "close"}}, someChanges},
+		"nothing to write": {cliCase{args: []string{"config", "diff"}, stdout: printed(unchanged)}, unchanged},
+		"json": {cliCase{args: []string{"config", "diff", "-format", "json"}, err: errFailed, stdout: `[
+  {
+    "kind": "setting",
+    "id": "remember",
+    "action": "reset",
+    "fields": [
+      {
+        "name": "value",
+        "old": false,
+        "new": true
+      }
+    ]
+  },
+  {
+    "kind": "api_client",
+    "id": "test",
+    "action": "keep",
+    "fields": [
+      {
+        "name": "secret",
+        "secret": true
+      }
+    ]
+  }
+]
+`}, []store.Change{someChanges[0], someChanges[2]}},
+		"json, nothing": {cliCase{args: []string{"config", "diff", "-format", "json"}, stdout: "[]\n"}, nil},
+		"a format":      {cliCase{args: []string{"config", "diff", "-format", "yaml"}, err: errUsage}, nil},
+		"a section":     {cliCase{args: []string{"config", "dump", "-section", "apps,accounts"}, err: errUsage, stderr: `-section "accounts"`}, nil},
+		"no command":    {cliCase{args: []string{"config"}, err: errUsage, stderr: "Usage: hydra-dispatcher config <command>"}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			keepLoggers(t)
+			commandEnv(t)
+			f := &fakeStore{changes: tt.changes}
+			out, errOut, err := runCLI(t, f, false, "", nil, tt.args...)
+			if !errors.Is(err, tt.err) || (tt.err == nil) != (err == nil) || out != tt.stdout || !strings.Contains(errOut, tt.stderr) ||
+				tt.calls != nil && !slices.Equal(f.Calls(), tt.calls) {
+				t.Errorf("err = %v, calls = %q, stdout:\n%s\nstderr:\n%s", err, f.Calls(), out, errOut)
+			}
+		})
+	}
+
+	keepLoggers(t)
+	commandEnv(t)
+	_, _, err := runCLI(t, &fakeStore{bootstrapErr: errors.New("diff: read apps: connection refused")}, false, "", nil, "config", "diff")
+	var exit *exitError
+	if !errors.As(err, &exit) || exit.code != 2 || errors.Is(err, errFailed) {
+		t.Errorf("an error: %v, want exit 2", err)
+	}
+
+	// The sections asked alone.
+	f := &fakeStore{apps: []store.App{{ID: "sql", LoginURL: "http://sql/login", ConsentURL: "http://sql/consent", Method: "pwd", AuthMode: "network"}}}
+	out, _, err := runCLI(t, f, false, "", nil, "config", "dump", "-section", "apps")
+	if err != nil || !strings.HasSuffix(out, "dispatcher:\n  apps:\n    - id: sql\n      login_url: http://sql/login\n      consent_url: http://sql/consent\n      method: pwd\n      auth_mode: network\n      receive_claims: null\n") {
+		t.Errorf("dump: %v\n%s", err, out)
 	}
 }

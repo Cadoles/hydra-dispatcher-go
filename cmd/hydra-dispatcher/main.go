@@ -44,6 +44,7 @@ var commands = []command{
 	{"bootstrap", "write the seed of the configuration file to the database", bootstrap},
 	{"client", "client create|update|delete|list: the API clients of the admin API", client},
 	{"admin", "admin create|update|list: the accounts of the admin UI", adminAccounts},
+	{"config", "config dump|diff: the configuration of the database, against the file", configCmd},
 	{"healthcheck", "probe /health of a local server (container HEALTHCHECK)", healthcheck},
 	{"theme", "theme check <dir>: render the pages of a theme as serve does, one line by problem", theme},
 	{"version", "print the version", printVersion},
@@ -56,11 +57,15 @@ func main() {
 	context.AfterFunc(ctx, stop)
 	err := run(ctx, os.Args[1:], os.Stderr)
 	stop()
+	var exit *exitError
 	switch {
 	case errors.Is(err, errUsage):
 		os.Exit(2)
 	case errors.Is(err, errFailed):
 		os.Exit(1)
+	case errors.As(err, &exit):
+		slog.Error("fatal", "err", exit.err)
+		os.Exit(exit.code)
 	case err != nil:
 		slog.Error("fatal", "err", err)
 		os.Exit(1)

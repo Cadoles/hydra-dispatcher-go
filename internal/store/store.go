@@ -177,6 +177,9 @@ type Snapshot struct {
 	Apps     []App
 	Flows    []Flow
 	Settings Settings
+	// StoredSettings are the keys of the registry the setting table holds, in
+	// its order: the others are at their default (config dump).
+	StoredSettings []string
 	// APIClients are the clients of the admin API, by id in byte order:
 	// the admin API reads them at each request (Q101).
 	APIClients []APIClient
@@ -283,6 +286,11 @@ func readSnapshot(ctx context.Context, q querier) (*Snapshot, error) {
 	if s.Settings, s.Warnings, err = settingsFrom(rows); err != nil {
 		err = unreadable{err}
 		return nil, err
+	}
+	for _, st := range registry {
+		if _, ok := rows[st.key]; ok {
+			s.StoredSettings = append(s.StoredSettings, st.key)
+		}
 	}
 	return s, nil
 }
