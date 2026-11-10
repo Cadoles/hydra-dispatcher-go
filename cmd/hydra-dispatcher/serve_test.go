@@ -28,8 +28,10 @@ import (
 	"testing"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/admin"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
@@ -268,6 +270,82 @@ func TestLoggersLevel(t *testing.T) {
 	}
 	if !strings.Contains(out, `"msg":"http.request"`) || !strings.Contains(out, `"log_type":"access"`) || !strings.Contains(out, `"status":404`) {
 		t.Errorf("the 404 is missing from the access log at log_level warn: %s", out)
+	}
+}
+
+// The admin API is served by serve with its keys: /token through the whole
+// chain, its token and refusals at the audit, the security headers on it;
+// without keys, /admin/v1 is not the admin API.
+func TestHandlerAdminAPI(t *testing.T) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, _ := x509.MarshalPKCS8PrivateKey(k)
+	keys, err := admin.ParseKeys(string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := domain.HashSecret("s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t, "http://127.0.0.1:1")
+	var auditLog bytes.Buffer
+	services := testServices(t, func(context.Context) error { return nil })
+	services.audit = audit.New(slog.New(slog.NewJSONHandler(&auditLog, nil)), []byte("k"), false)
+	services.config = fixedSnapshot{services.config.Snapshot().WithAPIClients([]store.APIClient{{ID: "c", SecretHash: hash, Scopes: []string{admin.ScopeFlows}}})}
+	services.adminKeys = keys
+	logger := slog.New(slog.DiscardHandler)
+	h, err := newHandler(cfg, logger, logger, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(remote, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/admin/v1/token", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	w := post("10.1.2.3:1", "grant_type=client_credentials&client_id=c&client_secret=s3cret")
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK || body["scope"] != admin.ScopeFlows ||
+		w.Header().Get("X-Frame-Options") != "DENY" || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("token: %d %s %v", w.Code, w.Body, w.Header())
+	}
+	claims, err := keys.Verify(body["access_token"].(string), cfg.Server.BaseURL, time.Now())
+	if err != nil || claims.Subject != "c" {
+		t.Errorf("the token: %+v, %v", claims, err)
+	}
+	if w := post("203.0.113.7:1", ""); w.Code != http.StatusForbidden {
+		t.Errorf("outside the allowlist: %d", w.Code)
+	}
+	if w := post("10.1.2.3:1", "grant_type=client_credentials&client_id=c&client_secret=nope"); w.Code != http.StatusUnauthorized {
+		t.Errorf("wrong secret: %d", w.Code)
+	}
+	logs := auditLog.String()
+	for _, want := range []string{
+		`"msg":"admin.token","client_id":"c","result":"granted","ip":"10.1.2.3"`,
+		`"msg":"security.ip_rejected","surface":"admin","ip":"203.0.113.7"`,
+		`"msg":"admin.token","client_id":"c","result":"refused","ip":"10.1.2.3","reason":"invalid_client"`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Errorf("no %s in the audit log:\n%s", want, logs)
+		}
+	}
+	if strings.Contains(logs, "s3cret") || strings.Contains(logs, "nope") || strings.Contains(logs, body["access_token"].(string)) {
+		t.Errorf("a secret or a token in the audit log:\n%s", logs)
+	}
+
+	services.adminKeys, services.metrics = nil, metrics.New(200, nil)
+	h, err = newHandler(cfg, logger, logger, services)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := post("10.1.2.3:1", "grant_type=client_credentials&client_id=c&client_secret=s3cret"); w.Code == http.StatusOK || strings.Contains(w.Body.String(), "access_token") {
+		t.Errorf("without keys: %d %s", w.Code, w.Body)
 	}
 }
 

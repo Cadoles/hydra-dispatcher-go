@@ -93,7 +93,6 @@ func serve(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	_ = adminKeys // the admin API is served from P15c
 	// The image's HEALTHCHECK reads DISPATCHER_CONFIG, not -config: a file
 	// given by -config alone may listen where the probe does not look.
 	if *configPath != os.Getenv(configEnv) {
@@ -155,7 +154,7 @@ func serve(ctx context.Context, args []string) error {
 
 	var draining atomic.Bool
 	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker,
-		draining: draining.Load, theme: theme})
+		draining: draining.Load, theme: theme, adminKeys: adminKeys})
 	if err != nil {
 		stop()
 		return err
@@ -502,6 +501,8 @@ type services struct {
 	draining func() bool
 	// theme is that of the pages; nil for the embedded one.
 	theme *front.Theme
+	// adminKeys are those of the admin API; nil, it is not served.
+	adminKeys *admin.Keys
 }
 
 // newHandler builds the routes behind the middleware chain every surface
@@ -617,6 +618,26 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		LogSample: logSample,
 	})
 	pages.Register(mux)
+	if s.adminKeys != nil {
+		hosts, err := cfg.Security.AdminAuthorizedHosts.Prefixes()
+		if err != nil {
+			return nil, err
+		}
+		admin.New(admin.Options{
+			Keys: s.adminKeys, Config: s.config, Issuer: cfg.Server.BaseURL, TokenTTL: cfg.Admin.API.TokenTTL.Std(),
+			AuthorizedHosts: hosts, RatePerMinute: cfg.Admin.API.RateLimitPerMinute,
+			Logger: logger, LogIP: cfg.Observability.LogIP, LogSample: logSample,
+			Refused: func(c context.Context) {
+				watch.Refused("admin")
+				s.audit.Refused(c, "admin")
+			},
+			RateLimited: func(c context.Context) {
+				watch.AdminRateLimited()
+				s.audit.AdminRateLimited(c)
+			},
+			Token: s.audit.Token,
+		}).Register(mux)
+	}
 	if cfg.Observability.Metrics.Listen == "" {
 		hosts, err := cfg.Security.MetricsAuthorizedHosts.Prefixes()
 		if err != nil {

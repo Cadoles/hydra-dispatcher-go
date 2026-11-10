@@ -75,9 +75,10 @@ type Metrics struct {
 	buildInfo                     *prometheus.GaugeVec
 	propagations                  *prometheus.CounterVec
 
-	rateLimited  *prometheus.CounterVec
-	readyChecks  *prometheus.GaugeVec
-	auditDropped prometheus.Counter
+	rateLimited      *prometheus.CounterVec
+	adminRateLimited prometheus.Counter
+	readyChecks      *prometheus.GaugeVec
+	auditDropped     prometheus.Counter
 
 	flows, apps, routes bounded
 
@@ -138,6 +139,7 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 		propagations:        counter("logout_propagations_total", "Propagation of the logout to the login apps.", "app", "result"),
 		rateLimited:         counter("failure_rate_limited_total", "Requests refused by the failure limiter.", "surface"),
 		auditDropped:        single("audit_dropped_total", "Lines of the audit log lost, its output blocked or failing (Q89)."),
+		adminRateLimited:    single("admin_rate_limited_total", "Requests of the admin API refused by its rate limit."),
 		readyChecks: func() *prometheus.GaugeVec {
 			g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "ready_check_up", Help: "Last answer of each check of /ready, 1 for ok; /ready itself does not follow them (Q83)."}, []string{"check"})
 			reg.MustRegister(g)
@@ -228,6 +230,9 @@ func (m *Metrics) Filtered(hosts []netip.Prefix, logIP string, refused func(cont
 
 // Refused counts a refusal of an IP filter on surface: admin, emulated or metrics.
 func (m *Metrics) Refused(surface string) { m.ipRejections.WithLabelValues(surface).Inc() }
+
+// AdminRateLimited counts a request of the admin API refused by its rate limit.
+func (m *Metrics) AdminRateLimited() { m.adminRateLimited.Inc() }
 
 // RateLimited counts a request the failure limiter refused on surface: front, the pages
 // (Q80).

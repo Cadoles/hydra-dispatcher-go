@@ -178,3 +178,19 @@ func (l *Log) Blocked(ctx context.Context) {
 func (l *Log) Refused(ctx context.Context, surface string) {
 	l.logger.WarnContext(ctx, "security.ip_rejected", "surface", surface, "ip", clientIP(ctx))
 }
+
+// Token writes a token of the admin API asked for: granted or refused, the client
+// named, and the reason of a refusal (unsupported_grant_type, invalid_request,
+// invalid_client, invalid_scope); never the secret nor the token.
+func (l *Log) Token(ctx context.Context, client, result, reason string) {
+	attrs := []any{"client_id", client, "result", result, "ip", clientIP(ctx)}
+	if reason != "" {
+		attrs = append(attrs, "reason", reason)
+	}
+	l.logger.InfoContext(ctx, "admin.token", attrs...)
+}
+
+// AdminRateLimited writes a request of the admin API over its rate limit, by IP.
+func (l *Log) AdminRateLimited(ctx context.Context) {
+	l.logger.WarnContext(ctx, "admin.rate_limited", "ip", clientIP(ctx))
+}

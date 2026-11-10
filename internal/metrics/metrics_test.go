@@ -51,8 +51,8 @@ func series(body, name string) string {
 }
 
 // The catalogue of the doc that phase 1 feeds, in full: a metric added or renamed
-// without the doc fails here (Cardinalité). admin_rate_limited_total and encrypted_values
-// come with the admin (phase 3), step_skips_total with the step check (phase 4).
+// without the doc fails here (Cardinalité). encrypted_values comes with the secrets in the
+// database (phase 3), step_skips_total with the step check (phase 4).
 func TestCatalogue(t *testing.T) {
 	m := New(200, nil)
 	exercise(m, []string{"hydra-sql"}, []string{"sql"})
@@ -88,6 +88,7 @@ func TestCatalogue(t *testing.T) {
 		"failure_rate_limited_total":            {"counter", []string{"surface"}},
 		"ready_check_up":                        {"gauge", []string{"check"}},
 		"audit_dropped_total":                   {"counter", nil},
+		"admin_rate_limited_total":              {"counter", nil},
 	}
 	families, err := m.registry.Gather()
 	if err != nil {
