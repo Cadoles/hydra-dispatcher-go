@@ -32,6 +32,7 @@ type command struct {
 
 var commands = []command{
 	{"export", "write the apps, flows and settings of Symfony's admin API as a seed, on the standard output", export},
+	{"accounts", "copy the admin accounts and the API clients of Symfony's database into the Go one", accounts},
 }
 
 func main() {
