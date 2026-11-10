@@ -195,6 +195,19 @@ func settingsFrom(rows map[string][]byte) (Settings, []string, error) {
 	return s, warnings, s.Validate()
 }
 
+// SettingsOf assembles settings from values, by key of the registry, each in
+// the JSON of its type (durations in seconds), over the defaults, as the
+// setting table is read, without Validate; an unknown key is a warning, a
+// value of the wrong type an error. tools/symfonyimport reads the settings of
+// Symfony with it.
+func SettingsOf(values map[string]json.RawMessage) (Settings, []string, error) {
+	rows := make(map[string][]byte, len(values))
+	for k, v := range values {
+		rows[k] = v
+	}
+	return decodeSettings(rows)
+}
+
 // decodeSettings is settingsFrom without the validation.
 func decodeSettings(rows map[string][]byte) (Settings, []string, error) {
 	s := DefaultSettings()
