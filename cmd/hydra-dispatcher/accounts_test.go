@@ -296,9 +296,17 @@ func TestAdminCommands(t *testing.T) {
 		"create, Symfony's password argument": {args: []string{"admin", "create", "alice", "s3cret-pass", "-role", "admin"}, err: errUsage, stderr: "not printed", calls: []string{}},
 		"update, a value to -password":        {args: []string{"admin", "update", "alice", "-password=s3cret-pass"}, err: errUsage, stderr: "-password takes no value", calls: []string{}},
 		"update, a value to -password-stdin":  {args: []string{"admin", "update", "alice", "-password-stdin=s3cret-pass"}, err: errUsage, calls: []string{}},
-		"create, a name taken":                {args: []string{"admin", "create", "alice", "-role", "admin", "-password-stdin"}, input: "s3cret", admins: alice(), err: errFailed, stderr: `Admin account "alice" already exists.`},
-		"create, a name refused":              {args: []string{"admin", "create", "bob ", "-role", "admin", "-password-stdin"}, input: "s3cret", err: errFailed, stderr: `username: "bob " starts or ends with a space`},
-		"update, the role of the last":        {args: []string{"admin", "update", "alice", "-role", "viewer"}, admins: alice(), err: errFailed, stderr: `Admin account "alice": the last admin account keeps the admin role.`},
+		// A password that starts with a dash: an unknown flag, which the flag
+		// package quoted (revue R39).
+		"create, a password with a dash":       {args: []string{"admin", "create", "alice", "-s3cret-pass", "-role", "admin"}, err: errUsage, stderr: "not printed", calls: []string{}},
+		"create, a password with two dashes":   {args: []string{"admin", "create", "alice", "-role", "admin", "--s3cret-pass"}, err: errUsage, stderr: "not printed", calls: []string{}},
+		"create, a password with three dashes": {args: []string{"admin", "create", "alice", "---s3cret-pass"}, err: errUsage, stderr: "not printed", calls: []string{}},
+		"create, a password after -=":          {args: []string{"admin", "create", "alice", "-=s3cret-pass"}, err: errUsage, stderr: "not printed", calls: []string{}},
+		"create, -role without its value":      {args: []string{"admin", "create", "alice", "-role"}, err: errUsage, stderr: "flag needs an argument: -role", calls: []string{}},
+		"create, its help":                     {args: []string{"admin", "create", "-h"}, stderr: "Usage of admin create", calls: []string{}},
+		"create, a name taken":                 {args: []string{"admin", "create", "alice", "-role", "admin", "-password-stdin"}, input: "s3cret", admins: alice(), err: errFailed, stderr: `Admin account "alice" already exists.`},
+		"create, a name refused":               {args: []string{"admin", "create", "bob ", "-role", "admin", "-password-stdin"}, input: "s3cret", err: errFailed, stderr: `username: "bob " starts or ends with a space`},
+		"update, the role of the last":         {args: []string{"admin", "update", "alice", "-role", "viewer"}, admins: alice(), err: errFailed, stderr: `Admin account "alice": the last admin account keeps the admin role.`},
 		"update, the password asked": {
 			args: []string{"admin", "update", "alice", "-password"}, terminal: true, answers: []string{"s3cret", "s3cret"}, admins: alice(), stderr: `Admin account "alice" updated.`,
 			check: func(t *testing.T, f *fakeStore, _ string) {

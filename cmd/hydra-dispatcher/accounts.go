@@ -68,7 +68,7 @@ func parseWithArg(fs *flag.FlagSet, args []string, what string) (help bool, arg 
 	if err := boolValues(fs, args); err != nil {
 		return false, "", err
 	}
-	switch err := fs.Parse(args); {
+	switch err := parseQuiet(fs, args); {
 	case errors.Is(err, flag.ErrHelp):
 		return true, "", nil
 	case err != nil:

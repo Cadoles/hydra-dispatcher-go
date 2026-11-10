@@ -116,7 +116,7 @@ func parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
 	if err := boolValues(fs, args); err != nil {
 		return false, err
 	}
-	switch err := fs.Parse(args); {
+	switch err := parseQuiet(fs, args); {
 	case errors.Is(err, flag.ErrHelp):
 		return true, nil
 	case err != nil:
@@ -129,6 +129,28 @@ func parseFlags(fs *flag.FlagSet, args []string) (help bool, err error) {
 		return false, errUsage
 	}
 	return false, nil
+}
+
+// parseQuiet parses args into fs without letting the flag package write what
+// it refuses: an unknown flag may be a password that starts with a dash
+// (admin create alice -S3cret), which it quoted (revue R39). A flag that
+// lacks its value is named: the command defines it. -h shows the usage.
+func parseQuiet(fs *flag.FlagSet, args []string) error {
+	out := fs.Output()
+	fs.SetOutput(io.Discard)
+	err := fs.Parse(args)
+	fs.SetOutput(out)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, flag.ErrHelp):
+	case strings.HasPrefix(err.Error(), "flag needs an argument: "):
+		fmt.Fprintln(out, err)
+	default:
+		fmt.Fprintln(out, "a flag or its value refused, not printed: a password or a secret never goes in an argument")
+	}
+	fs.Usage()
+	return err
 }
 
 // boolValues refuses a value given to a boolean flag, as -password=S3cret!:
