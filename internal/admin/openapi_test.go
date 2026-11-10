@@ -2,20 +2,25 @@ package admin
 
 import (
 	"bytes"
+	"crypto/elliptic"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/api"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 )
 
 // openAPI is the validator of the document, made once.
@@ -128,6 +133,7 @@ func TestRouteScopes(t *testing.T) {
 		tokens[scope] = r.tokenOf(t, "only-"+strings.ReplaceAll(scope, ":", "-"), scope)
 	}
 	checked := 0
+	var open []string
 	for path, ops := range doc.Paths {
 		if !strings.HasPrefix(path, Prefix+"/") {
 			continue
@@ -147,13 +153,16 @@ func TestRouteScopes(t *testing.T) {
 				allowed = append(allowed, req["bearer"]...)
 			}
 			if len(allowed) == 0 {
-				continue // /token and the documentation
+				open = append(open, strings.ToUpper(method)+" "+path)
+				continue
 			}
 			concrete := strings.ReplaceAll(path, "{id}", "x")
 			for _, scope := range Scopes {
 				w := r.do(tokens[scope], strings.ToUpper(method), concrete, "application/json", `{}`)
-				if refused := w.Code == http.StatusForbidden; refused == slices.Contains(allowed, scope) {
-					t.Errorf("%s %s with %s: %d, the document allows %q", strings.ToUpper(method), path, scope, w.Code, allowed)
+				// A 403 for the scope, not for another reason.
+				refused := w.Code == http.StatusForbidden && strings.Contains(w.Header().Get("WWW-Authenticate"), `error="insufficient_scope"`)
+				if refused == slices.Contains(allowed, scope) || w.Code == http.StatusForbidden && !refused {
+					t.Errorf("%s %s with %s: %d %s, the document allows %q", strings.ToUpper(method), path, scope, w.Code, w.Header().Get("WWW-Authenticate"), allowed)
 				}
 			}
 			checked++
@@ -161,6 +170,12 @@ func TestRouteScopes(t *testing.T) {
 	}
 	if checked != 21 {
 		t.Errorf("%d operations checked, want 21", checked)
+	}
+	// Without a token, these alone: a route of a resource documented with
+	// security: [] would escape the check above (revue R36).
+	slices.Sort(open)
+	if want := []string{"GET /admin/v1/docs", "GET /admin/v1/docs.json", "POST /admin/v1/token"}; !slices.Equal(open, want) {
+		t.Errorf("operations without a token: %q, want %q", open, want)
 	}
 }
 
@@ -290,11 +305,20 @@ func truncate(s string, n int) string {
 	return s
 }
 
+// wantDocsCSP is the CSP of the page, written out: compared with the
+// constant itself, the test let any change of it pass (revue R36).
+const wantDocsCSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; " +
+	"connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+
+// docsPaths are the page of the documentation and its files.
+var docsPaths = []string{"/admin/v1/docs", "/admin/v1/docs.json", "/admin/v1/docs/scalar.js", "/admin/v1/docs/init.js"}
+
 // The page of the documentation: its CSP, its files, served without a token.
 func TestDocsPage(t *testing.T) {
 	r := newResources(t)
 	w := r.do("", http.MethodGet, "/admin/v1/docs", "", "")
-	if w.Code != http.StatusOK || w.Header().Get("Content-Security-Policy") != docsCSP || !strings.Contains(w.Body.String(), `<script src="docs/scalar.js">`) {
+	if w.Code != http.StatusOK || w.Header().Get("Content-Security-Policy") != wantDocsCSP || w.Header().Get("Referrer-Policy") != "no-referrer" ||
+		!strings.Contains(w.Body.String(), `<script src="docs/scalar.js">`) {
 		t.Fatalf("page: %d %v", w.Code, w.Header())
 	}
 	for path, ct := range map[string]string{
@@ -316,12 +340,28 @@ func TestDocsPage(t *testing.T) {
 			t.Errorf("%s again: %d", path, again.Code)
 		}
 	}
-	// The allowlist holds for them too.
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/docs", nil)
-	req.RemoteAddr = "203.0.113.7:1"
-	w = httptest.NewRecorder()
-	r.handler.ServeHTTP(w, req)
-	if w.Code != http.StatusForbidden {
-		t.Errorf("outside the allowlist: %d", w.Code)
+	// The allowlist and the rate limit hold for each of them: a limit of 2,
+	// the third request of an address refused.
+	keys := mustKeys(t, pkcs8(t, ecKey(t, elliptic.P256())), "")
+	limited := mustNew(t, Options{Keys: keys, Config: &snapshots{}, Issuer: issuer, TokenTTL: time.Minute,
+		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, RatePerMinute: 2})
+	mux := http.NewServeMux()
+	limited.Register(mux)
+	h := httpx.Chain(mux, httpx.RealIP(nil))
+	get := func(path, from string) int {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = from + ":1"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	for i, path := range docsPaths {
+		if code := get(path, "203.0.113.7"); code != http.StatusForbidden {
+			t.Errorf("%s outside the allowlist: %d", path, code)
+		}
+		from := fmt.Sprintf("10.9.0.%d", i+1)
+		if codes := []int{get(path, from), get(path, from), get(path, from)}; codes[0] != http.StatusOK || codes[2] != http.StatusTooManyRequests {
+			t.Errorf("%s under a limit of 2: %v", path, codes)
+		}
 	}
 }

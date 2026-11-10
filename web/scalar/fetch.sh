@@ -7,7 +7,8 @@
 # A new version (Renovate opens its pull request): the integrity is that of the
 # registry (npm view @scalar/api-reference@<version> dist.integrity), the sha256
 # the one this script says when it differs; then open /admin/v1/docs and read
-# the console for a violation of the CSP before merging.
+# the Issues panel for a violation of the CSP, and the page for a button of
+# Scalar's services, before merging (README.md).
 set -eu
 
 SCALAR_VERSION=1.76.0 # renovate: datasource=npm depName=@scalar/api-reference

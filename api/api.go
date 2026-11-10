@@ -20,9 +20,11 @@ var YAML []byte
 // JSON gives the document in JSON, /admin/v1/docs.json: in the order of the
 // YAML, which the page of the documentation follows, its anchors and merges
 // resolved.
-func JSON() ([]byte, error) {
+func JSON() ([]byte, error) { return toJSON(YAML) }
+
+func toJSON(data []byte) ([]byte, error) {
 	var root yaml.Node
-	if err := yaml.Unmarshal(YAML, &root); err != nil {
+	if err := yaml.Unmarshal(data, &root); err != nil {
 		return nil, err
 	}
 	var b bytes.Buffer
@@ -118,6 +120,10 @@ func mappingPairs(n *yaml.Node) ([]pair, error) {
 		}
 		if k.Kind != yaml.ScalarNode {
 			return nil, fmt.Errorf("openapi.yaml line %d: a key that is not a scalar", k.Line)
+		}
+		if seen[k.Value] {
+			// JSON would hold it twice, each reader keeping one (revue R36).
+			return nil, fmt.Errorf("openapi.yaml line %d: %q twice in a mapping", k.Line, k.Value)
 		}
 		pairs = append(pairs, pair{k.Value, v})
 		seen[k.Value] = true

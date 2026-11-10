@@ -47,7 +47,7 @@
       "automerge": false
     },
     {
-      "description": "Scalar's API reference of web/scalar/fetch.sh, the page of /admin/v1/docs: its integrity and its sha256 by hand, standalone.js fetched again and committed, the page read in a browser for a violation of its CSP; the CI fails until the file is there.",
+      "description": "Scalar's API reference of web/scalar/fetch.sh, the page of /admin/v1/docs: its integrity and its sha256 by hand, standalone.js fetched again and committed, the page read in a browser (the Issues panel for a violation of its CSP, no button of Scalar's services: web/scalar/README.md); the CI fails until the file is there.",
       "matchDepNames": ["@scalar/api-reference"],
       "groupName": null,
       "automerge": false

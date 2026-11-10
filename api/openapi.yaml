@@ -1077,7 +1077,12 @@ components:
       additionalProperties: true
     AcceptLogin:
       type: object
-      description: Hydra's AcceptOAuth2LoginRequest.
+      description: |
+        Hydra's AcceptOAuth2LoginRequest. Of a step, the dispatcher reads
+        subject, amr and context, and keeps remember and remember_for; acr,
+        force_subject_identifier, identity_provider_session_id and
+        extend_session_lifespan are taken and not kept: the acr Hydra gets is
+        that of the flow.
       required: [subject]
       properties:
         subject: { type: string }
@@ -1089,7 +1094,12 @@ components:
       additionalProperties: true
     AcceptConsent:
       type: object
-      description: Hydra's AcceptOAuth2ConsentRequest.
+      description: |
+        Hydra's AcceptOAuth2ConsentRequest. Of a step, the dispatcher keeps
+        session.id_token, session.access_token and context; grant_scope,
+        grant_access_token_audience, remember, remember_for and handled_at are
+        taken and not kept: Hydra gets the scopes and audiences its consent
+        request asks, and the remember of the settings.
       properties:
         grant_scope: { type: array, items: { type: string } }
         grant_access_token_audience: { type: array, items: { type: string } }
