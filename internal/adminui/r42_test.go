@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -108,5 +109,20 @@ func TestProviderAnswersBounded(t *testing.T) {
 	auth := b.startOIDC("/admin/oidc/login")
 	if w := b.do(http.MethodGet, p.grant(auth, p.claims("sub-1", auth)), nil); w.Code != http.StatusForbidden || b.cookies[sessionCookie] != nil {
 		t.Errorf("keys of 2 MiB: %d", w.Code)
+	}
+}
+
+// A browser that leaves during the discovery does not make the provider
+// unavailable for the others.
+func TestAbortedDiscovery(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	withIdP(r)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/admin/oidc/login", nil).WithContext(ctx)
+	req.RemoteAddr = "10.1.2.3:1"
+	r.handler.ServeHTTP(httptest.NewRecorder(), req)
+	if w := r.browser().do(http.MethodGet, "/admin/oidc/login", nil); w.Code != http.StatusSeeOther {
+		t.Errorf("after an aborted discovery: %d", w.Code)
 	}
 }

@@ -574,7 +574,14 @@ func TestSession(t *testing.T) {
 	r.accounts.set(store.AdminUser{Username: "alice", PasswordHash: hashOf(t, password), Role: domain.RoleAdmin})
 	b = loggedIn()
 	c := *b.cookies[sessionCookie]
-	c.Value = c.Value[:len(c.Value)-2] + "AA"
+	// A character of the middle, whose 6 bits all count: the last ones of
+	// base64 have unused bits, and "AA" in place of the last two was at
+	// times the same bytes (a failure in some hundreds of runs).
+	mid, flip := len(c.Value)/2, byte('A')
+	if c.Value[mid] == 'A' {
+		flip = 'B'
+	}
+	c.Value = c.Value[:mid] + string(flip) + c.Value[mid+1:]
 	b.cookies[sessionCookie] = &c
 	if on(b) {
 		t.Error("a cookie changed")

@@ -92,7 +92,9 @@ func (ui *UI) provider(ctx context.Context, block store.AdminOIDC) (*provider, e
 			return nil, p.err
 		}
 	}
-	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, ui.o.HTTPClient), oidcWait)
+	// The discovery is the provider's, not the request's: a browser that
+	// leaves does not make it a failure kept a minute (revue R42).
+	ctx, cancel := context.WithTimeout(oidc.ClientContext(context.WithoutCancel(ctx), ui.o.HTTPClient), oidcWait)
 	defer cancel()
 	var op *oidc.Provider
 	var err error
