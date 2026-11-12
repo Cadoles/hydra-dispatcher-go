@@ -500,14 +500,29 @@ func (r *run) consent(ev Consent) Outcome {
 	}
 	switch {
 	case ev.Post && ev.Accept:
-		return r.acceptConsent(f, ev.Challenge, req) // CST-14
+		// CST-14: what is sent is what was shown (R44). Claims that no
+		// longer give the print of the screen, the catalogue of the scopes
+		// changed since, on this instance or by another's snapshot, are
+		// shown again, as SKC-12.
+		session := r.consentBody(f, req).Session
+		if !r.Env.Keys.validClaimsPrint(ev.Print, session.IdToken.(Object), session.AccessToken.(Object)) {
+			return r.consentScreen(f, ev, req)
+		}
+		return r.acceptConsent(f, ev.Challenge, req)
 	case ev.Post:
 		return r.rejectConsent(f, ev.Challenge, ReasonUser, rejection(ReasonUser, "The user refused the consent."), s.redirect) // CST-15
 	case req.GetSkip() || req.Client != nil && req.Client.GetSkipConsent() || r.Env.Config.Settings.ConsentAutoAccept:
 		return r.acceptConsent(f, ev.Challenge, req) // CST-12
 	}
-	// CST-13: the screen; C kept as the flow's resume target (Q14).
+	return r.consentScreen(f, ev, req) // CST-13
+}
+
+// consentScreen is the consent screen of the accepted flow f (CST-13), C
+// kept as the flow's resume target (Q14); its form carries the print of the
+// claims shown, which the accept checks (CST-14, R44).
+func (r *run) consentScreen(f *Flow, ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	session := r.consentBody(f, req).Session
+	idt, act := session.IdToken.(Object), session.AccessToken.(Object)
 	out := Outcome{Response: Response{Kind: ConsentPage, Consent: &ConsentScreen{
 		Challenge:    ev.Challenge,
 		CSRF:         f.CSRF,
@@ -515,9 +530,10 @@ func (r *run) consent(ev Consent) Outcome {
 		Scopes:       nonNil(req.RequestedScope),
 		Audience:     nonNil(req.RequestedAccessTokenAudience),
 		Subject:      req.GetSubject(),
-		Claims:       session.IdToken.(Object),
-		AccessClaims: session.AccessToken.(Object),
+		Claims:       idt,
+		AccessClaims: act,
 		UILocales:    req.GetOidcContext().UiLocales,
+		Print:        r.Env.Keys.ClaimsPrint(idt, act),
 	}}}
 	if f.ConsentChallenge != ev.Challenge {
 		g := f.clone()

@@ -401,10 +401,11 @@ func TestHydraCalls(t *testing.T) {
 			}
 			resp := w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil)
 			if tc.screen {
+				page := text(t, resp)
 				if resp.StatusCode != http.StatusOK {
-					t.Fatalf("consent screen: %d %s", resp.StatusCode, text(t, resp))
+					t.Fatalf("consent screen: %d %s", resp.StatusCode, page)
 				}
-				resp = w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {w.csrf()}, "action": {"accept"}}, sameOrigin...)
+				resp = w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {w.csrf()}, "claims_print": {printIn(t, page)}, "action": {"accept"}}, sameOrigin...)
 			}
 			if u := location(t, resp, http.StatusSeeOther); u.String() != callbackURL {
 				t.Fatalf("consent: %s", u)
@@ -1169,7 +1170,9 @@ func TestCSRF(t *testing.T) {
 	w.cookies["dispatcher_flow_csrf"] = cookie
 	w.app(step, "alice", `{"email":"alice@example.org"}`)
 	location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
-	if resp := w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil); resp.StatusCode != http.StatusOK {
+	resp = w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil)
+	screen := text(t, resp)
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("CST-13: %d", resp.StatusCode)
 	}
 	for _, tc := range []struct{ name, token, cookie string }{
@@ -1184,7 +1187,7 @@ func TestCSRF(t *testing.T) {
 		}
 	}
 	w.cookies["dispatcher_flow_csrf"] = cookie
-	if u := location(t, w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {cookie}, "action": {"accept"}}, sameOrigin...), http.StatusSeeOther); u.String() != callbackURL {
+	if u := location(t, w.do(http.MethodPost, "/consent", url.Values{"consent_challenge": {hydraC}, "csrf_token": {cookie}, "claims_print": {printIn(t, screen)}, "action": {"accept"}}, sameOrigin...), http.StatusSeeOther); u.String() != callbackURL {
 		t.Errorf("CST-14 after the refusals: %s", u)
 	}
 }
@@ -1667,4 +1670,15 @@ func TestConsentCatalogue(t *testing.T) {
 	if strings.Contains(body, "Permission “groups”") || strings.Contains(body, "Other data") {
 		t.Errorf("groups outside the catalogue:\n%s", body)
 	}
+}
+
+// printIn is the print of the claims a consent screen shows, which its form
+// posts (SKC-2, CST-13).
+func printIn(t *testing.T, page string) string {
+	t.Helper()
+	m := regexp.MustCompile(`name="claims_print" value="([0-9a-f]{64})"`).FindStringSubmatch(page)
+	if m == nil {
+		t.Fatalf("no claims_print in:\n%s", page)
+	}
+	return m[1]
 }

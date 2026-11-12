@@ -259,8 +259,8 @@ type ConsentScreen struct {
 	AccessClaims Object
 	// UILocales are the oidc_context's ui_locales, for the page's language.
 	UILocales []string
-	// Print is the print of the claims shown, which the form of a consent
-	// without a flow carries (SKC-2, Q37); "" on a flow's screen.
+	// Print is the print of the claims shown, which the form of the consent
+	// carries: without a flow (SKC-2, Q37), and with one (CST-13, R44).
 	Print string
 }
 

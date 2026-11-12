@@ -77,7 +77,8 @@ func TestScopesResource(t *testing.T) {
 		t.Errorf("nothing: %d", w.Code)
 	}
 	// A scope named as a URL, its slashes escaped in the path.
-	if w := r.do(r.all, http.MethodPost, Prefix+"/scopes", "application/json", `{"name":"https://api.test/read"}`); w.Code != http.StatusCreated {
+	if w := r.do(r.all, http.MethodPost, Prefix+"/scopes", "application/json", `{"name":"https://api.test/read"}`); w.Code != http.StatusCreated ||
+		w.Header().Get("Location") != Prefix+"/scopes/https:%2F%2Fapi.test%2Fread" {
 		t.Fatalf("a URL: %d %s", w.Code, w.Body)
 	}
 	if w := r.do(r.reader, http.MethodGet, Prefix+"/scopes/https:%2F%2Fapi.test%2Fread", "", ""); w.Code != http.StatusOK {
@@ -100,5 +101,26 @@ func TestScopesResource(t *testing.T) {
 	}
 	if audit := strings.Join(r.wrote, "\n"); !strings.Contains(audit, "all POST scopes groups name,label,claims") || !strings.Contains(audit, "all DELETE scopes groups") {
 		t.Errorf("audit:\n%s", audit)
+	}
+}
+
+// The Location of a scope created names it, its name escaped as a segment
+// (R44): a client that follows the Location of x/../email, or of a?b, writes
+// that scope, never email or a.
+func TestScopeLocation(t *testing.T) {
+	r := newResources(t)
+	for name, escaped := range map[string]string{"x/../email": "x%2F..%2Femail", "a?b": "a%3Fb", "a#b": "a%23b"} {
+		body, _ := json.Marshal(map[string]string{"name": name})
+		w := r.do(r.all, http.MethodPost, Prefix+"/scopes", "application/json", string(body))
+		if w.Code != http.StatusCreated || w.Header().Get("Location") != Prefix+"/scopes/"+escaped {
+			t.Fatalf("%s: %d %s %s", name, w.Code, w.Header().Get("Location"), w.Body)
+		}
+		if w := r.do(r.all, http.MethodPatch, w.Header().Get("Location"), "application/json", `{"label":{"fr":"Mine"}}`); w.Code != http.StatusOK ||
+			!strings.Contains(w.Body.String(), `"name":"`+name+`"`) {
+			t.Errorf("%s, its Location patched: %d %s", name, w.Code, w.Body)
+		}
+	}
+	if w := r.do(r.reader, http.MethodGet, Prefix+"/scopes/email", "", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"label":{}`) {
+		t.Errorf("email renamed: %s", w.Body)
 	}
 }

@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"slices"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
@@ -177,7 +178,9 @@ func (a *API) registerScopes() {
 			return
 		}
 		a.wrote(r, Catalogue, s.Name, b.fieldsOf(scopeFields))
-		w.Header().Set("Location", Prefix+"/scopes/"+s.Name)
+		// The name escaped as a segment (R44): x/../email names x/../email,
+		// not the standard scope email.
+		w.Header().Set("Location", Prefix+"/scopes/"+url.PathEscape(s.Name))
 		writeResource(w, http.StatusCreated, scopeOf(s.Name, s, true))
 	}))
 	update := func(mode writeMode) http.HandlerFunc {

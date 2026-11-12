@@ -2,6 +2,7 @@ package flow
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	ory "github.com/ory/hydra-client-go/v26"
@@ -62,5 +63,45 @@ func TestStrictClaims(t *testing.T) {
 			check: idToken(`{"email":"alice@example.org","groups":["staff"],"secret_of_the_hook":1}`)},
 	} {
 		tc.run(t)
+	}
+}
+
+// CST-14 (R44): the catalogue changed between the screen and its accept, an
+// admin's write or another instance's snapshot: the claims that would leave
+// are no longer those shown, and the screen is shown again, what it shows
+// being what its accept sends.
+func TestConsentPrint(t *testing.T) {
+	read := said{consent: consentRequest(lref, func(r *ory.OAuth2ConsentRequest) { r.RequestedScope = []string{"openid", "email", "biz"} })}
+	envOf := func(claims ...string) Env {
+		e := testEnv()
+		e.StrictClaims = true
+		biz := store.Scope{Name: "biz", Claims: []store.ScopeClaim{}}
+		for _, c := range claims {
+			biz.Claims = append(biz.Claims, store.ScopeClaim{Claim: c})
+		}
+		e.Config.Scopes = []store.Scope{biz}
+		return e
+	}
+	shown := play(t, envOf(), Consent{Challenge: hydraC, Cookie: cookie}, acceptedFlow(t), nil, hydraSays{GetConsent: read})
+	if c := shown.Response.Consent; c == nil || rawJSON(c.Claims) != `{"email":"alice@example.org"}` || c.Print == "" {
+		t.Fatalf("screen: %+v", shown.Response)
+	}
+	post := Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: true, Token: cookie, SameOrigin: true, Print: shown.Response.Consent.Print}
+	again := play(t, envOf("step"), post, acceptedFlow(t), nil, hydraSays{GetConsent: read})
+	if c := again.Response.Consent; again.Response.Kind != ConsentPage || !slices.Equal(again.ops(), []Op{GetConsent}) || c == nil ||
+		rawJSON(c.Claims) != `{"email":"alice@example.org","step":"2fa"}` || c.Print == post.Print {
+		t.Fatalf("the catalogue changed: %+v, calls %v", again.Response, again.ops())
+	}
+	post.Print = again.Response.Consent.Print
+	done := play(t, envOf("step"), post, acceptedFlow(t), nil, hydraSays{GetConsent: read, AcceptConsent: {redirectTo: hydraDone}})
+	if done.Response.Kind != Redirect || rawJSON(done.calls[len(done.calls)-1].AcceptConsent.Session.IdToken) != `{"email":"alice@example.org","step":"2fa"}` {
+		t.Errorf("accepted by the print of the screen shown again: %+v", done.Response)
+	}
+	// Without a print, or a print of other claims: never accepted.
+	for _, p := range []string{"", testKeys.ClaimsPrint(Object{"email": json.RawMessage(`"x"`)}, Object{})} {
+		post.Print = p
+		if out := play(t, envOf(), post, acceptedFlow(t), nil, hydraSays{GetConsent: read}); out.Response.Kind != ConsentPage || !slices.Equal(out.ops(), []Op{GetConsent}) {
+			t.Errorf("print %q: %+v", p, out.Response)
+		}
 	}
 }

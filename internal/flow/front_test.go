@@ -1004,10 +1004,14 @@ func TestFinalAccept(t *testing.T) {
 	}
 }
 
+// shownPrint is the print of the claims the screen of acceptedFlow shows, which
+// its form posts (CST-13, CST-14).
+var shownPrint = testKeys.ClaimsPrint(Object{"email": json.RawMessage(`"alice@example.org"`), "step": json.RawMessage(`"2fa"`)}, Object{})
+
 func TestConsent(t *testing.T) {
 	get := Consent{Challenge: hydraC, Cookie: cookie}
 	post := func(accept bool) Consent {
-		return Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: accept, Token: cookie, SameOrigin: true}
+		return Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: accept, Token: cookie, SameOrigin: true, Print: shownPrint}
 	}
 	read := func(mod func(r *ory.OAuth2ConsentRequest)) said { return said{consent: consentRequest(lref, mod)} }
 	// notOurs wants the reject of A3, its audit event naming the check that

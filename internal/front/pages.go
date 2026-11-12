@@ -467,9 +467,11 @@ func (h *Handler) samples(r *http.Request, th *Theme, cfg *store.Snapshot) []sam
 		}
 	}
 	consent := &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Client: &ory.OAuth2Client{ClientId: ory.PtrString("c"), ClientName: ory.PtrString("Client")},
-		Scopes: append(scopes, "custom"), Audience: []string{"https://api.example/"}, Subject: "s", Claims: claims, AccessClaims: flow.Object{"roles": json.RawMessage(`["admin"]`)}}
+		Scopes: append(scopes, "custom"), Audience: []string{"https://api.example/"}, Subject: "s", Claims: claims, AccessClaims: flow.Object{"roles": json.RawMessage(`["admin"]`)}, Print: samplePrint}
 	choiceFields := map[string]string{"flow": "f", "login_challenge": sampleChallenge, "csrf_token": sampleCSRF}
-	consentFields := map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept"}
+	// Every consent screen posts the print of the claims it shows (SKC-2,
+	// CST-13, R44): without it, an accept shows the screen again.
+	consentFields := map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept", "claims_print": samplePrint}
 	logoutFields := map[string]string{"logout_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept"}
 	// The last flow, preselected (ui.remember_last_flow).
 	selected := h.choicePage(r, th, cfg, &flow.ChoiceScreen{Flows: []string{"f"}, LoginChallenge: sampleChallenge, CSRF: sampleCSRF, Client: client})
@@ -480,9 +482,8 @@ func (h *Handler) samples(r *http.Request, th *Theme, cfg *store.Snapshot) []sam
 		{"select", "no flow", h.choicePage(r, th, cfg, &flow.ChoiceScreen{LoginChallenge: sampleChallenge, CSRF: sampleCSRF}), nil},
 		{"consent", "scopes, claims, audience", h.consentPage(r, th, cfg, consent, false), consentFields},
 		{"consent", "values shown", h.consentPage(r, th, cfg, consent, true), consentFields},
-		{"consent", "nothing asked", h.consentPage(r, th, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF}, false), consentFields},
-		{"consent", "without a flow", h.consentPage(r, th, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint, Subject: "s", Claims: flow.Object{"email": json.RawMessage(`"v"`)}}, false),
-			map[string]string{"consent_challenge": sampleChallenge, "csrf_token": sampleCSRF, "action": "accept", "claims_print": samplePrint}},
+		{"consent", "nothing asked", h.consentPage(r, th, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint}, false), consentFields},
+		{"consent", "without a flow", h.consentPage(r, th, cfg, &flow.ConsentScreen{Challenge: sampleChallenge, CSRF: sampleCSRF, Print: samplePrint, Subject: "s", Claims: flow.Object{"email": json.RawMessage(`"v"`)}}, false), consentFields},
 		{"logout", "confirm", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF}), logoutFields},
 		{"logout", "other session", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutConfirm, Challenge: sampleChallenge, CSRF: sampleCSRF, OtherSession: true, Client: &ory.OAuth2Client{ClientId: ory.PtrString("c"), ClientName: ory.PtrString("Client")}}), logoutFields},
 		{"logout", "declined", h.logoutPage(r, th, cfg, &flow.LogoutScreen{State: flow.LogoutDeclined}), nil},

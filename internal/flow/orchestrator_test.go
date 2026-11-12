@@ -378,7 +378,7 @@ func TestHydraCalls(t *testing.T) {
 				if c.Response.Kind != ConsentPage {
 					t.Fatalf("consent screen: %+v", c.Response)
 				}
-				c = w.handle(Consent{Challenge: hydraC, Cookie: w.cookie, Post: true, Accept: true, Token: w.cookie, SameOrigin: true})
+				c = w.handle(Consent{Challenge: hydraC, Cookie: w.cookie, Post: true, Accept: true, Token: w.cookie, SameOrigin: true, Print: c.Response.Consent.Print})
 			}
 			if c.Response.URL != callbackURL {
 				t.Fatalf("consent: %+v", c.Response)
@@ -785,10 +785,11 @@ func TestClockSkewLoggedOnce(t *testing.T) {
 	if final := w.handle(Loop{Ref: lref, Cookie: w.cookie}); final.Response.URL != verifierURL {
 		t.Fatalf("final accept: %+v", final.Response)
 	}
-	if c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie}); c.Response.Kind != ConsentPage {
-		t.Fatalf("consent screen: %+v", c.Response)
+	screen := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie})
+	if screen.Response.Kind != ConsentPage {
+		t.Fatalf("consent screen: %+v", screen.Response)
 	}
-	if c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie, Post: true, Accept: true, Token: w.cookie, SameOrigin: true}); c.Response.URL != callbackURL {
+	if c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie, Post: true, Accept: true, Token: w.cookie, SameOrigin: true, Print: screen.Response.Consent.Print}); c.Response.URL != callbackURL {
 		t.Fatalf("consent: %+v", c.Response)
 	}
 	logs := w.logs.String()

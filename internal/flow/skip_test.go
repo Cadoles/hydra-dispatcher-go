@@ -806,7 +806,7 @@ func sentFlow(t *testing.T, mod func(s *SentLogin)) *Flow {
 func TestRememberWritten(t *testing.T) {
 	get := Consent{Challenge: hydraC, Cookie: cookie}
 	post := func(accept bool) Consent {
-		return Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: accept, Token: cookie, SameOrigin: true}
+		return Consent{Challenge: hydraC, Cookie: cookie, Post: true, Accept: accept, Token: cookie, SameOrigin: true, Print: shownPrint}
 	}
 	skipped := func(mod func(r *ory.OAuth2ConsentRequest)) said {
 		return said{consent: consentRequest(lref, func(r *ory.OAuth2ConsentRequest) {

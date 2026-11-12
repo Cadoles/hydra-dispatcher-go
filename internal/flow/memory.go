@@ -128,11 +128,12 @@ func skipMarker(key []byte, sid, sub, acr string, amr []string, requestURL strin
 	return mac(key, []any{"dispatcher-skip", sid, sub, acr, amr, hex.EncodeToString(url[:])})
 }
 
-// ClaimsPrint is the fingerprint of the claims the consent screen without a
-// flow shows (SKC-2, Q37): their HMAC by the active challenge key, which its
-// form carries. At its POST, claims of the cookie read again that no longer
-// give it were written meanwhile by another tab: the screen is shown again
-// (SKC-12), what is sent being what was shown.
+// ClaimsPrint is the fingerprint of the claims a consent screen shows (SKC-2,
+// Q37; CST-13, R44): their HMAC by the active challenge key, which its form
+// carries. At its POST, claims read again that no longer give it changed
+// meanwhile, the cookie written by another tab or the catalogue of the
+// scopes filtering them otherwise: the screen is shown again (SKC-12,
+// CST-14), what is sent being what was shown.
 func (k Keys) ClaimsPrint(idt, act Object) string {
 	return claimsPrint(k[0], idt, act)
 }

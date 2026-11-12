@@ -254,7 +254,12 @@ func TestCheckForms(t *testing.T) {
 		"field of another form": {choice(`<form method="post" action="{{.Form.Action}}">` + choiceFields + `<input type="hidden" name="login_challenge" value="x" form="other"><button>Go</button></form>`),
 			""},
 		"accept without the challenge": {consent(`<form method="post" action="{{.Form.Action}}">{{template "csrf" .}}` + accept + `</form><form method="post" action="{{.Form.Action}}">` + consentHidden + reject + `</form>`),
-			"page consent (scopes, claims, audience) in en: no field consent_challenge in the form"},
+			// The form of the challenge and the print, the reject's, judged:
+			// it has no accept.
+			`page consent (scopes, claims, audience) in en: field action without the value "accept"`},
+		// R44: an accept without the print shows the screen again, forever.
+		"no print": {consent(`<form method="post" action="{{.Form.Action}}">{{template "csrf" .}}<input type="hidden" name="consent_challenge" value="{{.Form.ConsentChallenge}}">` + accept + reject + `</form>`),
+			"page consent (scopes, claims, audience) in en: no field claims_print in the form"},
 		"posted to another URL": {consent(`<form method="post" action="/consent">` + consentHidden + accept + reject + `</form>`),
 			`page consent (scopes, claims, audience) in en: no <form method="post" action="/consent?consent_challenge=c2FtcGxlX2NoYWxsZW5nZQ%3D%3D">`},
 		"action hidden and a button": {consent(`<form method="post" action="{{.Form.Action}}">` + consentHidden + `<input type="hidden" name="action" value="reject">` + accept + reject + `</form>`),
