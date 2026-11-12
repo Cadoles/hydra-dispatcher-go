@@ -47,6 +47,23 @@ func (e *RefusedError) Error() string {
 
 func (e *RefusedError) Unwrap() error { return e.Err }
 
+// Violations give the refusal as violations, for the admin API and the admin
+// UI: the lines that name a setting under its key, the others under none.
+func (e *RefusedError) Violations() domain.Violations {
+	var v domain.Violations
+	for line := range strings.Lines(e.Err.Error()) {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "setting "); ok {
+			if key, message, ok := strings.Cut(rest, ": "); ok && !strings.Contains(key, " ") {
+				v = append(v, domain.Violation{Field: key, Message: message})
+				continue
+			}
+		}
+		v = append(v, domain.Violation{Message: "the configuration it leaves would be refused: " + line})
+	}
+	return v
+}
+
 // writeLock is the advisory lock that serializes the writes, bootstrap's
 // included: replicas starting in serve.bootstrap force would otherwise insert
 // the same rows, and a write checks the configuration it leaves, which a

@@ -1,0 +1,4 @@
+{{define "notice"}}{{if .Notice}}<p role="status"><ins>{{.Notice}}</ins></p>{{end}}{{end}}
+{{define "general"}}{{range .For ""}}<p role="alert"><strong>{{.}}</strong></p>{{end}}{{end}}
+{{define "errors"}}{{with .}}<small>{{range $i, $m := .}}{{if $i}} {{end}}{{$m}}.{{end}}</small>{{end}}{{end}}
+{{define "flows"}}{{range $i, $f := .}}{{if $i}}, {{end}}{{$f}}{{end}}{{end}}

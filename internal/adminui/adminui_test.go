@@ -89,6 +89,7 @@ type rig struct {
 	ui       *UI
 	handler  http.Handler
 	accounts *accounts
+	config   *config
 	mu       sync.Mutex
 	now      time.Time
 	audit    []string
@@ -103,6 +104,7 @@ func newRig(t *testing.T, baseURL string) *rig {
 	r.accounts.set(store.AdminUser{Username: "alice", PasswordHash: hashOf(t, password), Role: domain.RoleAdmin})
 	r.accounts.set(store.AdminUser{Username: "victor", PasswordHash: hashOf(t, password), Role: domain.RoleViewer})
 	r.accounts.set(store.AdminUser{Username: "olga", OIDCSub: "sub-1", Role: domain.RoleAdmin})
+	r.config = newConfig()
 	keys, err := seal.New(bytes.Repeat([]byte{7}, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +127,12 @@ func newRig(t *testing.T, baseURL string) *rig {
 		},
 		Dashboard: func(context.Context) Dashboard {
 			return Dashboard{Version: "test", Instance: "i1", Dependencies: []Dependency{{Name: "database", OK: true}}, Apps: 3, Flows: 2, FlowsEnabled: 1}
+		},
+		Config: r.config, Writer: r.config,
+		Wrote: func(_ context.Context, user, resource, id, action string, fields []string) {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			r.audit = append(r.audit, strings.Join([]string{"write", user, resource, id, action, strings.Join(fields, ",")}, " "))
 		},
 		Now: r.clock,
 	})

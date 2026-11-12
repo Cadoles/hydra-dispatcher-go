@@ -15,7 +15,8 @@
 <ul><li><strong>Hydra dispatcher</strong></li></ul>
 {{- if .Account}}
 <ul>
-<li><a href="{{.Base}}">Dashboard</a></li>
+<li><a href="{{.Base}}"{{if eq .Nav "dashboard"}} aria-current="page"{{end}}>Dashboard</a></li>
+<li><a href="{{.Base}}/apps"{{if eq .Nav "apps"}} aria-current="page"{{end}}>Apps</a></li>
 <li>{{.Account.Username}} <small>({{.Account.Role}})</small></li>
 <li><form method="post" action="{{.Base}}/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form></li>
 </ul>

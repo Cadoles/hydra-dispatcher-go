@@ -1,0 +1,24 @@
+{{define "content"}}
+<hgroup>
+<h1>Apps</h1>
+<p>The steps of the flows: where a step sends the user, and how the emulated API knows the app.</p>
+</hgroup>
+{{template "notice" .}}
+{{- if .CanWrite}}
+<p><a href="{{.Base}}/apps/_new" role="button">New app</a></p>
+{{- end}}
+{{- with .Data}}
+{{- if .Apps}}
+<table>
+<thead><tr><th scope="col">Id</th><th scope="col">Method</th><th scope="col">Login URL</th><th scope="col">Known by</th><th scope="col">Step of</th></tr></thead>
+<tbody>
+{{- range .Apps}}
+<tr><td><a href="{{$.Base}}/apps/{{.ID}}">{{.ID}}</a></td><td>{{.Method}}</td><td>{{.LoginURL}}</td><td>{{if eq .AuthMode "mtls"}}certificate{{else}}network{{end}}</td><td>{{with .Flows}}{{template "flows" .}}{{else}}no flow{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- else}}
+<p>No app yet.</p>
+{{- end}}
+{{- end}}
+{{end}}

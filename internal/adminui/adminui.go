@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/ratelimit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
@@ -70,8 +71,15 @@ type Options struct {
 	Logout func(ctx context.Context, user string)
 	// Dashboard gives what the dashboard shows.
 	Dashboard func(ctx context.Context) Dashboard
-	Version   string
-	Now       func() time.Time
+	// Config is the configuration the screens show; nil, they are not
+	// served. Writer writes it; nil, the screens are read alone.
+	Config Snapshots
+	Writer Writer
+	// Wrote, nil for none, is told of each write of a screen done: the audit
+	// (admin.write), the names of the fields written, never their values.
+	Wrote   func(ctx context.Context, user, resource, id, action string, fields []string)
+	Version string
+	Now     func() time.Time
 }
 
 // Dashboard is what the dashboard shows.
@@ -120,8 +128,8 @@ func New(o Options) (*UI, error) {
 	if ui.secure && o.CookiePath == "/" {
 		ui.prefix = "__Host-"
 	}
-	for _, name := range []string{"login", "reauth", "dashboard", "status"} {
-		t, err := template.New(name).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/"+name+".html.tmpl")
+	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete"} {
+		t, err := template.New(name).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
 		}
@@ -141,6 +149,9 @@ func New(o Options) (*UI, error) {
 	ui.mux.Handle("POST /admin/logout", ui.authed(anyRole, ui.logout))
 	ui.mux.Handle("GET /admin/reauth", ui.authed(anyRole, ui.reauthForm))
 	ui.mux.Handle("POST /admin/reauth", ui.authed(anyRole, ui.reauth))
+	if o.Config != nil {
+		ui.registerApps()
+	}
 	ui.mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
 		ui.status(w, r, http.StatusNotFound, "Not found", "No page of the admin has this address.", nil)
 	})
@@ -192,6 +203,13 @@ type view struct {
 	Title, Base, Asset, CSRF, Error, Next, Version, Message string
 	Account                                                 *store.AdminUser
 	Dashboard                                               *Dashboard
+	// Nav is the section of the page in the navigation, Notice what the page
+	// says of the write that led to it, Data what a screen shows.
+	Nav, Notice string
+	Data        any
+	// CanWrite tells whether the account writes: the role admin, and a
+	// writer. A viewer sees the same screens, without their buttons.
+	CanWrite bool
 }
 
 func (ui *UI) render(w http.ResponseWriter, status int, name string, v view) {
@@ -220,7 +238,17 @@ func (ui *UI) dashboard(w http.ResponseWriter, r *http.Request, s *current) {
 	if ui.o.Dashboard != nil {
 		d = ui.o.Dashboard(r.Context())
 	}
-	ui.render(w, http.StatusOK, "dashboard", view{Title: "Dashboard", Account: &s.account, CSRF: s.session.CSRF, Dashboard: &d})
+	ui.render(w, http.StatusOK, "dashboard", view{Title: "Dashboard", Account: &s.account, CSRF: s.session.CSRF, Dashboard: &d, Nav: "dashboard"})
+}
+
+// show renders a screen of the account s.
+func (ui *UI) show(w http.ResponseWriter, r *http.Request, s *current, status int, page, title, nav string, data any) {
+	v := view{Title: title, Account: &s.account, CSRF: s.session.CSRF, Nav: nav, Data: data,
+		CanWrite: s.account.Role == domain.RoleAdmin && ui.o.Writer != nil}
+	if r.Method == http.MethodGet {
+		v.Notice = notices[r.URL.Query().Get("done")]
+	}
+	ui.render(w, status, page, v)
 }
 
 // asset is a file of the pages, with its ETag.

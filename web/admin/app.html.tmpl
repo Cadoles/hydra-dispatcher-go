@@ -1,0 +1,75 @@
+{{define "content"}}
+{{- with .Data}}
+<hgroup>
+<h1>{{if .New}}New app{{else}}App {{.Form.ID}}{{end}}</h1>
+{{- if not .New}}
+<p>{{with .Flows}}A step of {{template "flows" .}}.{{else}}A step of no flow.{{end}}</p>
+{{- end}}
+</hgroup>
+{{template "notice" $}}
+{{template "general" .Errors}}
+<form method="post" action="{{if .New}}{{$.Base}}/apps{{else}}{{$.Base}}/apps/{{.Form.ID}}{{end}}">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+{{- if .New}}
+<label>Id
+<input name="id" value="{{.Form.ID}}" required maxlength="128"{{if .Errors.For "id"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "id"}}
+<small>Up to 128 letters, digits, '.', '_' or '-', starting with a letter or a digit. It never changes.</small>
+</label>
+{{- end}}
+<label>Method
+<input name="method" value="{{.Form.Method}}" required maxlength="64"{{if .Errors.For "method"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "method"}}
+<small>The authentication method the app stands for, as the flows and the claims name it: pwd, otp, oidc…</small>
+</label>
+<label>Login URL
+<input type="url" name="login_url" value="{{.Form.LoginURL}}" required{{if .Errors.For "login_url"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "login_url"}}
+</label>
+<label>Consent URL
+<input type="url" name="consent_url" value="{{.Form.ConsentURL}}" required{{if .Errors.For "consent_url"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "consent_url"}}
+</label>
+<label>Logout URL
+<input type="url" name="logout_url" value="{{.Form.LogoutURL}}"{{if .Errors.For "logout_url"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "logout_url"}}
+<small>Empty, the app is left out of the logout.</small>
+</label>
+<label>Known by the emulated API by
+<select name="auth_mode"{{if .Errors.For "auth_mode"}} aria-invalid="true"{{end}}>
+<option value="network"{{if eq .Form.AuthMode "network"}} selected{{end}}>its network (allowed sources)</option>
+<option value="mtls"{{if eq .Form.AuthMode "mtls"}} selected{{end}}>its certificate (mTLS)</option>
+</select>
+{{template "errors" .Errors.For "auth_mode"}}
+</label>
+<label>Allowed sources
+<textarea name="allowed_sources" rows="3"{{if .Errors.For "allowed_sources"}} aria-invalid="true"{{end}}>{{.Form.AllowedSources}}</textarea>
+{{template "errors" .Errors.For "allowed_sources"}}
+<small>By its network: the networks and the addresses the app calls the emulated API from, one per line. Left out by its certificate.</small>
+</label>
+<label>Certificate fingerprint
+<input name="client_cert_fingerprint" value="{{.Form.Fingerprint}}"{{if .Errors.For "client_cert_fingerprint"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "client_cert_fingerprint"}}
+<small>By its certificate: the SHA-256 of the app's certificate, in hex, colons allowed. Left out by its network.</small>
+</label>
+<label>
+<input type="checkbox" name="receive_all_claims" value="1"{{if .Form.AllClaims}} checked{{end}}>
+Receives every claim of the previous steps
+</label>
+<label>Otherwise, these claims only
+<textarea name="receive_claims" rows="2"{{if .Errors.For "receive_claims"}} aria-invalid="true"{{end}}>{{.Form.Claims}}</textarea>
+{{template "errors" .Errors.For "receive_claims"}}
+<small>One per line; none when empty.</small>
+</label>
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit">{{if .New}}Create{{else}}Save{{end}}</button>
+{{- end}}
+</form>
+{{- if and $.CanWrite (not .New)}}
+<p><a href="{{$.Base}}/apps/{{.Form.ID}}/delete">Delete this app</a></p>
+{{- end}}
+<p><a href="{{$.Base}}/apps">Back to the apps</a></p>
+{{- end}}
+{{end}}

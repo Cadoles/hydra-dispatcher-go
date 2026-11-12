@@ -718,6 +718,9 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Login:     s.audit.AdminLogin,
 		Logout:    s.audit.AdminLogout,
 		Dashboard: func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
+		Config:    s.config,
+		Writer:    s.adminWriter,
+		Wrote:     s.audit.UIWrote,
 		Version:   version,
 	})
 	if err != nil {

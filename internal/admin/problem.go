@@ -100,21 +100,10 @@ func camel(path string) string {
 	return strings.Join(segments, ".")
 }
 
-// refusedViolations gives a configuration serve would refuse as violations:
-// the lines that name a setting under its key, the others under none.
+// refusedViolations gives a configuration serve would refuse as violations
+// (store.RefusedError.Violations).
 func refusedViolations(err error) domain.Violations {
-	var v domain.Violations
-	for line := range strings.Lines(err.Error()) {
-		line = strings.TrimSpace(line)
-		if rest, ok := strings.CutPrefix(line, "setting "); ok {
-			if key, message, ok := strings.Cut(rest, ": "); ok && !strings.Contains(key, " ") {
-				v = append(v, domain.Violation{Field: key, Message: message})
-				continue
-			}
-		}
-		v = append(v, domain.Violation{Message: "the configuration it leaves would be refused: " + line})
-	}
-	return v
+	return (&store.RefusedError{Err: err}).Violations()
 }
 
 // fail answers the error of a request or of a write: its status, and for a

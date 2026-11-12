@@ -223,6 +223,14 @@ func (l *Log) Wrote(ctx context.Context, client, resource, id, method string, fi
 	l.logger.InfoContext(ctx, "admin.write", "client_id", client, "resource", resource, "id", id, "method", method, "fields", fields, "ip", clientIP(ctx))
 }
 
+// UIWrote writes a write of the admin UI done, as Wrote does those of the
+// admin API: the account in place of the client, the action (create, update,
+// delete) in place of the method, the fields by their names in the seed,
+// never their values.
+func (l *Log) UIWrote(ctx context.Context, user, resource, id, action string, fields []string) {
+	l.logger.InfoContext(ctx, "admin.write", "user", user, "resource", resource, "id", id, "action", action, "fields", fields, "ip", clientIP(ctx))
+}
+
 // CLIWrote writes a write of the CLI done, as Wrote does those of the admin
 // API: the client is cli (Q114), the command takes the place of the method,
 // and there is no address.
