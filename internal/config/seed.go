@@ -24,7 +24,10 @@ type Seed struct {
 	Apps          []SeedApp    `yaml:"apps"`
 	Flows         []SeedFlow   `yaml:"flows"`
 	OAuth2Clients []SeedClient `yaml:"oauth2_clients"`
-	SeedSettings  `yaml:",inline"`
+	// Scopes are the catalogue of the scopes (P24): those of the business,
+	// and the labels a standard scope renames.
+	Scopes       []SeedScope `yaml:"scopes"`
+	SeedSettings `yaml:",inline"`
 
 	// NullSettings lists the settings the file sets to null (~): bootstrap
 	// --force resets them, where it leaves an absent setting alone.
@@ -364,6 +367,28 @@ func (a SeedApp) App() (domain.App, error) {
 		ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
 		AuthMode: a.AuthMode, AllowedSources: sources, ClientCertFingerprint: a.ClientCertFingerprint, ReceiveClaims: claims,
 	}, err
+}
+
+// SeedScope is a scope of the catalogue: its label and its claims, each with
+// its label, by locale or a plain string for every locale.
+type SeedScope struct {
+	Name   string           `yaml:"name"`
+	Label  Localized        `yaml:"label"`
+	Claims []SeedScopeClaim `yaml:"claims"`
+}
+
+type SeedScopeClaim struct {
+	Claim string    `yaml:"claim"`
+	Label Localized `yaml:"label"`
+}
+
+// Scope gives the scope as the store keeps it.
+func (s SeedScope) Scope() domain.Scope {
+	d := domain.Scope{Name: s.Name, Label: map[string]string(s.Label)}
+	for _, c := range s.Claims {
+		d.Claims = append(d.Claims, domain.ScopeClaim{Claim: c.Claim, Label: map[string]string(c.Label)})
+	}
+	return d
 }
 
 // Flow gives the flow as the store keeps it: steps by position, none for

@@ -15,7 +15,7 @@ import (
 )
 
 // Sections are those of a seed, in their order.
-var Sections = []string{"settings", "apps", "flows", "oauth2_clients"}
+var Sections = []string{"settings", "apps", "flows", "oauth2_clients", "scopes"}
 
 // Options change what Write writes.
 type Options struct {
@@ -124,6 +124,17 @@ type client struct {
 	Scopes []string `yaml:"scopes"`
 }
 
+type scope struct {
+	Name   string            `yaml:"name"`
+	Label  map[string]string `yaml:"label,omitempty"`
+	Claims []scopeClaim      `yaml:"claims,omitempty"`
+}
+
+type scopeClaim struct {
+	Claim string            `yaml:"claim"`
+	Label map[string]string `yaml:"label,omitempty"`
+}
+
 // document is the YAML of the sections want of snap.
 func document(snap *store.Snapshot, want map[string]bool, o Options) (*yaml.Node, error) {
 	root := &yaml.Node{Kind: yaml.MappingNode}
@@ -203,6 +214,19 @@ func document(snap *store.Snapshot, want map[string]bool, o Options) (*yaml.Node
 		}
 		for _, c := range root.Content[len(root.Content)-1].Content {
 			c.HeadComment = "secret: not dumped, the seed requires one"
+		}
+	}
+	if want["scopes"] && len(snap.Scopes) > 0 {
+		scopes := []scope{}
+		for _, sc := range snap.Scopes {
+			d := scope{Name: sc.Name, Label: sc.Label}
+			for _, c := range sc.Claims {
+				d.Claims = append(d.Claims, scopeClaim{Claim: c.Claim, Label: c.Label})
+			}
+			scopes = append(scopes, d)
+		}
+		if err := add("scopes", scopes); err != nil {
+			return nil, err
 		}
 	}
 	return &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{{Kind: yaml.ScalarNode, Value: "dispatcher"}, root}}, nil

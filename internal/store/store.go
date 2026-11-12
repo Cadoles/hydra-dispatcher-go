@@ -188,6 +188,10 @@ type Snapshot struct {
 	// StoredSettings are the keys of the registry the setting table holds, in
 	// its order: the others are at their default (config dump).
 	StoredSettings []string
+	// Scopes are the rows of the catalogue of the scopes, by name in byte
+	// order: the scopes of the business, and the labels a standard scope
+	// renames (P24).
+	Scopes []Scope
 	// APIClients are the clients of the admin API, by id in byte order:
 	// the admin API reads them at each request (Q101).
 	APIClients []APIClient
@@ -290,6 +294,9 @@ func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapsh
 	s.index()
 	if s.Flows, err = readFlows(ctx, q); err != nil {
 		return nil, fmt.Errorf("read flows: %w", err)
+	}
+	if s.Scopes, err = readScopes(ctx, q); err != nil {
+		return nil, fmt.Errorf("read scopes: %w", err)
 	}
 	rows, err := readSettings(ctx, q)
 	if err != nil {

@@ -50,7 +50,7 @@ const (
 
 // Change is an entry and what bootstrap does with it.
 type Change struct {
-	Kind   string // setting, app, flow or api_client
+	Kind   string // setting, app, flow, api_client or scope
 	ID     string
 	Action Action
 	// Fields are those an Update, a Reset or a Keep changes, or would change.
@@ -89,7 +89,7 @@ func (p *Postgres) Bootstrap(ctx context.Context, seed config.Seed, mode Mode, w
 	var b *bootstrap
 	err := p.transact(ctx, "bootstrap", write, func(tx *sql.Tx) error {
 		b = &bootstrap{ctx: ctx, tx: tx, mode: mode, keys: p.secrets}
-		for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients} {
+		for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients, b.scopes} {
 			if err := step(seed); err != nil {
 				return fmt.Errorf("bootstrap: %w", err)
 			}
@@ -130,7 +130,7 @@ func (p *Postgres) Diff(ctx context.Context, seed config.Seed) ([]Change, error)
 	}
 	defer func() { _ = tx.Rollback() }()
 	b := &bootstrap{ctx: ctx, tx: tx, mode: Force, compare: true, keys: p.secrets}
-	for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients} {
+	for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients, b.scopes} {
 		if err := step(seed); err != nil {
 			return nil, fmt.Errorf("diff: %w", err)
 		}
