@@ -117,7 +117,9 @@ func (f *fakeHydra) Clients(_ context.Context, p hydra.ClientsPage) (hydra.Clien
 		}
 	}
 	from, _ := strconv.Atoi(p.Token)
-	l := hydra.ClientList{Total: len(ids)}
+	// X-Total-Count, under a filter by name too, counts all the clients, as
+	// Hydra 2.1 and 2.2 do (R43).
+	l := hydra.ClientList{Total: len(f.order)}
 	for i := from; i < len(ids) && i < from+p.Size; i++ {
 		l.Clients = append(l.Clients, rawOf(f.clients[ids[i]]))
 	}

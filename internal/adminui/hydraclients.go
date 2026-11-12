@@ -156,8 +156,9 @@ func patchOf(was, now hydraClient) ([]hydra.PatchOp, []string, error) {
 	set("client_name", was.Name != now.Name, now.Name)
 	set("redirect_uris", !slices.Equal(was.RedirectURIs, now.RedirectURIs), list(now.RedirectURIs))
 	set("post_logout_redirect_uris", !slices.Equal(was.PostLogoutURIs, now.PostLogoutURIs), list(now.PostLogoutURIs))
-	set("grant_types", !slices.Equal(was.GrantTypes, now.GrantTypes), list(now.GrantTypes))
-	set("response_types", !slices.Equal(was.ResponseTypes, now.ResponseTypes), list(now.ResponseTypes))
+	// Boxes: their order is the form's, not a change (R43).
+	set("grant_types", !sameSet(was.GrantTypes, now.GrantTypes), list(now.GrantTypes))
+	set("response_types", !sameSet(was.ResponseTypes, now.ResponseTypes), list(now.ResponseTypes))
 	set("scope", was.Scope != now.Scope, now.Scope)
 	set("audience", !slices.Equal(was.Audience, now.Audience), list(now.Audience))
 	set("allowed_cors_origins", !slices.Equal(was.CORS, now.CORS), list(now.CORS))
@@ -278,6 +279,14 @@ func (ui *UI) hydraClients(w http.ResponseWriter, r *http.Request, s *current) {
 		return
 	}
 	p := hydraListPage{Query: q, Next: l.Next, Total: l.Total, First: token == ""}
+	if q != "" {
+		// Under a filter, Hydra's X-Total-Count is that of all its clients
+		// (R43): those named q are counted on a single page alone.
+		p.Total = -1
+		if token == "" && l.Next == "" {
+			p.Total = len(l.Clients)
+		}
+	}
 	for _, raw := range l.Clients {
 		c, err := parseClient(raw)
 		if err != nil {

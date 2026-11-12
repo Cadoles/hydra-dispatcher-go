@@ -146,3 +146,34 @@ func TestHydraEmptyKeys(t *testing.T) {
 		t.Errorf("saved without a key: %d", w.Code)
 	}
 }
+
+// Reports: under a filter by name, the total of Hydra, that of all its
+// clients, is not shown; the order of the boxes is no change; the creation
+// and the confirmation of a rotation are behind the re-authentication.
+func TestHydraReportsOfR43(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	h := withHydra(r)
+	h.putJSON(`{"client_id":"twin","client_name":"Legacy","grant_types":["authorization_code"],"metadata":{}}`)
+	b := r.browser()
+	b.login("alice", password, "")
+	if page := b.do(http.MethodGet, "/admin/hydra-clients?q=Legacy", nil).Body.String(); !strings.Contains(page, "2 clients named Legacy.") {
+		t.Errorf("named:\n%s", page)
+	}
+	if page := b.do(http.MethodGet, "/admin/hydra-clients", nil).Body.String(); !strings.Contains(page, "3 clients.") {
+		t.Errorf("all:\n%s", page)
+	}
+	form := hydraValues(b, "web")
+	form["grant_types"] = []string{"refresh_token", "authorization_code"}
+	if w := b.do(http.MethodPost, "/admin/hydra-clients/web", form); w.Code != http.StatusSeeOther || len(h.patches) != 0 {
+		t.Errorf("the boxes in another order: %d, patches %v", w.Code, h.patches)
+	}
+	r.advance(6 * time.Minute)
+	values := url.Values{"csrf": {b.csrf()}, "client_name": {"Late"}, "redirect_uris": {"https://late.test/cb"}, "grant_types": {"authorization_code"},
+		"response_types": {"code"}, "token_endpoint_auth_method": {"client_secret_basic"}}
+	if w := b.do(http.MethodPost, "/admin/hydra-clients", values); w.Code != http.StatusForbidden || len(h.order) != 3 {
+		t.Errorf("a creation past the window: %d, clients %v", w.Code, h.order)
+	}
+	if w := b.do(http.MethodGet, "/admin/hydra-clients/web/rotate", nil); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "/admin/reauth") {
+		t.Errorf("the confirmation of a rotation past the window: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}

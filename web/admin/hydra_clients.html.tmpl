@@ -12,7 +12,11 @@
 {{- if $.CanWrite}}
 <p><a href="{{$.Base}}/hydra-clients/_new" role="button">New Hydra client</a></p>
 {{- end}}
+{{- if ge .Total 0}}
 <p>{{.Total}} client{{if ne .Total 1}}s{{end}}{{if .Query}} named {{.Query}}{{end}}.</p>
+{{- else}}
+<p>Clients named {{.Query}}, page by page.</p>
+{{- end}}
 {{- if .Rows}}
 <table>
 <thead><tr><th scope="col">Id</th><th scope="col">Name</th><th scope="col">Grants</th><th scope="col">Authenticates by</th><th scope="col">Secret</th><th scope="col">Rules of the ANSSI</th></tr></thead>
