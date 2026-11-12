@@ -38,6 +38,7 @@ func TestAccounts(t *testing.T) {
 	if page := b.do(http.MethodGet, "/admin/accounts/dora%20%2F%20ops", nil); page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Account dora / ops") {
 		t.Errorf("its page: %d\n%s", page.Code, page.Body)
 	}
+	r.advance(time.Second) // a session after the creation of the account
 	dora := r.browser()
 	dora.login("dora / ops", "a password long enough", "")
 	if w := dora.do(http.MethodGet, "/admin", nil); w.Code != http.StatusOK {
@@ -205,5 +206,25 @@ func TestOwnPassword(t *testing.T) {
 	w := b.do(http.MethodPost, "/admin/account/password", url.Values{"csrf": {b.csrf()}, "password": {"another password, long"}, "password_again": {"another password, long"}})
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "asks for your password again") {
 		t.Errorf("past the window: %d\n%s", w.Code, w.Body)
+	}
+}
+
+// An account deleted then created again under its name: the cookie of the
+// former opens nothing (revue R40).
+func TestAccountRecreated(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	b, former := r.browser(), r.browser()
+	former.login("victor", password, "")
+	b.login("alice", password, "")
+	if w := b.do(http.MethodPost, "/admin/accounts/victor/delete", url.Values{"csrf": {b.csrf()}}); w.Code != http.StatusSeeOther {
+		t.Fatalf("delete: %d", w.Code)
+	}
+	r.advance(time.Second)
+	if w := b.do(http.MethodPost, "/admin/accounts", accountValues(b, "victor", "admin", "another password, long", "another password, long")); w.Code != http.StatusSeeOther {
+		t.Fatalf("create again: %d\n%s", w.Code, w.Body)
+	}
+	r.advance(time.Second)
+	if w := former.do(http.MethodGet, "/admin/accounts", nil); w.Code != http.StatusSeeOther {
+		t.Errorf("the former's cookie: %d", w.Code)
 	}
 }

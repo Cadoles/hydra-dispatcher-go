@@ -252,7 +252,8 @@ func TestAdminSessions(t *testing.T) {
 		}
 		return u
 	}
-	if u := read(); !u.SessionsValidAfter.IsZero() {
+	// A new account: its sessions are valid after its creation (revue R40).
+	if u := read(); u.SessionsValidAfter.IsZero() || u.SessionsValidAfter.After(time.Now()) {
 		t.Errorf("a new account: %v", u.SessionsValidAfter)
 	}
 	before := time.Now()
@@ -334,5 +335,33 @@ func TestAdminDelete(t *testing.T) {
 	}
 	if err := p.UpdateAdmin(ctx, "carol ", func(u *AdminUser) error { u.PasswordHash = "$2y$13$short"; return nil }); !violated(err, "password") {
 		t.Errorf("a hash broken: %v", err)
+	}
+}
+
+// An account deleted then created again under its name does not take back
+// the sessions of the former: its sessions are valid after its creation
+// (revue R40).
+func TestAdminRecreated(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	for _, name := range []string{"alice", "bob"} {
+		if err := p.CreateAdmin(ctx, AdminUser{Username: name, OIDCSub: name, Role: domain.RoleAdmin}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	issued := time.Now() // a session of the former alice
+	time.Sleep(10 * time.Millisecond)
+	if err := p.DeleteAdmin(ctx, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.CreateAdmin(ctx, AdminUser{Username: "alice", OIDCSub: "another", Role: domain.RoleViewer}); err != nil {
+		t.Fatal(err)
+	}
+	u, found, err := p.Admin(ctx, "alice")
+	if err != nil || !found {
+		t.Fatal(found, err)
+	}
+	if !u.SessionsValidAfter.After(issued) {
+		t.Errorf("the former's session is valid: issued %v, valid after %v", issued, u.SessionsValidAfter)
 	}
 }

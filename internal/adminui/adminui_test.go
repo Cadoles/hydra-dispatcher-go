@@ -91,6 +91,7 @@ func (a *accounts) CreateAdmin(_ context.Context, u store.AdminUser) error {
 	if _, ok := a.users[u.Username]; ok {
 		return store.ErrExists
 	}
+	u.SessionsValidAfter = a.now() // as the store: its sessions after its creation
 	a.users[u.Username] = u
 	return nil
 }

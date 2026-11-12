@@ -43,7 +43,9 @@ func (p *Postgres) adminWrite(ctx context.Context, fn func(tx *sql.Tx) error) er
 }
 
 // CreateAdmin writes a new admin account: ErrExists when its name is taken,
-// domain.Violations when it breaks a rule.
+// domain.Violations when it breaks a rule. Its sessions are valid after its
+// creation only: an account deleted then created again under its name does
+// not take back the sessions of the former (revue R40).
 func (p *Postgres) CreateAdmin(ctx context.Context, u AdminUser) error {
 	if v := domain.Collect(u.Check); v != nil {
 		return v
@@ -52,8 +54,8 @@ func (p *Postgres) CreateAdmin(ctx context.Context, u AdminUser) error {
 		if _, found, err := findAdmin(ctx, tx, u.Username); err != nil || found {
 			return cmpErr(err, ErrExists)
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO admin_user (username, password_hash, oidc_sub, role)
-			VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4)`, u.Username, u.PasswordHash, u.OIDCSub, u.Role)
+		_, err := tx.ExecContext(ctx, `INSERT INTO admin_user (username, password_hash, oidc_sub, role, sessions_valid_after)
+			VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5)`, u.Username, u.PasswordHash, u.OIDCSub, u.Role, time.Now())
 		if err != nil {
 			return fmt.Errorf("admin account %s: %w", u.Username, err)
 		}
