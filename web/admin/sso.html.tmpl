@@ -1,0 +1,77 @@
+{{define "content"}}
+<hgroup>
+<h1>SSO</h1>
+<p>The login to the admin by an identity provider, by OpenID Connect: the code flow with PKCE.</p>
+</hgroup>
+{{template "notice" .}}
+{{- with .Data}}
+{{template "general" .Errors}}
+<p>The address of the callback, to declare at the provider: <code>{{.Callback}}</code></p>
+<form method="post" action="{{$.Base}}/sso">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="version" value="{{.Form.Version}}">
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+<label>
+<input type="checkbox" name="admin_oidc.enabled" value="true"{{if .Form.Enabled}} checked{{end}}>
+Enabled: the login page offers the provider
+</label>
+{{template "errors" .Errors.For "admin_oidc.enabled"}}
+<label>Issuer
+<input type="url" name="admin_oidc.issuer" value="{{.Form.Issuer}}"{{if .Errors.For "admin_oidc.issuer"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.issuer"}}
+<small>As the ID tokens of the provider name it; its discovery is read once, at the first login after a change.</small>
+</label>
+<label>Client id
+<input name="admin_oidc.client_id" value="{{.Form.ClientID}}" autocomplete="off"{{if .Errors.For "admin_oidc.client_id"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.client_id"}}
+</label>
+<label>Client secret
+<input type="password" name="admin_oidc.client_secret" autocomplete="new-password" placeholder="{{if .SecretSet}}set: leave empty to keep it{{else}}none: a public client{{end}}"{{if .Errors.For "admin_oidc.client_secret"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.client_secret"}}
+<small>Encrypted in the database by secrets.encryption_key, and never shown. {{if .SecretSet}}A secret is set.{{else}}No secret is set.{{end}}</small>
+</label>
+{{- if .SecretSet}}
+<label><input type="checkbox" name="forget_secret" value="true"> Forget the secret: a public client</label>
+{{- end}}
+<label>Scopes
+<input name="admin_oidc.scopes" value="{{.Form.Scopes}}"{{if .Errors.For "admin_oidc.scopes"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.scopes"}}
+<small>Separated by spaces, openid among them.</small>
+</label>
+<label>Claim of the name
+<input name="admin_oidc.username_claim" value="{{.Form.UsernameClaim}}"{{if .Errors.For "admin_oidc.username_claim"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.username_claim"}}
+<small>The name of an account created, then email, then sub.</small>
+</label>
+<label>Required acr
+<input name="admin_oidc.required_acr" value="{{.Form.RequiredACR}}"{{if .Errors.For "admin_oidc.required_acr"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.required_acr"}}
+<small>Separated by spaces, one of which the ID token must hold: a second factor; empty, any.</small>
+</label>
+<label>
+<input type="checkbox" name="admin_oidc.auto_create" value="true"{{if .Form.AutoCreate}} checked{{end}}>
+Create the account of an identity no account has, in the role viewer
+</label>
+<small>Off, an admin creates the account first, with its OIDC subject.</small>
+<fieldset>
+<legend>Endpoints, declared: all three, or none for those of the discovery</legend>
+<label>Authorization endpoint
+<input type="url" name="admin_oidc.authorization_endpoint" value="{{.Form.AuthorizationEndpoint}}"{{if .Errors.For "admin_oidc.authorization_endpoint"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.authorization_endpoint"}}
+</label>
+<label>Token endpoint
+<input type="url" name="admin_oidc.token_endpoint" value="{{.Form.TokenEndpoint}}"{{if .Errors.For "admin_oidc.token_endpoint"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.token_endpoint"}}
+</label>
+<label>JWKS
+<input type="url" name="admin_oidc.jwks_uri" value="{{.Form.JWKSURI}}"{{if .Errors.For "admin_oidc.jwks_uri"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "admin_oidc.jwks_uri"}}
+</label>
+</fieldset>
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit">Save</button>
+{{- end}}
+</form>
+{{- end}}
+{{end}}

@@ -164,7 +164,7 @@ func New(o Options) (*UI, error) {
 		ui.prefix = "__Host-"
 	}
 	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings",
-		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password"} {
+		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password", "sso"} {
 		t, err := template.New(name).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
@@ -202,6 +202,7 @@ func New(o Options) (*UI, error) {
 		ui.registerFlows()
 		ui.registerSettings()
 		ui.registerClients()
+		ui.registerSSO()
 	}
 	ui.registerAccounts()
 	ui.registerOIDC()

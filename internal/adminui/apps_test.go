@@ -203,8 +203,26 @@ func (c *config) UpdateSettings(_ context.Context, by string, values map[string]
 	if c.fail != nil {
 		return c.fail
 	}
+	// The block admin_oidc, its secret in clear, goes to oidc: the table
+	// would hold the secret encrypted.
+	block := store.DefaultSettings().AdminOIDC
+	if c.oidc != nil {
+		block = *c.oidc
+	}
+	fields := map[string]any{"admin_oidc.enabled": &block.Enabled, "admin_oidc.issuer": &block.Issuer, "admin_oidc.client_id": &block.ClientID,
+		"admin_oidc.client_secret": &block.ClientSecret, "admin_oidc.scopes": &block.Scopes, "admin_oidc.username_claim": &block.UsernameClaim,
+		"admin_oidc.required_acr": &block.RequiredACR, "admin_oidc.auto_create": &block.AutoCreate,
+		"admin_oidc.authorization_endpoint": &block.AuthorizationEndpoint, "admin_oidc.token_endpoint": &block.TokenEndpoint, "admin_oidc.jwks_uri": &block.JWKSURI}
 	next := maps.Clone(c.stored)
+	oidcWritten := false
 	for k, v := range values {
+		if f, ok := fields[k]; ok {
+			if err := json.Unmarshal(v, f); err != nil {
+				return domain.Violations{{Field: k, Message: err.Error()}}
+			}
+			oidcWritten = true
+			continue
+		}
 		if string(v) == "null" {
 			delete(next, k)
 		} else {
@@ -215,10 +233,14 @@ func (c *config) UpdateSettings(_ context.Context, by string, values map[string]
 	if err != nil {
 		return domain.Violations{{Message: err.Error()}}
 	}
+	s.AdminOIDC = block
 	if v := domain.Collect(s.Check); v != nil {
 		return v
 	}
 	c.stored, c.by = next, append(c.by, by)
+	if oidcWritten {
+		c.oidc = &block
+	}
 	return nil
 }
 

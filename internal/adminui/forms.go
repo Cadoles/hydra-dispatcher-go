@@ -69,8 +69,10 @@ func errorsOf(v domain.Violations, fields []string) fieldErrors {
 		field, _, _ := strings.Cut(x.Field, ".")
 		base, _, _ := strings.Cut(field, "[")
 		switch {
-		case field == "":
+		case x.Field == "":
 			e[""] = append(e[""], x.Message)
+		case slices.Contains(fields, x.Field): // a key of the table: admin_oidc.issuer
+			e[x.Field] = append(e[x.Field], x.Message)
 		case slices.Contains(fields, field):
 			e[field] = append(e[field], x.Message)
 		case slices.Contains(fields, base):
