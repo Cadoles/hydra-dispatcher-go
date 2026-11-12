@@ -55,7 +55,8 @@ func (ui *UI) renderLogin(w http.ResponseWriter, status int, next, message strin
 	t := loginToken{Token: randomToken(), Expires: ui.o.Now().Add(loginTTL).Unix()}
 	data, _ := json.Marshal(t) // a string and a number
 	ui.setCookie(w, loginCookie, ui.o.Keys.Seal(loginCookie, sealVersion, data), loginTTL)
-	ui.render(w, status, "login", view{Title: "Log in", CSRF: t.Token, Next: ui.next(next), Error: message})
+	ui.render(w, status, "login", view{Title: "Log in", CSRF: t.Token, Next: ui.next(next), Error: message,
+		SSO: ui.block().Enabled, PasswordLogin: ui.o.PasswordLogin})
 }
 
 // loginTokenOK tells whether the form posted carries the token its cookie
@@ -82,6 +83,10 @@ func (ui *UI) loginTokenOK(r *http.Request) bool {
 func (ui *UI) login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	next := r.PostFormValue("next")
+	if !ui.o.PasswordLogin {
+		ui.renderLogin(w, http.StatusForbidden, next, "The login by password is off: log in by the identity provider.")
+		return
+	}
 	if !ui.sameOrigin(r) || !ui.loginTokenOK(r) {
 		ui.renderLogin(w, http.StatusForbidden, next, "The form had expired: try again.")
 		return
@@ -164,6 +169,10 @@ func (ui *UI) reauthForm(w http.ResponseWriter, r *http.Request, s *current) {
 // password here: P22 sends it to the provider.
 func (ui *UI) reauth(w http.ResponseWriter, r *http.Request, s *current) {
 	ctx := r.Context()
+	if !ui.o.PasswordLogin {
+		ui.status(w, r, http.StatusForbidden, "Confirm it is you", "The login by password is off: confirm it by the identity provider.", s)
+		return
+	}
 	if !ui.allowed(w, r) {
 		return
 	}

@@ -39,6 +39,7 @@ const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 's
 // and written by the screen of the accounts under the lock of the accounts.
 type Accounts interface {
 	Admin(ctx context.Context, username string) (store.AdminUser, bool, error)
+	AdminBySubject(ctx context.Context, sub string) (store.AdminUser, bool, error)
 	EndSessions(ctx context.Context, username string) error
 	Admins(ctx context.Context) ([]store.AdminUser, error)
 	CreateAdmin(ctx context.Context, u store.AdminUser) error
@@ -80,6 +81,12 @@ type Options struct {
 	// served. Writer writes it; nil, the screens are read alone.
 	Config Snapshots
 	Writer Writer
+	// PasswordLogin offers the login by password, admin.ui.password_login
+	// (Q127); false, the identity provider alone.
+	PasswordLogin bool
+	// HTTPClient calls the identity provider of admin_oidc (tls.ca_file);
+	// nil, one bounded to oidcWait.
+	HTTPClient *http.Client
 	// Scopes are those an API client may have (admin.Scopes): the boxes of
 	// its form.
 	Scopes []string
@@ -118,6 +125,8 @@ type UI struct {
 	prefix string // __Host- in HTTPS with the cookies at /
 	limit  *ratelimit.Limiter
 	bcrypt chan struct{}
+	// idp is the identity provider of the block admin_oidc of the moment.
+	idp providers
 	// accountsWait bounds a read of the accounts: a database that no longer
 	// answers gives a 503, not a request that waits for ever, the server
 	// having no WriteTimeout (revue R40).
@@ -139,6 +148,9 @@ func New(o Options) (*UI, error) {
 	}
 	if o.LoginsPerMinute <= 0 {
 		o.LoginsPerMinute = 10
+	}
+	if o.HTTPClient == nil {
+		o.HTTPClient = &http.Client{Timeout: oidcWait}
 	}
 	u, err := url.Parse(o.BaseURL)
 	if err != nil {
@@ -192,6 +204,7 @@ func New(o Options) (*UI, error) {
 		ui.registerClients()
 	}
 	ui.registerAccounts()
+	ui.registerOIDC()
 	ui.mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
 		ui.status(w, r, http.StatusNotFound, "Not found", "No page of the admin has this address.", nil)
 	})
@@ -241,8 +254,11 @@ const maxForm = 64 << 10
 // view is what a page renders.
 type view struct {
 	Title, Base, Asset, Styles, Steps, CSRF, Error, Next, Version, Message string
-	Account                                                                *store.AdminUser
-	Dashboard                                                              *Dashboard
+	// SSO offers the login by the identity provider, PasswordLogin the
+	// login by password: the page of login.
+	SSO, PasswordLogin bool
+	Account            *store.AdminUser
+	Dashboard          *Dashboard
 	// Nav is the section of the page in the navigation, Notice what the page
 	// says of the write that led to it, Data what a screen shows.
 	Nav, Notice string

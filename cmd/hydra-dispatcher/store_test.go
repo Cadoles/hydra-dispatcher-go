@@ -739,3 +739,14 @@ func (f *fakeStore) Rekey(context.Context) ([]string, error) {
 	}
 	return done, nil
 }
+
+func (f *fakeStore) AdminBySubject(_ context.Context, sub string) (store.AdminUser, bool, error) {
+	f.record("read admin by subject")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.admins, func(x store.AdminUser) bool { return sub != "" && x.OIDCSub == sub })
+	if i < 0 {
+		return store.AdminUser{}, false, nil
+	}
+	return f.admins[i], true, nil
+}

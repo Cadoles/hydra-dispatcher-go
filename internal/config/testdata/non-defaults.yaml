@@ -44,7 +44,7 @@ store:
   backend: postgres   # the only backend: the one key equal to its default
   dsn: "postgres://dispatcher@postgres/dispatcher"
 admin:
-  ui: { enabled: false }
+  ui: { enabled: false, password_login: false }
   api:
     enabled: false
     private_key: "private"

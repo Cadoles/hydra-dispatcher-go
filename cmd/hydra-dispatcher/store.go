@@ -45,6 +45,7 @@ type configStore interface {
 	DeleteAPIClient(ctx context.Context, id string) error
 	Admins(ctx context.Context) ([]store.AdminUser, error)
 	Admin(ctx context.Context, username string) (store.AdminUser, bool, error)
+	AdminBySubject(ctx context.Context, sub string) (store.AdminUser, bool, error)
 	EndSessions(ctx context.Context, username string) error
 	CreateAdmin(ctx context.Context, u store.AdminUser) error
 	UpdateAdmin(ctx context.Context, username string, change func(*store.AdminUser) error) error

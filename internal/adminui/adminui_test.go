@@ -73,6 +73,20 @@ func (a *accounts) Admin(ctx context.Context, username string) (store.AdminUser,
 	return u, ok, nil
 }
 
+func (a *accounts) AdminBySubject(_ context.Context, sub string) (store.AdminUser, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.fail != nil {
+		return store.AdminUser{}, false, a.fail
+	}
+	for _, u := range a.users {
+		if sub != "" && u.OIDCSub == sub {
+			return u, true, nil
+		}
+	}
+	return store.AdminUser{}, false, nil
+}
+
 func (a *accounts) EndSessions(_ context.Context, username string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -203,7 +217,7 @@ func newRig(t *testing.T, baseURL string) *rig {
 	ui, err := New(Options{
 		Enabled: true, AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, Accounts: r.accounts, Keys: keys,
 		BaseURL: baseURL, CookiePath: "/", IdleTimeout: 30 * time.Minute, MaxAge: 8 * time.Hour, ReauthWindow: 5 * time.Minute,
-		LoginsPerMinute: 10, Version: "test",
+		LoginsPerMinute: 10, PasswordLogin: true, Version: "test",
 		Refused:     func(context.Context) { r.refused.Add(1) },
 		RateLimited: func(context.Context) { r.limited.Add(1) },
 		Login: func(_ context.Context, user, method, result, reason string) {

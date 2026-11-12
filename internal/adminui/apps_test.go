@@ -26,7 +26,10 @@ type config struct {
 	flows   []store.Flow
 	stored  map[string]json.RawMessage
 	clients []store.APIClient
-	by      []string
+	// oidc, when set, is the block admin_oidc of the snapshots, its secret in
+	// clear, which the table would hold encrypted.
+	oidc *store.AdminOIDC
+	by   []string
 	// fail, when set, is the error of the next writes.
 	fail error
 }
@@ -51,6 +54,9 @@ func (c *config) Snapshot() *store.Snapshot {
 	settings, _, err := store.SettingsOf(c.stored)
 	if err != nil {
 		panic(err)
+	}
+	if c.oidc != nil {
+		settings.AdminOIDC = *c.oidc
 	}
 	snap := store.NewSnapshot(slices.Clone(c.apps), slices.Clone(c.flows), settings).WithAPIClients(slices.Clone(c.clients))
 	snap.StoredSettings = slices.Sorted(maps.Keys(c.stored))

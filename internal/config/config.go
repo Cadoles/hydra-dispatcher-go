@@ -162,6 +162,10 @@ type Store struct {
 type Admin struct {
 	UI struct {
 		Enabled bool `yaml:"enabled"`
+		// PasswordLogin offers the login by password (Q127); false, the
+		// identity provider alone, the CLI keeping the accounts at hand. In
+		// the configuration, not the database: no screen closes the door.
+		PasswordLogin bool `yaml:"password_login"`
 	} `yaml:"ui"`
 	API struct {
 		Enabled    bool   `yaml:"enabled"`
@@ -294,6 +298,7 @@ func defaults() *Config {
 	c.Remember.Backend = "cookie"
 	c.Store.Backend = "postgres"
 	c.Admin.UI.Enabled = true
+	c.Admin.UI.PasswordLogin = true
 	c.Admin.API.Enabled = true
 	c.Admin.API.TokenTTL = Duration(15 * time.Minute)
 	c.Admin.API.RateLimitPerMinute = 100

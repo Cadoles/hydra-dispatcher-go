@@ -4,6 +4,13 @@
 {{- if .Error}}
 <p role="alert"><strong>{{.Error}}</strong></p>
 {{- end}}
+{{- if .SSO}}
+<p><a href="{{.Base}}/oidc/login?next={{.Next}}" role="button">Log in by the identity provider</a></p>
+{{- end}}
+{{- if .PasswordLogin}}
+{{- if .SSO}}
+<p><small>Or, by a name and a password:</small></p>
+{{- end}}
 <form method="post" action="{{.Base}}/login">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="next" value="{{.Next}}">
@@ -15,5 +22,8 @@
 </label>
 <button type="submit">Log in</button>
 </form>
+{{- else if not .SSO}}
+<p>No way of logging in is open: the login by password is off, and so is the identity provider. An operator opens one.</p>
+{{- end}}
 </article>
 {{end}}

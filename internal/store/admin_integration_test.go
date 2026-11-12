@@ -365,3 +365,22 @@ func TestAdminRecreated(t *testing.T) {
 		t.Errorf("the former's session is valid: issued %v, valid after %v", issued, u.SessionsValidAfter)
 	}
 }
+
+// The login by OIDC finds an account by its subject alone.
+func TestAdminBySubject(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	for _, u := range []AdminUser{{Username: "alice", OIDCSub: "248289761001", Role: domain.RoleAdmin}, {Username: "248289761001", OIDCSub: "other", Role: domain.RoleViewer}} {
+		if err := p.CreateAdmin(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if u, found, err := p.AdminBySubject(ctx, "248289761001"); err != nil || !found || u.Username != "alice" {
+		t.Errorf("by subject: %+v %v %v", u, found, err)
+	}
+	for _, sub := range []string{"", "nobody", "alice"} {
+		if u, found, err := p.AdminBySubject(ctx, sub); err != nil || found {
+			t.Errorf("%q: %+v %v", sub, u, err)
+		}
+	}
+}

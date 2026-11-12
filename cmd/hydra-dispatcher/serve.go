@@ -719,12 +719,16 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		return nil, err
 	}
 	ready := map[string]httpx.Check{"hydra": hydraClient.Ready, "database": s.database, "state": s.states.Ping}
+	idpClient, err := providerClient(cfg.TLS)
+	if err != nil {
+		return nil, err
+	}
 	ui, err := adminui.New(adminui.Options{
 		Enabled: cfg.Admin.UI.Enabled, AuthorizedHosts: adminHosts, Accounts: s.accounts, Keys: cookieKeys,
 		BaseURL: cfg.Server.BaseURL, CookiePath: cfg.Server.CookiePath,
 		IdleTimeout: cfg.Admin.Session.IdleTimeout.Std(), MaxAge: cfg.Admin.Session.MaxAge.Std(), ReauthWindow: cfg.Admin.Session.ReauthWindow.Std(),
-		LoginsPerMinute: adminLoginsPerMinute,
-		Logger:          logger, LogIP: cfg.Observability.LogIP, LogSample: logSample,
+		LoginsPerMinute: adminLoginsPerMinute, PasswordLogin: cfg.Admin.UI.PasswordLogin, HTTPClient: idpClient,
+		Logger: logger, LogIP: cfg.Observability.LogIP, LogSample: logSample,
 		Refused: func(c context.Context) {
 			watch.Refused("admin")
 			s.audit.Refused(c, "admin_ui")
@@ -774,6 +778,23 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		httpx.Recover(logger),
 		s.sentry.Middleware,
 	), nil
+}
+
+// providerClient calls the identity provider of the admin (admin_oidc): the
+// authorities of tls.ca_file, as towards Hydra, no proxy of the environment,
+// each call bounded.
+func providerClient(t config.TLS) (*http.Client, error) {
+	tlsConfig, err := httpx.ClientTLS(t.MinVersion, t.CAFile)
+	if err != nil {
+		return nil, fmt.Errorf("tls.ca_file: %w", err)
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 2 * time.Second,
+		TLSClientConfig:     tlsConfig,
+		ForceAttemptHTTP2:   true,
+		IdleConnTimeout:     httpx.IdleConnTimeout,
+	}}, nil
 }
 
 // adminLoginsPerMinute bounds the attempts of an address at the login of the

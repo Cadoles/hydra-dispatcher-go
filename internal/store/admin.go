@@ -165,10 +165,29 @@ func findAdmin(ctx context.Context, q querier, username string) (AdminUser, bool
 	return users[0], true, nil
 }
 
+// AdminBySubject reads the account whose subject at the identity provider is
+// sub: the login by OIDC finds an account by it alone, never by its name
+// (Q126). The column is unique.
+func (p *Postgres) AdminBySubject(ctx context.Context, sub string) (AdminUser, bool, error) {
+	if sub == "" {
+		return AdminUser{}, false, nil
+	}
+	users, err := queryAdmins(ctx, p.db, `oidc_sub = $1`, sub)
+	if err != nil || len(users) == 0 {
+		return AdminUser{}, false, err
+	}
+	return users[0], true, nil
+}
+
 // readAdmins reads the accounts, the one named username when it is not "".
 func readAdmins(ctx context.Context, q querier, username string) ([]AdminUser, error) {
+	return queryAdmins(ctx, q, `$1 = '' OR username = $1`, username)
+}
+
+// queryAdmins reads the accounts where holds, by name.
+func queryAdmins(ctx context.Context, q querier, where string, arg any) ([]AdminUser, error) {
 	rows, err := q.QueryContext(ctx, `SELECT username, coalesce(password_hash, ''), coalesce(oidc_sub, ''), role, created_at, sessions_valid_after
-		FROM admin_user WHERE $1 = '' OR username = $1 ORDER BY username COLLATE "C"`, username)
+		FROM admin_user WHERE `+where+` ORDER BY username COLLATE "C"`, arg)
 	if err != nil {
 		return nil, fmt.Errorf("read admin accounts: %w", err)
 	}

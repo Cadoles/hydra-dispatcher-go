@@ -169,7 +169,13 @@ func (ui *UI) fresh(h func(http.ResponseWriter, *http.Request, *current)) func(h
 			return
 		}
 		if r.Method == http.MethodGet {
-			http.Redirect(w, r, ui.base+"/reauth?next="+url.QueryEscape(ui.root()+r.URL.RequestURI()), http.StatusSeeOther)
+			// A session of the identity provider confirms there, as one
+			// without the login by password.
+			target := ui.base + "/reauth?next="
+			if s.session.Method == "oidc" || !ui.o.PasswordLogin {
+				target = ui.base + "/oidc/login?reauth=1&next="
+			}
+			http.Redirect(w, r, target+url.QueryEscape(ui.root()+r.URL.RequestURI()), http.StatusSeeOther)
 			return
 		}
 		ui.status(w, r, http.StatusForbidden, "Confirm it is you", "This action asks for your password again: open it anew.", s)
