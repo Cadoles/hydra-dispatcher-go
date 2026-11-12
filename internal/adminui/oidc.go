@@ -41,6 +41,10 @@ const (
 	// providerRetry is how long a provider that could not be discovered is
 	// not tried again.
 	providerRetry = time.Minute
+	// MaxProviderAnswer bounds an answer of the provider, its discovery,
+	// its keys, its tokens: one of hundreds of MB, hostile or intercepted,
+	// would hold the memory of the dispatcher (revue R42).
+	MaxProviderAnswer = 1 << 20
 )
 
 // algorithms are those an ID token may be signed by: asymmetric, never none
@@ -286,7 +290,14 @@ func (ui *UI) oidcCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	ui.setSession(w, ui.sessionOf(ctx, a, method))
+	sess := ui.sessionOf(ctx, a, method)
+	if !ui.authenticatedAnew(claims.AuthTime) {
+		// The provider may log in by a session of its own, without an
+		// authentication of now: this session is not fresh, and its first
+		// sensitive action asks the provider again (revue R42).
+		sess.Auth = 0
+	}
+	ui.setSession(w, sess)
 	ui.audit(ctx, a.Username, method, "granted", "")
 	http.Redirect(w, r, req.Next, http.StatusSeeOther)
 }
@@ -303,8 +314,7 @@ func (ui *UI) oidcReauth(w http.ResponseWriter, r *http.Request, req oidcRequest
 		refuse(req.Reauth, "reauth_subject", "The identity provider confirmed another identity than your account's.", nil)
 		return
 	}
-	at := time.Unix(claims.AuthTime, 0)
-	if claims.AuthTime == 0 || ui.o.Now().Sub(at) > ui.o.ReauthWindow {
+	if !ui.authenticatedAnew(claims.AuthTime) {
 		refuse(a.Username, "auth_time", "The identity provider did not authenticate you anew: confirm it again.", nil)
 		return
 	}
@@ -312,6 +322,21 @@ func (ui *UI) oidcReauth(w http.ResponseWriter, r *http.Request, req oidcRequest
 	ui.setSession(w, s.session)
 	ui.audit(r.Context(), a.Username, "oidc", "granted", "reauth")
 	http.Redirect(w, r, req.Next, http.StatusSeeOther)
+}
+
+// authSkew is how far ahead of the dispatcher's clock the provider's may be,
+// for an auth_time.
+const authSkew = time.Minute
+
+// authenticatedAnew tells whether the provider authenticated the user within
+// admin.session.reauth_window, by the auth_time of its ID token: absent, or
+// ahead of the clocks' skew, it did not (revue R42).
+func (ui *UI) authenticatedAnew(authTime int64) bool {
+	if authTime <= 0 {
+		return false
+	}
+	at, now := time.Unix(authTime, 0), ui.o.Now()
+	return !at.After(now.Add(authSkew)) && now.Sub(at) <= ui.o.ReauthWindow
 }
 
 // accountOfSubject reads the account of sub, bounded as a read of the

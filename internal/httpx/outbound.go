@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"strings"
@@ -56,6 +57,26 @@ func ClientTLS(minVersion, caFile string) (*tls.Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// BoundedAnswers bounds the body of each answer of rt to max bytes: past them,
+// its read fails, as http.MaxBytesReader fails a request's. A peer, hostile or
+// intercepted, cannot hold the memory by the size of what it sends.
+func BoundedAnswers(rt http.RoundTripper, max int64) http.RoundTripper {
+	return boundedAnswers{rt: rt, max: max}
+}
+
+type boundedAnswers struct {
+	rt  http.RoundTripper
+	max int64
+}
+
+func (b boundedAnswers) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := b.rt.RoundTrip(r)
+	if err == nil && resp.Body != nil {
+		resp.Body = http.MaxBytesReader(nil, resp.Body, b.max)
+	}
+	return resp, err
 }
 
 // BoundedCause cuts a cause to MaxCause, on a character boundary.

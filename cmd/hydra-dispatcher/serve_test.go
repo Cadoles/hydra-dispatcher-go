@@ -1048,3 +1048,23 @@ func TestDashboard(t *testing.T) {
 		t.Errorf("dashboard: %+v", d)
 	}
 }
+
+// The client of the identity provider bounds its answers (revue R42).
+func TestProviderClientBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat(" ", 2<<20)))
+	}))
+	defer srv.Close()
+	c, err := providerClient(config.TLS{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Error("an answer of 2 MiB read whole")
+	}
+}

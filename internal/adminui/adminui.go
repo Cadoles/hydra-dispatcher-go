@@ -157,7 +157,7 @@ func New(o Options) (*UI, error) {
 		o.LoginsPerMinute = 10
 	}
 	if o.HTTPClient == nil {
-		o.HTTPClient = &http.Client{Timeout: oidcWait}
+		o.HTTPClient = &http.Client{Timeout: oidcWait, Transport: httpx.BoundedAnswers(http.DefaultTransport, MaxProviderAnswer)}
 	}
 	u, err := url.Parse(o.BaseURL)
 	if err != nil {

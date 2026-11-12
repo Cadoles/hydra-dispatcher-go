@@ -795,13 +795,13 @@ func providerClient(t config.TLS) (*http.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tls.ca_file: %w", err)
 	}
-	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+	return &http.Client{Timeout: 10 * time.Second, Transport: httpx.BoundedAnswers(&http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 2 * time.Second,
 		TLSClientConfig:     tlsConfig,
 		ForceAttemptHTTP2:   true,
 		IdleConnTimeout:     httpx.IdleConnTimeout,
-	}}, nil
+	}, adminui.MaxProviderAnswer)}, nil
 }
 
 // adminLoginsPerMinute bounds the attempts of an address at the login of the
