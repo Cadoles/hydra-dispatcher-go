@@ -723,6 +723,12 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	if err != nil {
 		return nil, err
 	}
+	// admin.hydra_clients.enabled off, nil: never a nil *hydra.Client in an
+	// interface.
+	var hydraClients adminui.HydraClients
+	if cfg.Admin.HydraClients.Enabled {
+		hydraClients = hydraClient
+	}
 	ui, err := adminui.New(adminui.Options{
 		Enabled: cfg.Admin.UI.Enabled, AuthorizedHosts: adminHosts, Accounts: s.accounts, Keys: cookieKeys,
 		BaseURL: cfg.Server.BaseURL, CookiePath: cfg.Server.CookiePath,
@@ -737,14 +743,15 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 			watch.AdminRateLimited()
 			s.audit.AdminRateLimited(c)
 		},
-		Login:     s.audit.AdminLogin,
-		Logout:    s.audit.AdminLogout,
-		Dashboard: func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
-		Config:    s.config,
-		Writer:    s.adminWriter,
-		Scopes:    admin.Scopes,
-		Wrote:     s.audit.UIWrote,
-		Version:   version,
+		Login:        s.audit.AdminLogin,
+		Logout:       s.audit.AdminLogout,
+		Dashboard:    func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
+		Config:       s.config,
+		Writer:       s.adminWriter,
+		Scopes:       admin.Scopes,
+		HydraClients: hydraClients, AllowHTTP: cfg.TLS.AllowHTTP, SecretMaxAge: cfg.Admin.ClientSecretMaxAge.Std(),
+		Wrote:   s.audit.UIWrote,
+		Version: version,
 	})
 	if err != nil {
 		return nil, err

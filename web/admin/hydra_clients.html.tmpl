@@ -1,0 +1,30 @@
+{{define "content"}}
+<hgroup>
+<h1>Hydra clients</h1>
+<p>The applications that log their users in by Hydra, by its admin API.</p>
+</hgroup>
+{{template "notice" .}}
+{{- with .Data}}
+<form method="get" action="{{$.Base}}/hydra-clients" role="search">
+<input type="search" name="q" value="{{.Query}}" placeholder="A client id, or a client name (exact)" aria-label="Search">
+<button type="submit">Search</button>
+</form>
+{{- if $.CanWrite}}
+<p><a href="{{$.Base}}/hydra-clients/_new" role="button">New Hydra client</a></p>
+{{- end}}
+<p>{{.Total}} client{{if ne .Total 1}}s{{end}}{{if .Query}} named {{.Query}}{{end}}.</p>
+{{- if .Rows}}
+<table>
+<thead><tr><th scope="col">Id</th><th scope="col">Name</th><th scope="col">Grants</th><th scope="col">Authenticates by</th><th scope="col">Secret</th><th scope="col">Rules of the ANSSI</th></tr></thead>
+<tbody>
+{{- range .Rows}}
+<tr><td><a href="{{$.Base}}/hydra-clients/{{path .ID}}">{{.ID}}</a></td><td>{{.Name}}</td><td>{{range $i, $g := .GrantTypes}}{{if $i}}, {{end}}{{$g}}{{end}}</td><td>{{.AuthMethod}}</td>
+<td>{{if .SecretSince.IsZero}}—{{else}}{{if not .SecretExact}}at least {{end}}since {{.SecretSince.Format "2006-01-02"}}{{if .SecretOld}} <strong>to turn</strong>{{end}}{{end}}</td>
+<td>{{if .Deviations}}<strong>{{.Deviations}} deviation{{if ne .Deviations 1}}s{{end}}</strong>{{else}}kept{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- end}}
+<p>{{if not .First}}<a href="{{$.Base}}/hydra-clients?q={{.Query}}">First page</a>{{end}}{{if and (not .First) .Next}} · {{end}}{{if .Next}}<a href="{{$.Base}}/hydra-clients?q={{.Query}}&amp;page={{.Next}}">Next page</a>{{end}}</p>
+{{- end}}
+{{end}}

@@ -19,6 +19,9 @@
 <li><a href="{{.Base}}"{{if eq .Nav "dashboard"}} aria-current="page"{{end}}>Dashboard</a></li>
 <li><a href="{{.Base}}/flows"{{if eq .Nav "flows"}} aria-current="page"{{end}}>Flows</a></li>
 <li><a href="{{.Base}}/apps"{{if eq .Nav "apps"}} aria-current="page"{{end}}>Apps</a></li>
+{{- if .HydraClients}}
+<li><a href="{{.Base}}/hydra-clients"{{if eq .Nav "hydra"}} aria-current="page"{{end}}>Hydra clients</a></li>
+{{- end}}
 <li><a href="{{.Base}}/clients"{{if eq .Nav "clients"}} aria-current="page"{{end}}>API clients</a></li>
 <li><a href="{{.Base}}/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a></li>
 <li><a href="{{.Base}}/accounts"{{if eq .Nav "accounts"}} aria-current="page"{{end}}>Accounts</a></li>

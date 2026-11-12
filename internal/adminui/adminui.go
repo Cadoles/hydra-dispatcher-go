@@ -87,6 +87,13 @@ type Options struct {
 	// HTTPClient calls the identity provider of admin_oidc (tls.ca_file);
 	// nil, one bounded to oidcWait.
 	HTTPClient *http.Client
+	// HydraClients are the clients of Hydra's admin API, nil with
+	// admin.hydra_clients.enabled off: their screens are not served.
+	// AllowHTTP is tls.allow_http, which lets an address of return of a
+	// client be in http://; SecretMaxAge is admin.client_secret_max_age.
+	HydraClients HydraClients
+	AllowHTTP    bool
+	SecretMaxAge time.Duration
 	// Scopes are those an API client may have (admin.Scopes): the boxes of
 	// its form.
 	Scopes []string
@@ -164,7 +171,7 @@ func New(o Options) (*UI, error) {
 		ui.prefix = "__Host-"
 	}
 	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings",
-		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password", "sso"} {
+		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password", "sso", "hydra_clients", "hydra_client"} {
 		t, err := template.New(name).Funcs(funcs).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
@@ -204,6 +211,9 @@ func New(o Options) (*UI, error) {
 		ui.registerClients()
 		ui.registerSSO()
 	}
+	if o.HydraClients != nil {
+		ui.registerHydraClients()
+	}
 	ui.registerAccounts()
 	ui.registerOIDC()
 	ui.mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
@@ -215,7 +225,7 @@ func New(o Options) (*UI, error) {
 // funcs are those of the pages: path escapes a name or an id as a segment of
 // a path, a / or a % included, which the URLs of html/template keep as they
 // are (revue R41).
-var funcs = template.FuncMap{"path": url.PathEscape}
+var funcs = template.FuncMap{"path": url.PathEscape, "lifespans": func() []string { return lifespans }}
 
 // Register serves the admin UI on mux, at /admin and below; /admin/v1, the
 // admin API, keeps its own routes, more specific.
@@ -265,8 +275,11 @@ type view struct {
 	SSO, PasswordLogin bool
 	// Link, with LinkText, is what a status page offers to do.
 	Link, LinkText string
-	Account        *store.AdminUser
-	Dashboard      *Dashboard
+	// HydraClients tells whether the screens of the clients of Hydra are
+	// served: the navigation.
+	HydraClients bool
+	Account      *store.AdminUser
+	Dashboard    *Dashboard
 	// Nav is the section of the page in the navigation, Notice what the page
 	// says of the write that led to it, Data what a screen shows.
 	Nav, Notice string
@@ -279,6 +292,7 @@ type view struct {
 func (ui *UI) render(w http.ResponseWriter, status int, name string, v view) {
 	v.Base, v.Asset, v.Version = ui.base, ui.base+"/static/pico.css?v="+ui.sheet.etag, ui.o.Version
 	v.Steps, v.Styles = ui.base+"/static/steps.js?v="+ui.steps.etag, ui.base+"/static/admin.css?v="+ui.styles.etag
+	v.HydraClients = ui.o.HydraClients != nil
 	var b bytes.Buffer
 	if err := ui.pages[name].ExecuteTemplate(&b, "layout", v); err != nil {
 		http.Error(w, "the page could not be rendered", http.StatusInternalServerError)

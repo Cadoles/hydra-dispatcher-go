@@ -49,10 +49,10 @@ type clientPage struct {
 	New         bool
 }
 
-// secretPage shows the secret of a client, once.
+// secretPage shows the secret of a client, once: What it is, Back its page.
 type secretPage struct {
-	ID, Secret string
-	Created    bool
+	ID, Secret, What, Back string
+	Created                bool
 }
 
 // boxes are the scopes of the form: those of the dispatcher, then those the
@@ -121,7 +121,7 @@ func (ui *UI) newClient(w http.ResponseWriter, r *http.Request, s *current) {
 
 // showSecret renders the secret of a client, the only time it is shown.
 func (ui *UI) showSecret(w http.ResponseWriter, r *http.Request, s *current, status int, id, secret string, created bool) {
-	ui.show(w, r, s, status, "client_secret", "The secret of "+id, "clients", secretPage{ID: id, Secret: secret, Created: created})
+	ui.show(w, r, s, status, "client_secret", "The secret of "+id, "clients", secretPage{ID: id, Secret: secret, Created: created, What: "API client", Back: ui.clientPath(id)})
 }
 
 func (ui *UI) createClient(w http.ResponseWriter, r *http.Request, s *current) {

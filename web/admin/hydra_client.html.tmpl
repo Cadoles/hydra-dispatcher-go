@@ -1,0 +1,109 @@
+{{define "content"}}
+{{- with .Data}}
+<hgroup>
+<h1>{{if .New}}New Hydra client{{else}}Hydra client {{.Form.ID}}{{end}}</h1>
+{{- if not .New}}
+<p>{{if .Form.Name}}{{.Form.Name}}. {{end}}{{if .SecretSince.IsZero}}No secret: it authenticates by {{.Form.AuthMethod}}.{{else}}Its secret is {{if not .SecretExact}}at least {{end}}of {{.SecretSince.Format "2006-01-02"}}{{if .SecretOld}}: <strong>older than admin.client_secret_max_age, to turn</strong>{{end}}.{{end}}</p>
+{{- end}}
+</hgroup>
+{{template "notice" $}}
+{{template "general" .Errors}}
+{{- if and (not .New) .Deviations}}
+<article>
+<p><strong>This client breaks the rules of the ANSSI:</strong> it is saved only once they are kept. Turning its secret and deleting it stay allowed.</p>
+<ul>{{range .Deviations}}<li>{{.Field}}: {{.Message}}.</li>{{end}}</ul>
+</article>
+{{- end}}
+<form method="post" action="{{if .New}}{{$.Base}}/hydra-clients{{else}}{{$.Base}}/hydra-clients/{{path .Form.ID}}{{end}}">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="version" value="{{.Form.Version}}">
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+<label>Name
+<input name="client_name" value="{{.Form.Name}}"{{if .Errors.For "client_name"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "client_name"}}
+</label>
+<label>Addresses of return
+<textarea name="redirect_uris" rows="3"{{if .Errors.For "redirect_uris"}} aria-invalid="true"{{end}}>{{.Form.RedirectText}}</textarea>
+{{template "errors" .Errors.For "redirect_uris"}}
+<small>One per line, absolute in https://, matched exactly: no joker, no fragment.</small>
+</label>
+<fieldset>
+<legend>Grants</legend>
+{{- range .Form.Grants}}
+<label><input type="checkbox" name="grant_types" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}}</label>
+{{- end}}
+{{template "errors" .Errors.For "grant_types"}}
+</fieldset>
+<fieldset>
+<legend>Response types</legend>
+{{- range .Form.Responses}}
+<label><input type="checkbox" name="response_types" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}}</label>
+{{- end}}
+{{template "errors" .Errors.For "response_types"}}
+</fieldset>
+<label>Authenticates at the token endpoint by
+<select name="token_endpoint_auth_method"{{if .Errors.For "token_endpoint_auth_method"}} aria-invalid="true"{{end}}>
+{{- range .Form.Methods}}
+<option value="{{.Name}}"{{if .Checked}} selected{{end}}>{{.Name}}</option>
+{{- end}}
+</select>
+{{template "errors" .Errors.For "token_endpoint_auth_method"}}
+<small>private_key_jwt: by its keys, without a secret (R23); client_secret_basic or _post: a secret generated, shown once; none: a public client, the code flow with PKCE.</small>
+</label>
+<label>JWKS URI
+<input type="url" name="jwks_uri" value="{{.Form.JWKSURI}}"{{if .Errors.For "jwks_uri"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "jwks_uri"}}
+<small>The keys of the client, for private_key_jwt.</small>
+</label>
+<label>Scopes
+<input name="scope" value="{{.Form.Scope}}">
+<small>Separated by spaces.</small>
+</label>
+<label>
+<input type="checkbox" name="skip_consent" value="true"{{if .Form.SkipConsent}} checked{{end}}>
+Skips the consent screen
+</label>
+<fieldset>
+<legend>Flows offered</legend>
+<small>None checked: every flow.</small>
+{{- range .Form.FlowBoxes}}
+<label><input type="checkbox" name="flows" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}}</label>
+{{- end}}
+</fieldset>
+<details>
+<summary>Lifespans of the tokens, logout, audience, CORS, logo</summary>
+{{- range $l := (lifespans)}}
+<label>{{$l}}
+<input name="{{$l}}" value="{{index $.Data.Form.Lifespans $l}}" placeholder="Hydra's default"{{if $.Data.Errors.For $l}} aria-invalid="true"{{end}}>
+{{template "errors" $.Data.Errors.For $l}}
+</label>
+{{- end}}
+<label>Addresses after the logout
+<textarea name="post_logout_redirect_uris" rows="2"{{if .Errors.For "post_logout_redirect_uris"}} aria-invalid="true"{{end}}>{{.Form.PostLogoutText}}</textarea>
+{{template "errors" .Errors.For "post_logout_redirect_uris"}}
+</label>
+<label>Audience
+<textarea name="audience" rows="2">{{.Form.AudienceText}}</textarea>
+</label>
+<label>Origins of CORS
+<textarea name="allowed_cors_origins" rows="2">{{.Form.CORSText}}</textarea>
+</label>
+<label>Logo URI
+<input type="url" name="logo_uri" value="{{.Form.LogoURI}}">
+</label>
+</details>
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit">{{if .New}}Create{{else}}Save{{end}}</button>
+{{- end}}
+</form>
+{{- if .Others}}
+<p>Its other metadata, kept as they are:</p>
+<pre>{{.Others}}</pre>
+{{- end}}
+{{- if and $.CanWrite (not .New)}}
+<p>{{if not .SecretSince.IsZero}}<a href="{{$.Base}}/hydra-clients/{{path .Form.ID}}/rotate">Turn its secret</a> · {{end}}<a href="{{$.Base}}/hydra-clients/{{path .Form.ID}}/delete">Delete this client</a></p>
+{{- end}}
+<p><a href="{{$.Base}}/hydra-clients">Back to the Hydra clients</a></p>
+{{- end}}
+{{end}}
