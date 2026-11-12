@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"log/syslog"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/admin"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/adminui"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
@@ -32,6 +34,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/limiter"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -160,7 +163,7 @@ func serve(ctx context.Context, args []string) error {
 
 	var draining atomic.Bool
 	handler, err := newHandler(cfg, logger, logs.access, services{database: db.Ping, states: states, config: live, metrics: watch, audit: audited, sentry: tracker,
-		draining: draining.Load, theme: theme, adminKeys: adminKeys, adminWriter: writerOf(db), adminRehash: rehasherOf(db)})
+		draining: draining.Load, theme: theme, adminKeys: adminKeys, adminWriter: writerOf(db), adminRehash: rehasherOf(db), accounts: db})
 	if err != nil {
 		stop()
 		return err
@@ -541,6 +544,9 @@ type services struct {
 	adminKeys *admin.Keys
 	// adminWriter writes its resources; nil, it serves /token alone.
 	adminWriter admin.Writer
+	// accounts are the admin accounts, the admin UI reads them at each
+	// request (Q120).
+	accounts adminui.Accounts
 	// adminRehash hashes again a secret of another cost (Q118); nil without a
 	// store that writes.
 	adminRehash func(ctx context.Context, id, old, new string) error
@@ -577,6 +583,10 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		previous[i] = k
 	}
 	memories, err := remember.New(cfg.Secrets.CookieKey, previous...)
+	if err != nil {
+		return nil, err
+	}
+	cookieKeys, err := seal.New(cfg.Secrets.CookieKey, previous...)
 	if err != nil {
 		return nil, err
 	}
@@ -686,6 +696,34 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		}
 		adminAPI.Register(mux)
 	}
+	adminHosts, err := cfg.Security.AdminAuthorizedHosts.Prefixes()
+	if err != nil {
+		return nil, err
+	}
+	ready := map[string]httpx.Check{"hydra": hydraClient.Ready, "database": s.database, "state": s.states.Ping}
+	ui, err := adminui.New(adminui.Options{
+		Enabled: cfg.Admin.UI.Enabled, AuthorizedHosts: adminHosts, Accounts: s.accounts, Keys: cookieKeys,
+		BaseURL: cfg.Server.BaseURL, CookiePath: cfg.Server.CookiePath,
+		IdleTimeout: cfg.Admin.Session.IdleTimeout.Std(), MaxAge: cfg.Admin.Session.MaxAge.Std(), ReauthWindow: cfg.Admin.Session.ReauthWindow.Std(),
+		LoginsPerMinute: adminLoginsPerMinute,
+		Logger:          logger, LogIP: cfg.Observability.LogIP, LogSample: logSample,
+		Refused: func(c context.Context) {
+			watch.Refused("admin")
+			s.audit.Refused(c, "admin_ui")
+		},
+		RateLimited: func(c context.Context) {
+			watch.AdminRateLimited()
+			s.audit.AdminRateLimited(c)
+		},
+		Login:     s.audit.AdminLogin,
+		Logout:    s.audit.AdminLogout,
+		Dashboard: func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
+		Version:   version,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ui.Register(mux)
 	if cfg.Observability.Metrics.Listen == "" {
 		hosts, err := cfg.Security.MetricsAuthorizedHosts.Prefixes()
 		if err != nil {
@@ -714,6 +752,33 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		httpx.Recover(logger),
 		s.sentry.Middleware,
 	), nil
+}
+
+// adminLoginsPerMinute bounds the attempts of an address at the login of the
+// admin UI (Panneau d'administration).
+const adminLoginsPerMinute = 10
+
+// dashboard is what the dashboard of the admin UI shows: what /ready checks,
+// each within two seconds, and the configuration of the moment.
+func dashboard(ctx context.Context, snap *store.Snapshot, checks map[string]httpx.Check) adminui.Dashboard {
+	instance, _ := os.Hostname()
+	d := adminui.Dashboard{Version: version, Instance: instance, Apps: len(snap.Apps), Flows: len(snap.Flows), APIClients: len(snap.APIClients)}
+	for _, f := range snap.Flows {
+		if f.Enabled {
+			d.FlowsEnabled++
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(checks)) {
+		c, cancel := context.WithTimeout(ctx, 2*time.Second)
+		err := checks[name](c)
+		cancel()
+		dep := adminui.Dependency{Name: name, OK: err == nil}
+		if err != nil {
+			dep.Detail = "does not answer"
+		}
+		d.Dependencies = append(d.Dependencies, dep)
+	}
+	return d
 }
 
 // appSource tells whether ip is among the allowed_sources of an app.

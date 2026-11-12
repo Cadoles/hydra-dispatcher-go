@@ -669,3 +669,26 @@ func (f *fakeStore) Diff(ctx context.Context, _ config.Seed) ([]store.Change, er
 	f.record("diff")
 	return f.changes, f.bootstrapErr
 }
+
+func (f *fakeStore) Admin(_ context.Context, username string) (store.AdminUser, bool, error) {
+	f.record("read admin " + username)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.admins, func(x store.AdminUser) bool { return x.Username == username })
+	if i < 0 {
+		return store.AdminUser{}, false, nil
+	}
+	return f.admins[i], true, nil
+}
+
+func (f *fakeStore) EndSessions(_ context.Context, username string) error {
+	f.record("end sessions " + username)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.admins, func(x store.AdminUser) bool { return x.Username == username })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.admins[i].SessionsValidAfter = time.Now()
+	return nil
+}

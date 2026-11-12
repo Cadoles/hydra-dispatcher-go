@@ -149,3 +149,27 @@ func TestBlocked(t *testing.T) {
 		t.Errorf("line %s", buf.String())
 	}
 }
+
+// A login to the admin UI: granted at info, refused at warn with its reason;
+// a logout; the address of the request.
+func TestAdminLogin(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(slog.New(httpx.LogHandler(slog.NewJSONHandler(&buf, nil))).With("log_type", "audit"), []byte("0123456789abcdef0123456789abcdef"), false)
+	ctx := requestContext(t)
+	l.AdminLogin(ctx, "alice", "password", "granted", "")
+	l.AdminLogin(ctx, "(unknown)", "password", "refused", "invalid_credentials")
+	l.AdminLogout(ctx, "alice")
+	var got []map[string]any
+	for line := range bytes.Lines(buf.Bytes()) {
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, m)
+	}
+	if len(got) != 3 || got[0]["msg"] != "admin.login" || got[0]["level"] != "INFO" || got[0]["user"] != "alice" || got[0]["reason"] != nil ||
+		got[1]["level"] != "WARN" || got[1]["reason"] != "invalid_credentials" || got[1]["user"] != "(unknown)" ||
+		got[2]["msg"] != "admin.logout" || got[0]["ip"] == nil || got[0]["ip"] == "" {
+		t.Errorf("lines: %v", got)
+	}
+}

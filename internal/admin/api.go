@@ -17,6 +17,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/ratelimit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -82,7 +83,7 @@ type Options struct {
 type API struct {
 	o     Options
 	mux   *http.ServeMux
-	limit *rateLimiter
+	limit *ratelimit.Limiter
 	// bcrypt bounds the bcrypts at once, one per processor: 100 requests of
 	// /token on a client of cost 13 held sixteen cores 4 s, the pages with
 	// them (revue R34).
@@ -100,7 +101,7 @@ func New(o Options) (*API, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	a := &API{o: o, mux: http.NewServeMux(), limit: newRateLimiter(o.RatePerMinute), bcrypt: make(chan struct{}, runtime.GOMAXPROCS(0))}
+	a := &API{o: o, mux: http.NewServeMux(), limit: ratelimit.New(o.RatePerMinute), bcrypt: make(chan struct{}, runtime.GOMAXPROCS(0))}
 	a.route("POST "+Prefix+"/token", http.HandlerFunc(a.token))
 	a.mux.HandleFunc(Prefix+"/", a.notFound)
 	if err := a.registerDocs(); err != nil {
@@ -175,18 +176,18 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := a.o.Now()
-	rt := a.limit.take(ip, now)
+	rt := a.limit.Take(ip, now)
 	h := w.Header()
-	h.Set("X-RateLimit-Remaining", strconv.Itoa(rt.remaining))
-	h.Set("X-RateLimit-Reset", strconv.FormatInt(int64(math.Ceil(float64(rt.reset.UnixNano())/1e9)), 10))
-	if !rt.allowed {
+	h.Set("X-RateLimit-Remaining", strconv.Itoa(rt.Remaining))
+	h.Set("X-RateLimit-Reset", strconv.FormatInt(int64(math.Ceil(float64(rt.Reset.UnixNano())/1e9)), 10))
+	if !rt.Allowed {
 		if a.o.Logger != nil && a.o.LogSample.AllowClient(r.Context(), "admin.rate_limited") {
 			a.o.Logger.WarnContext(r.Context(), "admin.rate_limited", "ip", httpx.FormatIP(ip, a.o.LogIP))
 		}
 		if a.o.RateLimited != nil {
 			a.o.RateLimited(r.Context())
 		}
-		h.Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(rt.reset.Sub(now).Seconds())))))
+		h.Set("Retry-After", strconv.Itoa(max(1, int(math.Ceil(rt.Reset.Sub(now).Seconds())))))
 		writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "Too many requests")
 		return
 	}

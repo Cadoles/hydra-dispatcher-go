@@ -191,6 +191,28 @@ func (l *Log) Token(ctx context.Context, client, result, reason string) {
 }
 
 // AdminRateLimited writes a request of the admin API over its rate limit, by IP.
+// AdminLogin writes a login to the admin UI, granted or refused: the account,
+// the method, the reason of a refusal, the address (Durcissements, point 8).
+// The name of a refused login is that of an account, or (unknown): a password
+// typed into the field of the name never reaches the audit.
+func (l *Log) AdminLogin(ctx context.Context, user, method, result, reason string) {
+	attrs := []any{"user", user, "method", method, "result", result, "ip", clientIP(ctx)}
+	if reason != "" {
+		attrs = append(attrs, "reason", reason)
+	}
+	level := slog.LevelInfo
+	if result != "granted" {
+		level = slog.LevelWarn
+	}
+	l.logger.Log(ctx, level, "admin.login", attrs...)
+}
+
+// AdminLogout writes a logout of the admin UI, which ends every session of
+// the account (Q120).
+func (l *Log) AdminLogout(ctx context.Context, user string) {
+	l.logger.InfoContext(ctx, "admin.logout", "user", user, "ip", clientIP(ctx))
+}
+
 func (l *Log) AdminRateLimited(ctx context.Context) {
 	l.logger.WarnContext(ctx, "admin.rate_limited", "ip", clientIP(ctx))
 }

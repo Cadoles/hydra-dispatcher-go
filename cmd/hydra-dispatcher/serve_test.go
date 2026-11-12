@@ -1031,3 +1031,20 @@ func TestCloseAuditOfABlockedSyslog(t *testing.T) {
 		})
 	}
 }
+
+// The dashboard of the admin UI: what /ready checks, by name, a dependency
+// that does not answer said so without its error; the flows and apps of the
+// moment.
+func TestDashboard(t *testing.T) {
+	snap := store.NewSnapshot([]store.App{{ID: "a"}, {ID: "b"}}, []store.Flow{{ID: "f", Enabled: true}, {ID: "g"}}, store.DefaultSettings())
+	d := dashboard(context.Background(), snap, map[string]httpx.Check{
+		"state": func(context.Context) error { return nil },
+		"database": func(context.Context) error {
+			return errors.New("dial tcp 10.0.0.5:5432: password authentication failed")
+		},
+	})
+	if d.Apps != 2 || d.Flows != 2 || d.FlowsEnabled != 1 || d.Version != version || len(d.Dependencies) != 2 ||
+		d.Dependencies[0].Name != "database" || d.Dependencies[0].OK || d.Dependencies[0].Detail != "does not answer" || !d.Dependencies[1].OK {
+		t.Errorf("dashboard: %+v", d)
+	}
+}

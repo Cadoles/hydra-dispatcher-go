@@ -1,0 +1,18 @@
+{{define "content"}}
+<article>
+<h1>Confirm it is you</h1>
+<p>This action asks for your password again: your last one is more than a few minutes old.</p>
+{{- if .Error}}
+<p role="alert"><strong>{{.Error}}</strong></p>
+{{- end}}
+<form method="post" action="{{.Base}}/reauth">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="next" value="{{.Next}}">
+<input type="hidden" name="username" value="{{.Account.Username}}" autocomplete="username">
+<label>Password
+<input type="password" name="password" autocomplete="current-password" required autofocus>
+</label>
+<button type="submit">Confirm</button>
+</form>
+</article>
+{{end}}

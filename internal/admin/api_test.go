@@ -23,6 +23,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/ratelimit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -257,7 +258,7 @@ func TestToken(t *testing.T) {
 	}
 	// A client_id no client can have goes to the audit as a marker, whatever
 	// its size (revue R34): the body may hold 64 KiB of it.
-	r.advance(2 * rateWindow) // a new count of the rate limit
+	r.advance(2 * ratelimit.Window) // a new count of the rate limit
 	r.mu.Lock()
 	before := len(r.tokens)
 	r.mu.Unlock()
@@ -377,7 +378,7 @@ func TestRateLimit(t *testing.T) {
 		if w.Code != http.StatusUnauthorized || w.Header().Get("X-RateLimit-Remaining") != strconv.Itoa(99-i) {
 			t.Fatalf("request %d: %d, remaining %s", i, w.Code, w.Header().Get("X-RateLimit-Remaining"))
 		}
-		if reset := w.Header().Get("X-RateLimit-Reset"); reset != strconv.FormatInt(r.now.Add(rateWindow).Unix(), 10) {
+		if reset := w.Header().Get("X-RateLimit-Reset"); reset != strconv.FormatInt(r.now.Add(ratelimit.Window).Unix(), 10) {
 			t.Fatalf("request %d: reset %s", i, reset)
 		}
 	}
@@ -400,7 +401,7 @@ func TestRateLimit(t *testing.T) {
 		t.Errorf("refusals told %d, logs:\n%s", r.refused.Load(), r.logs.String())
 	}
 	// Half a window after the first: the previous count weighs half.
-	r.advance(rateWindow + rateWindow/2)
+	r.advance(ratelimit.Window + ratelimit.Window/2)
 	passed := 0
 	for range 100 {
 		if r.do(http.MethodGet, "/admin/v1/apps", admin, "").Code != http.StatusTooManyRequests {
@@ -411,7 +412,7 @@ func TestRateLimit(t *testing.T) {
 		t.Errorf("%d passed half a window later, want 50", passed)
 	}
 	// Two windows later, all again.
-	r.advance(2 * rateWindow)
+	r.advance(2 * ratelimit.Window)
 	if w := r.do(http.MethodGet, "/admin/v1/apps", admin, ""); w.Header().Get("X-RateLimit-Remaining") != "99" {
 		t.Errorf("two windows later: remaining %s", w.Header().Get("X-RateLimit-Remaining"))
 	}
@@ -436,24 +437,6 @@ func TestAllowlistBehindProxies(t *testing.T) {
 	}
 	if w := r.do(http.MethodGet, "/admin/v1", "203.0.113.9:1", ""); w.Code != http.StatusForbidden {
 		t.Errorf("/admin/v1 itself: %d", w.Code)
-	}
-}
-
-func TestRetryAt(t *testing.T) {
-	start := time.Unix(1_800_000_000, 0)
-	for name, tt := range map[string]struct {
-		w    window
-		now  time.Time
-		want time.Duration // after start
-	}{
-		"full window":            {window{start: start, cur: 100}, start.Add(10 * time.Second), rateWindow + rateWindow/100},
-		"previous full":          {window{start: start, prev: 100, cur: 0}, start, rateWindow / 100},
-		"previous half, current": {window{start: start, prev: 100, cur: 49}, start, rateWindow / 2},
-		"already free":           {window{start: start, prev: 10}, start.Add(time.Second), time.Second},
-	} {
-		if got := tt.w.retryAt(tt.now, 100).Sub(start); got != tt.want {
-			t.Errorf("%s: %v, want %v", name, got, tt.want)
-		}
 	}
 }
 

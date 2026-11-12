@@ -1,0 +1,35 @@
+{{define "content"}}
+<h1>Dashboard</h1>
+{{- with .Dashboard}}
+<section>
+<h2>Dependencies</h2>
+<table>
+<thead><tr><th scope="col">Dependency</th><th scope="col">State</th></tr></thead>
+<tbody>
+{{- range .Dependencies}}
+<tr><td>{{.Name}}</td><td>{{if .OK}}ready{{else}}<strong>not ready</strong>{{if .Detail}}: {{.Detail}}{{end}}{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+</section>
+<section>
+<h2>Configuration</h2>
+<table>
+<tbody>
+<tr><th scope="row">Flows enabled</th><td>{{.FlowsEnabled}} of {{.Flows}}</td></tr>
+<tr><th scope="row">Apps</th><td>{{.Apps}}</td></tr>
+<tr><th scope="row">API clients</th><td>{{.APIClients}}</td></tr>
+</tbody>
+</table>
+</section>
+<section>
+<h2>Instance</h2>
+<table>
+<tbody>
+<tr><th scope="row">Version</th><td>{{.Version}}</td></tr>
+<tr><th scope="row">Instance</th><td>{{.Instance}}</td></tr>
+</tbody>
+</table>
+</section>
+{{- end}}
+{{end}}

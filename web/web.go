@@ -17,6 +17,12 @@ var FS embed.FS
 //go:embed scalar/standalone.js scalar/init.js
 var Scalar embed.FS
 
+// Admin holds admin/: the templates of the admin UI, which a theme does not
+// overlay.
+//
+//go:embed admin
+var Admin embed.FS
+
 // Pico holds pico/: the sheet of the admin UI, Pico CSS without classes,
 // pinned by fetch.sh (Q119).
 //

@@ -1,0 +1,30 @@
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="same-origin">
+<title>{{.Title}} · Hydra dispatcher</title>
+<link rel="stylesheet" href="{{.Asset}}">
+</head>
+<body>
+<header>
+<nav>
+<ul><li><strong>Hydra dispatcher</strong></li></ul>
+{{- if .Account}}
+<ul>
+<li><a href="{{.Base}}">Dashboard</a></li>
+<li>{{.Account.Username}} <small>({{.Account.Role}})</small></li>
+<li><form method="post" action="{{.Base}}/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form></li>
+</ul>
+{{- end}}
+</nav>
+</header>
+<main>
+{{template "content" .}}
+</main>
+<footer><small>{{.Version}}</small></footer>
+</body>
+</html>
+{{end}}

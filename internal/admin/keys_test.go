@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
-	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -289,19 +288,5 @@ func TestRotation(t *testing.T) {
 	ps, _ := symfony.Issue(issuer, "c", nil, time.Hour, now)
 	if _, err := mixed.Verify(ps, issuer, now); err != nil {
 		t.Errorf("PS256 of a previous RSA key: %v", err)
-	}
-}
-
-// The windows of the addresses silent for two windows are forgotten, at most a
-// minute after (revue R34).
-func TestRateLimiterSweeps(t *testing.T) {
-	l := newRateLimiter(10)
-	now := time.Unix(1_800_000_000, 0)
-	for i := range 3 {
-		l.take(netip.AddrFrom4([4]byte{10, 0, 0, byte(i)}), now)
-	}
-	l.take(netip.MustParseAddr("10.0.1.1"), now.Add(2*rateWindow+time.Second))
-	if n := len(l.windows); n != 1 {
-		t.Errorf("%d windows kept, want 1", n)
 	}
 }
