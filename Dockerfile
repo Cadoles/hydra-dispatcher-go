@@ -1,7 +1,7 @@
 # --- build stage ---
 # Images pinned by digest, bumped by Renovate. This one sets GOTOOLCHAIN=local:
 # keep its Go version that of the toolchain directive of go.mod.
-FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS build
+FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
 WORKDIR /src
 # tini, static, pinned by checksum (Q86): the init of the image, PID 1, which reaps
 # what a local program of the webhooks leaves behind; the dispatcher does not.

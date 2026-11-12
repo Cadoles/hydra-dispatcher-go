@@ -1,7 +1,7 @@
 # Recording proxy for the protocol fixtures, built by `make capture` in
 # hydra-dev with the repository root as context. Keep both stages in step
 # with ../../Dockerfile: same images, same digests.
-FROM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS build
+FROM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
 WORKDIR /src
 COPY . .
 # Cache mounts: the build fetches only the modules it compiles, not the tools
