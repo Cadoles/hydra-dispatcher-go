@@ -265,9 +265,45 @@ func (r *run) consentBody(f *Flow, req *ory.OAuth2ConsentRequest) ory.AcceptOAut
 		Remember:                 ory.PtrBool(settings.Remember),
 		RememberFor:              ory.PtrInt64(int64(settings.ConsentRememberFor / time.Second)),
 		Session: &ory.AcceptOAuth2ConsentRequestSession{
-			IdToken:     MergeClaims(idt...),
-			AccessToken: MergeClaims(act...),
+			IdToken:     r.granted(req.RequestedScope, MergeClaims(idt...)),
+			AccessToken: r.granted(req.RequestedScope, MergeClaims(act...)),
 		},
+	}
+}
+
+// granted are the claims of o the scopes cover, with consent.claims_filter
+// strict (Q129): the others are not sent, nor shown. Permissive, o as it is.
+func (r *run) granted(scopes []string, o Object) Object {
+	if !r.Env.StrictClaims || o == nil {
+		return o
+	}
+	covered := map[string]bool{}
+	for _, s := range scopes {
+		claims, _ := r.Env.Config.ScopeClaims(s)
+		for _, c := range claims {
+			covered[c] = true
+		}
+	}
+	out := Object{}
+	for k, v := range o {
+		if covered[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// grantedSession filters the session of body by the scopes it grants, after
+// the consent webhook, which may change both (Q129): what Hydra receives.
+func (r *run) grantedSession(body *ory.AcceptOAuth2ConsentRequest) {
+	if !r.Env.StrictClaims || body.Session == nil {
+		return
+	}
+	if o, ok := body.Session.IdToken.(Object); ok {
+		body.Session.IdToken = r.granted(body.GrantScope, o)
+	}
+	if o, ok := body.Session.AccessToken.(Object); ok {
+		body.Session.AccessToken = r.granted(body.GrantScope, o)
 	}
 }
 
@@ -283,6 +319,7 @@ func (r *run) acceptConsent(f *Flow, c string, req *ory.OAuth2ConsentRequest) Ou
 	if stop := r.consentHook(c, f.Gen, &body, req, ctx); stop != nil {
 		return *stop
 	}
+	r.grantedSession(&body)
 	d := r.Answers.ConsentAccept
 	switch {
 	case d == nil && r.mutated(AcceptConsent):

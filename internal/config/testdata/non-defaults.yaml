@@ -63,7 +63,7 @@ ui:
 emulated_api:
   legacy_v1_paths: false
 consent:
-  claims_filter: permissive
+  claims_filter: strict
   show_values: true
 observability:
   log_level: debug

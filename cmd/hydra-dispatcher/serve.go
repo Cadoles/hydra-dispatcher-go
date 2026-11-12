@@ -644,6 +644,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),
 		Keys:                   keys,
 		PropagateWithoutRecord: cfg.Logout.PropagateWithoutRecord,
+		StrictClaims:           cfg.Consent.ClaimsFilter == config.ClaimsStrict,
 		Log:                    logger,
 		LogSample:              logSample,
 	}

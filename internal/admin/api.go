@@ -112,6 +112,7 @@ func New(o Options) (*API, error) {
 		a.registerFlows()
 		a.registerClients()
 		a.registerSettings()
+		a.registerScopes()
 	}
 	return a, nil
 }

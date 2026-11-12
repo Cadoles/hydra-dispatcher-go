@@ -161,9 +161,9 @@ func TestEveryKeyIsRead(t *testing.T) {
 		t.Fatalf("%d keys, want %d", len(got), len(defaultKeys))
 	}
 	for i, k := range got {
-		// postgres is the only store, cookie the only skip memory; pinning,
-		// strict claims and the server memory are refused until implemented.
-		if k.path == "store.backend" || k.path == "remember.backend" || k.path == "tls.pinned_spki_sha256" || k.path == "consent.claims_filter" {
+		// postgres is the only store, cookie the only skip memory; pinning
+		// and the server memory are refused until implemented.
+		if k.path == "store.backend" || k.path == "remember.backend" || k.path == "tls.pinned_spki_sha256" {
 			continue
 		}
 		// A secret and its file exclude each other: TestSecretFiles reads the files.
@@ -1034,7 +1034,6 @@ func TestValidation(t *testing.T) {
 		{"shared previous key", map[string]string{"DISPATCHER_SECRETS_CHALLENGE_KEYS_PREVIOUS": hexKey}, "secrets.challenge_key: shares a key with secrets.cookie_key"},
 		{"previous key only", map[string]string{"DISPATCHER_SECRETS_ENCRYPTION_KEYS_PREVIOUS": hexKey2}, "secrets.encryption_key: is required with secrets.encryption_keys_previous"},
 		{"claims filter", map[string]string{"DISPATCHER_CONSENT_CLAIMS_FILTER": "loose"}, "consent.claims_filter"},
-		{"strict claims before the catalogue", map[string]string{"DISPATCHER_CONSENT_CLAIMS_FILTER": "strict"}, "consent.claims_filter: strict needs the scope catalogue"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -72,6 +72,8 @@ type Orchestrator struct {
 	Keys            Keys
 	// PropagateWithoutRecord is logout.propagate_without_record.
 	PropagateWithoutRecord string
+	// StrictClaims is consent.claims_filter strict.
+	StrictClaims bool
 	// Log gets the reports of each request, nil drops them.
 	Log *slog.Logger
 	// LogSample thins what a client or a clock can make endless: nil keeps every line.
@@ -524,6 +526,7 @@ func (o *Orchestrator) env() Env {
 		LoginConsentTTL:        o.LoginConsentTTL,
 		Keys:                   o.Keys,
 		PropagateWithoutRecord: o.PropagateWithoutRecord,
+		StrictClaims:           o.StrictClaims,
 		Now:                    o.now(),
 		Draw:                   Draw{Gen0: int64(binary.BigEndian.Uint32(b[:4])), CSRF: hex.EncodeToString(b[4:])},
 	}

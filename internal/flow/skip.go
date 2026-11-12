@@ -197,7 +197,9 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	}
 	c := ev.Memory.Content
 	settings := r.Env.Config.Settings
-	idt, act := MergeClaims(c.IDT), MergeClaims(c.ACT)
+	// The claims of the scopes asked alone, strict: those the screen shows
+	// and its print covers (Q129).
+	idt, act := r.granted(req.RequestedScope, MergeClaims(c.IDT)), r.granted(req.RequestedScope, MergeClaims(c.ACT))
 	switch {
 	case ev.Post && !sameCSRF(ev.Token, ev.Cookie):
 		return s.fail(E1008) // SKC-5
@@ -221,6 +223,7 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	if stop := r.consentHook(ev.Challenge, 0, &body, req, withoutDispatcher(c.Ctx)); stop != nil {
 		return *stop // SKC-13
 	}
+	r.grantedSession(&body)
 	d := r.Answers.ConsentAccept
 	switch {
 	case d == nil && r.mutated(AcceptConsent):

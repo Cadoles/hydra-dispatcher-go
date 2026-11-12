@@ -7,7 +7,7 @@ info:
     Two APIs, by their tags.
 
     **Admin API** (`/admin/v1`): the configuration of the dispatcher, its apps,
-    flows, API clients and settings. Only the addresses of
+    flows, API clients, settings and catalogue of the scopes. Only the addresses of
     `security.admin_authorized_hosts` reach it (403 otherwise, before anything);
     100 requests a minute and per address by default (`X-RateLimit-Remaining`,
     `X-RateLimit-Reset`, and `Retry-After` on a 429). A token comes from
@@ -37,6 +37,8 @@ tags:
     description: The clients of the admin API.
   - name: Settings
     description: The settings, one document.
+  - name: Scopes
+    description: The catalogue of the scopes, what the consent shows and filters.
   - name: Documentation
     description: This document, and the page that shows it.
   - name: Emulated API
@@ -480,6 +482,104 @@ paths:
       requestBody: { $ref: "#/components/requestBodies/SettingsPatch" }
       responses: *settingsWrites
 
+  /admin/v1/scopes:
+    get:
+      tags: [Scopes]
+      operationId: listScopes
+      summary: List the catalogue of the scopes
+      description: The standard scopes of OpenID Connect first, in their order, then those of the business, by name.
+      security: [{ bearer: [admin:scopes] }, { bearer: [admin:read] }]
+      parameters: [{ $ref: "#/components/parameters/page" }]
+      responses:
+        "200":
+          description: A page of the catalogue.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Scope" } }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    post:
+      tags: [Scopes]
+      operationId: createScope
+      summary: Create a scope of the business
+      description: A standard scope is renamed by PUT or PATCH, never created (409).
+      security: [{ bearer: [admin:scopes] }]
+      requestBody: { $ref: "#/components/requestBodies/Scope" }
+      responses:
+        "201":
+          description: The scope created; Location names it.
+          headers:
+            Location: { $ref: "#/components/headers/Location" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/Invalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/ServerError" }
+  /admin/v1/scopes/{name}:
+    parameters: [{ $ref: "#/components/parameters/scopeName" }]
+    get:
+      tags: [Scopes]
+      operationId: getScope
+      summary: Read a scope
+      security: [{ bearer: [admin:scopes] }, { bearer: [admin:read] }]
+      responses:
+        "200":
+          description: The scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Scopes]
+      operationId: replaceScope
+      summary: Replace a scope, or rename a standard one
+      description: |
+        Replaces its label and its claims, absent ones emptied. A standard
+        scope takes the labels of its claims alone, never a claim more; its
+        labels emptied, those of the code come back.
+      security: [{ bearer: [admin:scopes] }]
+      requestBody: { $ref: "#/components/requestBodies/Scope" }
+      responses:
+        "200":
+          description: The scope as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        <<: *updateErrors
+    patch:
+      tags: [Scopes]
+      operationId: patchScope
+      summary: Change fields of a scope
+      description: The fields sent, each replaced whole.
+      security: [{ bearer: [admin:scopes] }]
+      requestBody: { $ref: "#/components/requestBodies/ScopePatch" }
+      responses:
+        "200":
+          description: The scope as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        <<: *updateErrors
+    delete:
+      tags: [Scopes]
+      operationId: deleteScope
+      summary: Delete a scope of the business
+      description: A standard scope is never deleted (409).
+      security: [{ bearer: [admin:scopes] }]
+      responses: *deletes
+
   /admin/v1/docs:
     get:
       tags: [Documentation]
@@ -683,6 +783,12 @@ components:
       required: true
       description: 128 characters at most, letters, digits, ".", "_" or "-", starting with a letter or a digit.
       schema: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" }
+    scopeName:
+      name: name
+      in: path
+      required: true
+      description: 128 characters at most, without a space nor a control character.
+      schema: { type: string, pattern: "^[^\\s]{1,128}$" }
     page:
       name: page
       in: query
@@ -767,6 +873,18 @@ components:
           schema: { $ref: "#/components/schemas/SettingsWrite" }
         application/json:
           schema: { $ref: "#/components/schemas/SettingsWrite" }
+    Scope:
+      required: true
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ScopeWrite" }
+    ScopePatch:
+      required: true
+      content:
+        application/merge-patch+json:
+          schema: { $ref: "#/components/schemas/ScopeWrite" }
+        application/json:
+          schema: { $ref: "#/components/schemas/ScopeWrite" }
     AcceptLogin:
       required: true
       content:
@@ -1037,6 +1155,41 @@ components:
         id: { deprecated: true }
         hydraPublicUrl: { deprecated: true }
         adminAuthorizedHosts: { deprecated: true }
+
+    Scope:
+      type: object
+      required: [name, label, claims, builtin]
+      properties:
+        name: { type: string }
+        label: { $ref: "#/components/schemas/Labels" }
+        claims:
+          type: array
+          items:
+            type: object
+            required: [claim, label]
+            properties:
+              claim: { type: string }
+              label: { $ref: "#/components/schemas/Labels" }
+        builtin: { type: boolean, description: 'A standard scope of OpenID Connect: its labels are those it renames, none for the code''s.' }
+    ScopeWrite:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: [string, "null"] }
+        label: { oneOf: [{ $ref: "#/components/schemas/Labels" }, { type: "null" }] }
+        claims:
+          type: [array, "null"]
+          items:
+            type: object
+            required: [claim]
+            properties:
+              claim: { type: string }
+              label: { $ref: "#/components/schemas/Labels" }
+        builtin: { description: 'Read-only, ignored.' }
+    Labels:
+      type: object
+      description: 'A text by locale, "" for every locale.'
+      additionalProperties: { type: string }
 
     EmulatedError:
       type: object

@@ -236,10 +236,6 @@ func (c *Config) validate() (warnings []string, err error) {
 	}
 
 	oneOf("consent.claims_filter", c.Consent.ClaimsFilter, ClaimsPermissive, ClaimsStrict)
-	if c.Consent.ClaimsFilter == ClaimsStrict {
-		// The standard scopes alone would drop every business claim.
-		fail("consent.claims_filter", "strict needs the scope catalogue of the database, which phase 3 brings: use permissive")
-	}
 
 	o := c.Observability
 	oneOf("observability.log_level", o.LogLevel, "debug", "info", "warn", "error")

@@ -30,6 +30,7 @@ type fakeWriter struct {
 	apps     []store.App
 	flows    []store.Flow
 	clients  []store.APIClient
+	scopes   []store.Scope
 	settings map[string]json.RawMessage // the last UpdateSettings
 	authors  []string
 	// fail fails CreateApp, as the database out of reach would.
@@ -39,7 +40,72 @@ type fakeWriter struct {
 func (f *fakeWriter) publish() {
 	f.config.mu.Lock()
 	defer f.config.mu.Unlock()
-	f.config.s = store.NewSnapshot(f.apps, f.flows, store.DefaultSettings()).WithAPIClients(f.clients)
+	s := store.NewSnapshot(f.apps, f.flows, store.DefaultSettings()).WithAPIClients(f.clients)
+	s.Scopes = slices.Clone(f.scopes)
+	slices.SortFunc(s.Scopes, func(a, b store.Scope) int { return strings.Compare(a.Name, b.Name) })
+	f.config.s = s
+}
+
+// The writes of the catalogue, by the rules of the store.
+func (f *fakeWriter) CreateScope(_ context.Context, by string, s store.Scope) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, standard := domain.Standard(s.Name); standard {
+		return store.ErrStandard
+	}
+	if v := domain.Collect(s.Check); v != nil {
+		return v
+	}
+	if slices.ContainsFunc(f.scopes, func(x store.Scope) bool { return x.Name == s.Name }) {
+		return store.ErrExists
+	}
+	f.by(by)
+	f.scopes = append(f.scopes, s)
+	f.publish()
+	return nil
+}
+
+func (f *fakeWriter) UpdateScope(_ context.Context, by, name string, change func(*store.Scope) error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, standard := domain.Standard(name)
+	i := slices.IndexFunc(f.scopes, func(x store.Scope) bool { return x.Name == name })
+	if i < 0 && !standard {
+		return store.ErrNotFound
+	}
+	s := store.Scope{Name: name}
+	if i >= 0 {
+		s = f.scopes[i]
+	}
+	if err := change(&s); err != nil {
+		return err
+	}
+	if v := domain.Collect(s.Check); v != nil {
+		return v
+	}
+	f.by(by)
+	if i < 0 {
+		f.scopes = append(f.scopes, s)
+	} else {
+		f.scopes[i] = s
+	}
+	f.publish()
+	return nil
+}
+
+func (f *fakeWriter) DeleteScope(_ context.Context, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, standard := domain.Standard(name); standard {
+		return store.ErrStandard
+	}
+	i := slices.IndexFunc(f.scopes, func(x store.Scope) bool { return x.Name == name })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.scopes = slices.Delete(f.scopes, i, i+1)
+	f.publish()
+	return nil
 }
 
 func (f *fakeWriter) by(by string) {

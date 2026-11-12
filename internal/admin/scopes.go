@@ -17,11 +17,14 @@ const (
 	ScopeFlows    = "admin:flows"
 	ScopeClients  = "admin:clients"
 	ScopeSettings = "admin:settings"
-	ScopeRead     = "admin:read"
+	// ScopeScopes writes the catalogue of the scopes (Q124), admin:read
+	// reading it too.
+	ScopeScopes = "admin:scopes"
+	ScopeRead   = "admin:read"
 )
 
 // Scopes are those the API knows, in the order of the doc.
-var Scopes = []string{ScopeApps, ScopeFlows, ScopeClients, ScopeSettings, ScopeRead}
+var Scopes = []string{ScopeApps, ScopeFlows, ScopeClients, ScopeSettings, ScopeScopes, ScopeRead}
 
 // Resource is a resource of the admin API, by the scope of its writes.
 type Resource string
@@ -31,6 +34,8 @@ const (
 	Flows    Resource = ScopeFlows
 	Clients  Resource = ScopeClients
 	Settings Resource = ScopeSettings
+	// Catalogue is the catalogue of the scopes, /scopes.
+	Catalogue Resource = ScopeScopes
 )
 
 // Required are the scopes that allow method on r, any one of them: the

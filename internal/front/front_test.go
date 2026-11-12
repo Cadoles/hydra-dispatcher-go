@@ -1643,3 +1643,28 @@ func TestRememberHTTPS(t *testing.T) {
 		}
 	}
 }
+
+// The consent screen by the catalogue of the scopes (P24): a scope of the
+// business and its labels, a standard scope renamed, a claim renamed, in the
+// locale of the page or for every locale; a scope it does not know by its
+// name.
+func TestConsentCatalogue(t *testing.T) {
+	snap := testSnapshot()
+	snap.Scopes = []store.Scope{
+		{Name: "groups", Label: map[string]string{"en": "Your teams"}, Claims: []store.ScopeClaim{{Claim: "groups", Label: map[string]string{"": "Teams"}}}},
+		{Name: "profile", Label: map[string]string{"fr": "Qui vous êtes"}, Claims: []store.ScopeClaim{{Claim: "name", Label: map[string]string{"en": "Your name"}}}},
+	}
+	w := newWorld(t, worldOptions{base: base, snapshot: snap})
+	w.hydra.consentSkip = false
+	w.appSession(w.choose("hydra-sql"), "alice", `{"id_token":{"email":"alice@example.org","name":"Alice","groups":["staff"]}}`)
+	location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
+	body := text(t, w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil))
+	for _, want := range []string{"Your teams", "<li>Teams</li>", "Your profile", "<li>Your name</li>", "Your email address"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Permission “groups”") || strings.Contains(body, "Other data") {
+		t.Errorf("groups outside the catalogue:\n%s", body)
+	}
+}

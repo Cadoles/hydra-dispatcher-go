@@ -25,6 +25,9 @@ type Writer interface {
 	UpdateAPIClient(ctx context.Context, by, id string, change func(*store.APIClient) error) error
 	DeleteAPIClient(ctx context.Context, id string) error
 	UpdateSettings(ctx context.Context, by string, values map[string]json.RawMessage) error
+	CreateScope(ctx context.Context, by string, s store.Scope) error
+	UpdateScope(ctx context.Context, by, name string, change func(*store.Scope) error) error
+	DeleteScope(ctx context.Context, name string) error
 }
 
 // problem is an error of the resources, the form of API Platform without the
@@ -126,6 +129,8 @@ func (a *API) fail(w http.ResponseWriter, r *http.Request, what string, err erro
 		writeViolations(w, refusedViolations(refused.Err), false)
 	case errors.Is(err, store.ErrNotFound):
 		writeProblem(w, http.StatusNotFound, "Not Found")
+	case errors.Is(err, store.ErrStandard):
+		writeProblem(w, http.StatusConflict, "A standard scope of OpenID Connect is renamed, by PUT or PATCH: it is neither created nor deleted.")
 	case errors.Is(err, store.ErrExists):
 		writeProblem(w, http.StatusConflict, what+" already exists.")
 	case errors.As(err, &ref):

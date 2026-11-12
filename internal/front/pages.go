@@ -18,6 +18,7 @@ import (
 	ory "github.com/ory/hydra-client-go/v26"
 	"golang.org/x/net/html"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
@@ -235,16 +236,6 @@ func clientOf(data json.RawMessage) client {
 	return client{Name: c.Name, LogoURI: c.LogoURI, ClientURI: c.ClientURI, PolicyURI: c.PolicyURI, TosURI: c.TosURI}
 }
 
-// standardScopes are the OpenID Connect scopes and their claims, built in
-// for phase 1 (Page de consent).
-var standardScopes = map[string][]string{
-	"openid":  {"sub"},
-	"profile": {"name", "family_name", "given_name", "preferred_username", "locale"},
-	"email":   {"email", "email_verified"},
-	"address": {"address"},
-	"phone":   {"phone_number", "phone_number_verified"},
-}
-
 // consentPage is the consent screen (CST-13): the scopes asked with the
 // claims of the flow they cover, then the other claims, sent too
 // (claims_filter permissive). What is shown is what is sent: the claims of
@@ -262,17 +253,19 @@ func (h *Handler) consentPage(r *http.Request, th *Theme, cfg *store.Snapshot, c
 	sent := sentClaims(c)
 	covered := map[string]bool{}
 	for _, s := range c.Scopes {
-		var g scopeGroup
-		claims, known := standardScopes[s]
-		if known {
-			g.Label = p.T("scope." + s)
-		} else {
-			g.Label = p.T("scope.generic", s)
-		}
+		row, _ := cfg.Scope(s)
+		claims, known := cfg.ScopeClaims(s)
+		g := scopeGroup{Label: p.scopeLabel(s, row.Label, known)}
 		for _, name := range claims {
 			if values, ok := sent[name]; ok {
 				covered[name] = true
-				g.Claims = append(g.Claims, claim(p, name, values, show))
+				line := claim(p, name, values, show)
+				if i := slices.IndexFunc(row.Claims, func(c store.ScopeClaim) bool { return c.Claim == name }); i >= 0 {
+					if l := p.labelOf(row.Claims[i].Label); l != "" {
+						line.Label = l
+					}
+				}
+				g.Claims = append(g.Claims, line)
 			}
 		}
 		p.Scopes = append(p.Scopes, g)
@@ -341,6 +334,31 @@ func sentClaims(c *flow.ConsentScreen) map[string][]json.RawMessage {
 // claim is the line of a claim: its label, or its name when the catalogs
 // have none, and with show its values, a string as it is, anything else in
 // JSON.
+// labelOf is a label of the catalogue in the locale of the page, else for
+// every locale, else in the fallback locale; "" for none.
+func (p page) labelOf(l map[string]string) string {
+	for _, locale := range []string{p.Locale, "", p.fallback} {
+		if t := l[locale]; t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// scopeLabel is the label of the scope s on the consent screen: the one of
+// its row in the catalogue, else for a standard scope the theme's, else the
+// generic label with its name; a scope the catalogue does not know keeps its
+// name (Page de consent).
+func (p page) scopeLabel(s string, row map[string]string, known bool) string {
+	if l := p.labelOf(row); l != "" {
+		return l
+	}
+	if key := "scope." + s; known && p.labelled(key) {
+		return p.T(key)
+	}
+	return p.T("scope.generic", s)
+}
+
 func claim(p page, name string, values []json.RawMessage, show bool) claimLine {
 	l := claimLine{Label: name}
 	if key := "claim." + name; p.labelled(key) {
@@ -440,10 +458,11 @@ type sample struct {
 
 func (h *Handler) samples(r *http.Request, th *Theme, cfg *store.Snapshot) []sample {
 	client := json.RawMessage(`{"client_id":"c","client_name":"Client","logo_uri":"https://client.example/logo.png","client_uri":"https://client.example/"}`)
-	scopes := slices.Sorted(maps.Keys(standardScopes))
+	var scopes []string
 	claims := flow.Object{"custom": json.RawMessage(`["v"]`)}
-	for _, s := range scopes {
-		for _, c := range standardScopes[s] {
+	for _, s := range domain.StandardScopes {
+		scopes = append(scopes, s.Name)
+		for _, c := range s.Claims {
 			claims[c] = json.RawMessage(`"v"`)
 		}
 	}

@@ -244,6 +244,8 @@ func resourceName(r Resource) string {
 		return "oauth2-clients"
 	case Settings:
 		return "settings"
+	case Catalogue:
+		return "scopes"
 	}
 	return string(r)
 }

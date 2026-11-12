@@ -27,8 +27,11 @@ type Env struct {
 	// PropagateWithoutRecord is logout.propagate_without_record: "none" tells no
 	// app without a cookie of the session, anything else all of them (LST).
 	PropagateWithoutRecord string
-	Now                    time.Time
-	Draw                   Draw
+	// StrictClaims is consent.claims_filter strict: a consent sends the
+	// claims of the scopes it grants alone (Page de consent, Q129).
+	StrictClaims bool
+	Now          time.Time
+	Draw         Draw
 	// Trace is the request's span, for a flow it creates (Flow.Trace).
 	Trace string
 }

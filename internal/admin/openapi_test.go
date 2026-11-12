@@ -157,7 +157,7 @@ func TestRouteScopes(t *testing.T) {
 				open = append(open, strings.ToUpper(method)+" "+path)
 				continue
 			}
-			concrete := strings.ReplaceAll(path, "{id}", "x")
+			concrete := strings.NewReplacer("{id}", "x", "{name}", "x").Replace(path)
 			for _, scope := range Scopes {
 				w := r.do(tokens[scope], strings.ToUpper(method), concrete, "application/json", `{}`)
 				// A 403 for the scope, not for another reason.
@@ -169,8 +169,8 @@ func TestRouteScopes(t *testing.T) {
 			checked++
 		}
 	}
-	if checked != 21 {
-		t.Errorf("%d operations checked, want 21", checked)
+	if checked != 27 {
+		t.Errorf("%d operations checked, want 27", checked)
 	}
 	// Without a token, these alone: a route of a resource documented with
 	// security: [] would escape the check above (revue R36).

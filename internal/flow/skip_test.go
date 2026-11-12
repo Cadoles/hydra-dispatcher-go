@@ -508,6 +508,21 @@ func TestConsentWithoutFlow(t *testing.T) {
 	for _, tc := range []pageCase{
 		{name: "SKC-1, Hydra's skip", ev: get, says: accept,
 			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent}, check: consentAccepted},
+		{name: "SKC-1 strict (Q129): groups, of no scope asked, not sent", env: func(e *Env) { e.StrictClaims = true }, ev: get, says: accept,
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				b := p.calls[len(p.calls)-1].AcceptConsent
+				if rawJSON(b.Session.IdToken) != `{"email":"alice@example.org","name":"Alice"}` || rawJSON(b.Session.AccessToken) != `{}` {
+					t.Errorf("session %s %s", rawJSON(b.Session.IdToken), rawJSON(b.Session.AccessToken))
+				}
+			}},
+		{name: "SKC-2 strict: the screen without the flow shows what is sent", env: func(e *Env) { e.StrictClaims = true }, ev: get,
+			says: hydraSays{GetConsent: read(noSkip)}, kind: ConsentPage, calls: []Op{GetConsent},
+			check: func(t *testing.T, p played) {
+				if s := p.Response.Consent; s == nil || rawJSON(s.AccessClaims) != `{}` || rawJSON(s.Claims) != `{"email":"alice@example.org","name":"Alice"}` {
+					t.Errorf("screen %+v", s)
+				}
+			}},
 		{name: "SKC-1, the client's skip_consent", ev: get,
 			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { noSkip(r); r.Client.SkipConsent = ory.PtrBool(true) }), AcceptConsent: {redirectTo: callbackURL}},
 			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent}, check: consentAccepted},
@@ -525,6 +540,15 @@ func TestConsentWithoutFlow(t *testing.T) {
 			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, ConsentHook, AcceptConsent},
 			check: func(t *testing.T, p played) {
 				if got := rawJSON(p.calls[2].AcceptConsent.Session.IdToken); got != `{"hook":1}` {
+					t.Errorf("id_token %s", got)
+				}
+			}},
+		{name: "SKC-1 strict (Q129): the webhook's claims by the scopes granted", ev: get,
+			env:  func(e *Env) { consentHook(e); e.StrictClaims = true },
+			says: hydraSays{GetConsent: read(nil), ConsentHook: {consentHook: &ConsentHookAnswer{IDToken: json.RawMessage(`{"hook":1,"email":"a@b"}`)}}, AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, ConsentHook, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				if got := rawJSON(p.calls[2].AcceptConsent.Session.IdToken); got != `{"email":"a@b"}` {
 					t.Errorf("id_token %s", got)
 				}
 			}},
