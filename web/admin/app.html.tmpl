@@ -10,6 +10,7 @@
 {{template "general" .Errors}}
 <form method="post" action="{{if .New}}{{$.Base}}/apps{{else}}{{$.Base}}/apps/{{.Form.ID}}{{end}}">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="version" value="{{.Form.Version}}">
 <fieldset{{if not $.CanWrite}} disabled{{end}}>
 {{- if .New}}
 <label>Id

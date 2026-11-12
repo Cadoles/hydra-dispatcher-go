@@ -1,0 +1,37 @@
+{{define "content"}}
+<hgroup>
+<h1>Settings</h1>
+<p>What every instance reads of the database. A setting at its default is not in the database.</p>
+</hgroup>
+{{template "notice" .}}
+{{- with .Data}}
+{{template "general" .Errors}}
+<form method="post" action="{{$.Base}}/settings">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+{{- range .Rows}}
+<input type="hidden" name="shown_{{.Key}}" value="{{.Shown}}">
+{{- if eq .Kind "bool"}}
+<label>
+<input type="checkbox" name="{{.Key}}" value="true"{{if .On}} checked{{end}}{{if $.Data.Errors.For .Key}} aria-invalid="true"{{end}}>
+{{.Key}}
+</label>
+{{- else}}
+<label>{{.Key}}
+<input{{if eq .Kind "number"}} type="number" step="1" min="1"{{end}} name="{{.Key}}" value="{{.Value}}"{{if $.Data.Errors.For .Key}} aria-invalid="true"{{end}}>
+</label>
+{{- end}}
+{{template "errors" $.Data.Errors.For .Key}}
+<small>{{.Help}}. Default: {{if .Default}}{{.Default}}{{else}}none{{end}}{{if not .Stored}}, which it has{{end}}.</small>
+{{- if .Stored}}
+<label><input type="checkbox" name="reset" value="{{.Key}}"> Back to its default</label>
+{{- end}}
+<hr>
+{{- end}}
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit">Save</button>
+{{- end}}
+</form>
+{{- end}}
+{{end}}

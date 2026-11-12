@@ -1,0 +1,83 @@
+{{define "content"}}
+{{- with .Data}}
+<hgroup>
+<h1>{{if .New}}New flow{{else}}Flow {{.Form.ID}}{{end}}</h1>
+<p>{{if .Form.Enabled}}Offered to the users.{{else}}Offered to no user.{{end}}</p>
+</hgroup>
+{{template "notice" $}}
+{{template "general" .Errors}}
+<form method="post" action="{{if .New}}{{$.Base}}/flows{{else}}{{$.Base}}/flows/{{.Form.ID}}{{end}}">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="version" value="{{.Form.Version}}">
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+{{- if .New}}
+<label>Id
+<input name="id" value="{{.Form.ID}}" required maxlength="128"{{if .Errors.For "id"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "id"}}
+<small>Up to 128 letters, digits, '.', '_' or '-', starting with a letter or a digit. It never changes.</small>
+</label>
+{{- end}}
+<label>
+<input type="checkbox" name="enabled" value="1"{{if .Form.Enabled}} checked{{end}}>
+Enabled: offered to the users
+</label>
+<label>ACR
+<input name="acr" value="{{.Form.ACR}}" maxlength="255"{{if .Errors.For "acr"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "acr"}}
+<small>The acr Hydra receives at the end of the flow; empty, none.</small>
+</label>
+<h2>Texts</h2>
+{{- with .Errors.For "title"}}<p role="alert"><strong>Title: {{range $i, $m := .}}{{if $i}} {{end}}{{$m}}.{{end}}</strong></p>{{end}}
+{{- with .Errors.For "description"}}<p role="alert"><strong>Description: {{range $i, $m := .}}{{if $i}} {{end}}{{$m}}.{{end}}</strong></p>{{end}}
+{{- with .Errors.For "icon_url"}}<p role="alert"><strong>Icon URL: {{range $i, $m := .}}{{if $i}} {{end}}{{$m}}.{{end}}</strong></p>{{end}}
+<p><small>By locale: those of supported_locales, then the others the flow holds. A title and a description in one locale at least; the icon is optional.</small></p>
+{{- range .Form.Texts}}
+<fieldset>
+<legend>{{.Locale}}</legend>
+<input type="hidden" name="locale" value="{{.Locale}}">
+<label>Title <input name="title" value="{{.Title}}"></label>
+<label>Description <textarea name="description" rows="2">{{.Description}}</textarea></label>
+<label>Icon URL <input type="url" name="icon_url" value="{{.IconURL}}"></label>
+</fieldset>
+{{- end}}
+<h2>Steps</h2>
+{{template "errors" .Errors.For "steps"}}
+<p><small>In the order of their positions; an app left at — is no step. {{if $.CanWrite}}Drag the rows to order them, or type their positions.{{end}}</small></p>
+<table id="steps">
+<thead><tr><th scope="col"></th><th scope="col">App</th><th scope="col">Position</th><th scope="col">Subject check</th><th scope="col">Claim</th></tr></thead>
+<tbody>
+{{- range $i, $row := .Rows}}
+<tr>
+<td title="Drag to order">⠿</td>
+<td><select name="step_app" aria-label="App"{{if $.Data.Errors.For (printf "steps[%d]" $i)}} aria-invalid="true"{{end}}>
+<option value="">—</option>
+{{- range $.Data.Apps}}
+<option value="{{.}}"{{if eq . $row.App}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select>
+{{template "errors" $.Data.Errors.For (printf "steps[%d]" $i)}}</td>
+<td><input type="number" name="step_position" value="{{$row.Position}}" step="1" aria-label="Position"></td>
+<td><select name="step_check" aria-label="Subject check">
+<option value="none"{{if eq $row.Check "none"}} selected{{end}}>none</option>
+<option value="equal"{{if eq $row.Check "equal"}} selected{{end}}>equal to the previous step's</option>
+<option value="claim"{{if eq $row.Check "claim"}} selected{{end}}>equal to a claim of the previous steps</option>
+</select></td>
+<td><input name="step_claim" value="{{$row.Claim}}" aria-label="Claim"></td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit">{{if .New}}Create{{else}}Save{{end}}</button>
+{{- end}}
+</form>
+{{- if and $.CanWrite (not .New)}}
+<p><a href="{{$.Base}}/flows/{{.Form.ID}}/delete">Delete this flow</a></p>
+{{- end}}
+<p><a href="{{$.Base}}/flows">Back to the flows</a></p>
+{{- if $.CanWrite}}
+<script src="{{$.Steps}}"></script>
+{{- end}}
+{{- end}}
+{{end}}

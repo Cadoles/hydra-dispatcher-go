@@ -7,6 +7,7 @@
 <meta name="referrer" content="same-origin">
 <title>{{.Title}} · Hydra dispatcher</title>
 <link rel="stylesheet" href="{{.Asset}}">
+<link rel="stylesheet" href="{{.Styles}}">
 <link rel="icon" href="data:,">
 </head>
 <body>
@@ -16,7 +17,9 @@
 {{- if .Account}}
 <ul>
 <li><a href="{{.Base}}"{{if eq .Nav "dashboard"}} aria-current="page"{{end}}>Dashboard</a></li>
+<li><a href="{{.Base}}/flows"{{if eq .Nav "flows"}} aria-current="page"{{end}}>Flows</a></li>
 <li><a href="{{.Base}}/apps"{{if eq .Nav "apps"}} aria-current="page"{{end}}>Apps</a></li>
+<li><a href="{{.Base}}/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a></li>
 <li>{{.Account.Username}} <small>({{.Account.Role}})</small></li>
 <li><form method="post" action="{{.Base}}/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form></li>
 </ul>

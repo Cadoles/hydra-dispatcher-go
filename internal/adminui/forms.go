@@ -2,6 +2,9 @@ package adminui
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -20,6 +23,10 @@ type Writer interface {
 	CreateApp(ctx context.Context, by string, a store.App) error
 	UpdateApp(ctx context.Context, by, id string, change func(*store.App) error) error
 	DeleteApp(ctx context.Context, id string) error
+	CreateFlow(ctx context.Context, by string, f store.Flow) error
+	UpdateFlow(ctx context.Context, by, id string, change func(*store.Flow) error) error
+	DeleteFlow(ctx context.Context, id string) error
+	UpdateSettings(ctx context.Context, by string, values map[string]json.RawMessage) error
 }
 
 // Snapshots give the configuration of the moment: a write refreshes that of
@@ -43,8 +50,9 @@ func author(username string) string {
 }
 
 // fieldErrors are the violations of a form by its fields: the field of a
-// violation up to its index (allowed_sources[1] is allowed_sources), "" for
-// those of no field.
+// violation up to its subfield (steps[1].subject_check is steps[1]) when the
+// form shows it, up to its index otherwise (allowed_sources[1] is
+// allowed_sources), "" for those of no field.
 type fieldErrors map[string][]string
 
 // For gives the messages of field.
@@ -55,15 +63,15 @@ func (e fieldErrors) For(field string) []string { return e[field] }
 func errorsOf(v domain.Violations, fields []string) fieldErrors {
 	e := fieldErrors{}
 	for _, x := range v {
-		field := x.Field
-		if i := strings.IndexAny(field, "[."); i >= 0 {
-			field = field[:i]
-		}
+		field, _, _ := strings.Cut(x.Field, ".")
+		base, _, _ := strings.Cut(field, "[")
 		switch {
 		case field == "":
 			e[""] = append(e[""], x.Message)
 		case slices.Contains(fields, field):
 			e[field] = append(e[field], x.Message)
+		case slices.Contains(fields, base):
+			e[base] = append(e[base], x.Message)
 		default:
 			e[""] = append(e[""], x.Field+": "+x.Message)
 		}
@@ -87,6 +95,9 @@ func (ui *UI) failed(w http.ResponseWriter, r *http.Request, s *current, err err
 		again(http.StatusConflict, fieldErrors{"id": {"is taken: another has this id"}})
 	case errors.As(err, &ref):
 		again(http.StatusConflict, fieldErrors{"": {"It is a step of the flows " + strings.Join(ref.Flows, ", ") + ": take it out of them first."}})
+	case errors.Is(err, errChanged):
+		again(http.StatusConflict, fieldErrors{"": {"Another admin changed it since you opened this page. Your changes are below, not saved: " +
+			"save again to write them over theirs, or open the page anew to see theirs."}})
 	case errors.Is(err, store.ErrNotFound):
 		ui.status(w, r, http.StatusNotFound, "Not found", "It does not exist, or no longer: another admin may have deleted it.", s)
 	default:
@@ -95,6 +106,22 @@ func (ui *UI) failed(w http.ResponseWriter, r *http.Request, s *current, err err
 		}
 		ui.status(w, r, http.StatusServiceUnavailable, "Unavailable", "The configuration cannot be written now: try again in a moment.", s)
 	}
+}
+
+// errChanged refuses the save of a form whose entity changed since the form
+// was shown: two admins on the same flow would lose the changes of one
+// without a word.
+var errChanged = errors.New("adminui: changed since the form was shown")
+
+// version is that of an entity as a form shows it: the form carries it, and
+// its save is refused when the entity no longer has it.
+func version(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:12])
 }
 
 // wrote tells the audit of a write of the account done.

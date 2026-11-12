@@ -102,6 +102,8 @@ type UI struct {
 	mux    *http.ServeMux
 	pages  map[string]*template.Template
 	sheet  asset
+	steps  asset  // the script of the steps of a flow
+	styles asset  // what Pico does not give the admin
 	origin string // of server.base_url, for the Origin of a POST
 	base   string // the path of server.base_url, then /admin
 	secure bool
@@ -128,7 +130,7 @@ func New(o Options) (*UI, error) {
 	if ui.secure && o.CookiePath == "/" {
 		ui.prefix = "__Host-"
 	}
-	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete"} {
+	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings"} {
 		t, err := template.New(name).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
@@ -140,8 +142,20 @@ func New(o Options) (*UI, error) {
 		return nil, err
 	}
 	ui.sheet = newAsset("text/css; charset=utf-8", sheet)
+	steps, err := web.Admin.ReadFile("admin/steps.js")
+	if err != nil {
+		return nil, err
+	}
+	ui.steps = newAsset("text/javascript; charset=utf-8", steps)
+	styles, err := web.Admin.ReadFile("admin/admin.css")
+	if err != nil {
+		return nil, err
+	}
+	ui.styles = newAsset("text/css; charset=utf-8", styles)
 
 	ui.mux.Handle("GET /admin/static/pico.css", ui.sheet)
+	ui.mux.Handle("GET /admin/static/steps.js", ui.steps)
+	ui.mux.Handle("GET /admin/static/admin.css", ui.styles)
 	ui.mux.Handle("GET /admin", ui.authed(anyRole, ui.dashboard))
 	ui.mux.Handle("GET /admin/{$}", ui.authed(anyRole, ui.dashboard))
 	ui.mux.HandleFunc("GET /admin/login", ui.loginForm)
@@ -151,6 +165,8 @@ func New(o Options) (*UI, error) {
 	ui.mux.Handle("POST /admin/reauth", ui.authed(anyRole, ui.reauth))
 	if o.Config != nil {
 		ui.registerApps()
+		ui.registerFlows()
+		ui.registerSettings()
 	}
 	ui.mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
 		ui.status(w, r, http.StatusNotFound, "Not found", "No page of the admin has this address.", nil)
@@ -200,9 +216,9 @@ const maxForm = 64 << 10
 
 // view is what a page renders.
 type view struct {
-	Title, Base, Asset, CSRF, Error, Next, Version, Message string
-	Account                                                 *store.AdminUser
-	Dashboard                                               *Dashboard
+	Title, Base, Asset, Styles, Steps, CSRF, Error, Next, Version, Message string
+	Account                                                                *store.AdminUser
+	Dashboard                                                              *Dashboard
 	// Nav is the section of the page in the navigation, Notice what the page
 	// says of the write that led to it, Data what a screen shows.
 	Nav, Notice string
@@ -214,6 +230,7 @@ type view struct {
 
 func (ui *UI) render(w http.ResponseWriter, status int, name string, v view) {
 	v.Base, v.Asset, v.Version = ui.base, ui.base+"/static/pico.css?v="+ui.sheet.etag, ui.o.Version
+	v.Steps, v.Styles = ui.base+"/static/steps.js?v="+ui.steps.etag, ui.base+"/static/admin.css?v="+ui.styles.etag
 	var b bytes.Buffer
 	if err := ui.pages[name].ExecuteTemplate(&b, "layout", v); err != nil {
 		http.Error(w, "the page could not be rendered", http.StatusInternalServerError)

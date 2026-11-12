@@ -14,6 +14,8 @@ import (
 // the write is refused.
 type appForm struct {
 	ID, LoginURL, ConsentURL, LogoutURL, Method, AuthMode, AllowedSources, Fingerprint, Claims string
+	// Version is that of the app the form showed.
+	Version string
 	// AllClaims is a ReceiveClaims of nil: every claim.
 	AllClaims bool
 }
@@ -25,14 +27,14 @@ func appFormOf(a store.App) appForm {
 	}
 	return appForm{ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
 		AuthMode: a.AuthMode, AllowedSources: strings.Join(sources, "\n"), Fingerprint: a.ClientCertFingerprint,
-		Claims: strings.Join(a.ReceiveClaims, "\n"), AllClaims: a.ReceiveClaims == nil}
+		Claims: strings.Join(a.ReceiveClaims, "\n"), AllClaims: a.ReceiveClaims == nil, Version: version(a)}
 }
 
 func readAppForm(r *http.Request) appForm {
 	v := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
 	return appForm{ID: v("id"), LoginURL: v("login_url"), ConsentURL: v("consent_url"), LogoutURL: v("logout_url"),
 		Method: v("method"), AuthMode: v("auth_mode"), AllowedSources: v("allowed_sources"), Fingerprint: v("client_cert_fingerprint"),
-		Claims: v("receive_claims"), AllClaims: r.PostFormValue("receive_all_claims") != ""}
+		Claims: v("receive_claims"), AllClaims: r.PostFormValue("receive_all_claims") != "", Version: v("version")}
 }
 
 // app is the app of the form, or what cannot be read of it. The field of the
@@ -174,6 +176,10 @@ func (ui *UI) updateApp(w http.ResponseWriter, r *http.Request, s *current) {
 	}
 	var fields []string
 	err := ui.o.Writer.UpdateApp(r.Context(), author(s.account.Username), id, func(old *store.App) error {
+		if v := version(*old); v != f.Version {
+			f.Version = v // saved again, the form writes over
+			return errChanged
+		}
 		fields = appChanges(*old, a)
 		*old = a
 		return nil

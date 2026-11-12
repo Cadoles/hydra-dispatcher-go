@@ -2,10 +2,13 @@ package adminui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -18,10 +21,11 @@ import (
 // config is the configuration of the store, its rules those of the domain:
 // what the screens read and write.
 type config struct {
-	mu    sync.Mutex
-	apps  []store.App
-	flows []store.Flow
-	by    []string
+	mu     sync.Mutex
+	apps   []store.App
+	flows  []store.Flow
+	stored map[string]json.RawMessage
+	by     []string
 	// fail, when set, is the error of the next writes.
 	fail error
 }
@@ -36,13 +40,117 @@ func newConfig() *config {
 		},
 		flows: []store.Flow{{ID: "simple", Title: map[string]string{"en": "Simple"}, Description: map[string]string{"en": "d"}, Enabled: true,
 			Steps: []store.Step{{AppID: "pwd", Position: 1, SubjectCheck: "none"}}}},
+		stored: map[string]json.RawMessage{"challenge_ttl": json.RawMessage("600")},
 	}
 }
 
 func (c *config) Snapshot() *store.Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return store.NewSnapshot(slices.Clone(c.apps), slices.Clone(c.flows), store.DefaultSettings())
+	settings, _, err := store.SettingsOf(c.stored)
+	if err != nil {
+		panic(err)
+	}
+	snap := store.NewSnapshot(slices.Clone(c.apps), slices.Clone(c.flows), settings)
+	snap.StoredSettings = slices.Sorted(maps.Keys(c.stored))
+	return snap
+}
+
+func (c *config) flow(id string) (store.Flow, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := slices.IndexFunc(c.flows, func(f store.Flow) bool { return f.ID == id })
+	if i < 0 {
+		return store.Flow{}, false
+	}
+	return c.flows[i], true
+}
+
+func (c *config) checkFlow(f store.Flow) domain.Violations {
+	return domain.Collect(func(fail domain.Fail) {
+		f.Check(fail, func(id string) bool { return slices.ContainsFunc(c.apps, func(a store.App) bool { return a.ID == id }) })
+	})
+}
+
+func (c *config) CreateFlow(_ context.Context, by string, f store.Flow) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	if v := c.checkFlow(f); v != nil {
+		return v
+	}
+	if slices.ContainsFunc(c.flows, func(x store.Flow) bool { return x.ID == f.ID }) {
+		return store.ErrExists
+	}
+	c.flows, c.by = append(c.flows, f), append(c.by, by)
+	return nil
+}
+
+func (c *config) UpdateFlow(_ context.Context, by, id string, change func(*store.Flow) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	i := slices.IndexFunc(c.flows, func(f store.Flow) bool { return f.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f := c.flows[i]
+	if err := change(&f); err != nil {
+		return err
+	}
+	if f.ID != id {
+		return domain.Violations{{Field: "id", Message: "an update cannot change it"}}
+	}
+	if v := c.checkFlow(f); v != nil {
+		return v
+	}
+	c.flows[i], c.by = f, append(c.by, by)
+	return nil
+}
+
+func (c *config) DeleteFlow(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	i := slices.IndexFunc(c.flows, func(f store.Flow) bool { return f.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	c.flows = slices.Delete(c.flows, i, i+1)
+	return nil
+}
+
+// UpdateSettings writes values over the table, null deleting a row, as the
+// store does: the settings refused by their rules write nothing.
+func (c *config) UpdateSettings(_ context.Context, by string, values map[string]json.RawMessage) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	next := maps.Clone(c.stored)
+	for k, v := range values {
+		if string(v) == "null" {
+			delete(next, k)
+		} else {
+			next[k] = v
+		}
+	}
+	s, _, err := store.SettingsOf(next)
+	if err != nil {
+		return domain.Violations{{Message: err.Error()}}
+	}
+	if v := domain.Collect(s.Check); v != nil {
+		return v
+	}
+	c.stored, c.by = next, append(c.by, by)
+	return nil
 }
 
 func (c *config) app(id string) (store.App, bool) {
@@ -126,6 +234,20 @@ func appValues(b *browser, id string) url.Values {
 		"receive_all_claims": {"1"}}
 }
 
+var versionRe = regexp.MustCompile(`name="version" value="([^"]*)"`)
+
+// version is the version of the entity of the page at path, as its form
+// carries it.
+func (b *browser) version(path string) string {
+	b.r.t.Helper()
+	w := b.do(http.MethodGet, path, nil)
+	m := versionRe.FindStringSubmatch(w.Body.String())
+	if m == nil {
+		b.r.t.Fatalf("no version in %s: %d", path, w.Code)
+	}
+	return m[1]
+}
+
 // csrf is the token of the forms of the session, read from a page.
 func (b *browser) csrf() string {
 	b.r.t.Helper()
@@ -172,6 +294,7 @@ func TestApps(t *testing.T) {
 
 	form := appValues(b, "")
 	form.Del("id")
+	form.Set("version", b.version("/admin/apps/otp"))
 	form.Set("method", "otp2")
 	form.Set("allowed_sources", "10.0.6.23/32\n10.1.0.0/16")
 	w = b.do(http.MethodPost, "/admin/apps/otp", form)
@@ -192,6 +315,7 @@ func TestApps(t *testing.T) {
 	}
 	// An id in the form of an update names no other app: the path does.
 	form.Set("id", "pwd")
+	form.Set("version", b.version("/admin/apps/otp"))
 	if w := b.do(http.MethodPost, "/admin/apps/otp", form); w.Code != http.StatusSeeOther {
 		t.Errorf("an id in the form: %d", w.Code)
 	}
@@ -262,6 +386,7 @@ func TestAppModes(t *testing.T) {
 	form.Set("client_cert_fingerprint", fp)
 	form.Del("receive_all_claims")
 	form.Set("receive_claims", "")
+	form.Set("version", b.version("/admin/apps/pwd"))
 	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusSeeOther {
 		t.Fatalf("to mtls: %d\n%s", w.Code, w.Body)
 	}
@@ -271,6 +396,7 @@ func TestAppModes(t *testing.T) {
 	}
 	form.Set("auth_mode", "network")
 	form.Set("receive_claims", "email\nname, groups")
+	form.Set("version", b.version("/admin/apps/pwd"))
 	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusSeeOther {
 		t.Fatalf("to network: %d\n%s", w.Code, w.Body)
 	}
@@ -285,6 +411,7 @@ func TestAppModes(t *testing.T) {
 		t.Errorf("audit: %q", got)
 	}
 	form.Set("auth_mode", "carrier pigeon")
+	form.Set("version", b.version("/admin/apps/pwd"))
 	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "is not network or mtls") {
 		t.Errorf("an unknown mode: %d\n%s", w.Code, w.Body)
 	}
@@ -388,5 +515,23 @@ func TestAuthor(t *testing.T) {
 	}
 	if got := author(strings.Repeat("é", 180)); len([]rune(got)) != maxAuthor || !strings.HasPrefix(got, "admin:é") {
 		t.Errorf("a long name: %d", len([]rune(got)))
+	}
+}
+
+// Two admins on one app: the save over a change is refused once.
+func TestAppChanged(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	b := r.browser()
+	b.login("alice", password, "")
+	form := appValues(b, "")
+	form.Set("version", b.version("/admin/apps/pwd"))
+	if err := r.config.UpdateApp(context.Background(), "admin:other", "pwd", func(a *store.App) error { a.Method = "theirs"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), `name="method" value="otp"`) {
+		t.Fatalf("over theirs: %d\n%s", w.Code, w.Body)
+	}
+	if a, _ := r.config.app("pwd"); a.Method != "theirs" {
+		t.Errorf("theirs lost: %q", a.Method)
 	}
 }

@@ -1,0 +1,13 @@
+/* What Pico, without classes, does not give the admin: the widths of the
+   columns of the steps of a flow, every control of a table taking the whole
+   width of its cell otherwise. */
+#steps td:first-child {
+  cursor: grab;
+  width: 2rem;
+}
+#steps select[name="step_app"] {
+  min-width: 14rem;
+}
+#steps input[name="step_position"] {
+  width: 6rem;
+}
