@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 )
 
 // APIClient is a client of the admin API.
@@ -140,7 +141,7 @@ func (p *Postgres) transact(ctx context.Context, op string, commit bool, fn func
 // An error of the database while reading (a lock_timeout, a connection lost) is
 // not a refusal: the configuration is not at fault (revue R33).
 func (p *Postgres) checkSnapshot(ctx context.Context, tx *sql.Tx) error {
-	s, err := readSnapshot(ctx, tx)
+	s, err := readSnapshot(ctx, tx, p.secrets)
 	var u unreadable
 	switch {
 	case errors.As(err, &u):
@@ -397,7 +398,7 @@ func (p *Postgres) UpdateSettings(ctx context.Context, by string, values map[str
 		for key := range values {
 			delete(kept, key)
 		}
-		next, _, err := decodeSettings(kept)
+		next, _, err := decodeSettings(kept, p.secrets)
 		if err != nil {
 			return &RefusedError{Err: err}
 		}
@@ -422,7 +423,7 @@ func (p *Postgres) UpdateSettings(ctx context.Context, by string, values map[str
 			}
 			// What the key holds now: its row, or its default.
 			before := DefaultSettings()
-			readable := !inDB || st.decode(raw, &before) == nil
+			readable := !inDB || st.decodeRow(raw, &before, p.secrets) == nil
 			if !readable || !bytes.Equal(st.encode(&before), st.encode(&next)) {
 				write = append(write, st)
 			}
@@ -432,7 +433,7 @@ func (p *Postgres) UpdateSettings(ctx context.Context, by string, values map[str
 			return violations
 		}
 		for _, st := range write {
-			if err := putSetting(ctx, tx, st, &next, by); err != nil {
+			if err := putSetting(ctx, tx, st, &next, by, p.secrets); err != nil {
 				return err
 			}
 		}
@@ -573,12 +574,17 @@ func putAPIClient(ctx context.Context, tx *sql.Tx, c APIClient, by string) error
 	return nil
 }
 
-// putSetting writes the value st has in s, by the author by.
-func putSetting(ctx context.Context, tx *sql.Tx, st setting, s *Settings, by string) error {
+// putSetting writes the value st has in s, by the author by, a secret
+// encrypted by the active key of keys.
+func putSetting(ctx context.Context, tx *sql.Tx, st setting, s *Settings, by string, keys *secretbox.Keys) error {
+	value, err := st.row(s, keys)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO setting (key, value, updated_at, updated_by) VALUES ($1, $2::jsonb, now(), $3)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-		st.key, string(st.encode(s)), by); err != nil {
+		st.key, string(value), by); err != nil {
 		return fmt.Errorf("setting %s: %w", st.key, err)
 	}
 	return nil

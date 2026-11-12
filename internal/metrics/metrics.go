@@ -201,6 +201,30 @@ func (m *Metrics) WatchHydraInFlight(inFlight func() int) {
 		func() float64 { return float64(inFlight()) }))
 }
 
+// WatchEncrypted exposes hydra_dispatcher_encrypted_values{kid}: the
+// settings the database holds encrypted, by the kid of their key, from the
+// configuration of the moment. A key is removed from the configuration once
+// its kid counts none (Rotation des clés).
+func (m *Metrics) WatchEncrypted(count func() map[string]int) {
+	m.registry.MustRegister(encrypted{
+		desc:  prometheus.NewDesc(namespace+"_encrypted_values", "Settings the database holds encrypted, by the kid of their key.", []string{"kid"}, nil),
+		count: count,
+	})
+}
+
+type encrypted struct {
+	desc  *prometheus.Desc
+	count func() map[string]int
+}
+
+func (e encrypted) Describe(ch chan<- *prometheus.Desc) { ch <- e.desc }
+
+func (e encrypted) Collect(ch chan<- prometheus.Metric) {
+	for kid, n := range e.count() {
+		ch <- prometheus.MustNewConstMetric(e.desc, prometheus.GaugeValue, float64(n), kid)
+	}
+}
+
 // Handler serves the catalogue, in OpenMetrics when the collector asks for it.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{EnableOpenMetrics: true})

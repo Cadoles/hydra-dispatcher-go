@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -89,6 +90,7 @@ func parseWithArg(fs *flag.FlagSet, args []string, what string) (help bool, arg 
 // its writes. The logs and the audit go to stderr, or to the output of the
 // audit the configuration names: stdout holds the data alone.
 type cli struct {
+	cfg   *config.Config
 	db    configStore
 	audit *audit.Log
 	logs  loggers
@@ -110,7 +112,7 @@ func openCLI(ctx context.Context, configPath string) (*cli, error) {
 		drain()
 		return nil, err
 	}
-	return &cli{db: db, audit: auditLog, logs: logs, close: func() { _ = db.Close(); drain() }}, nil
+	return &cli{cfg: cfg, db: db, audit: auditLog, logs: logs, close: func() { _ = db.Close(); drain() }}, nil
 }
 
 // refused says why the store refused a write, on stderr, and gives errFailed:

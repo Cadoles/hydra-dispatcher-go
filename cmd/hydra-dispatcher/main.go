@@ -46,6 +46,7 @@ var commands = []command{
 	{"client", "client create|update|delete|list: the API clients of the admin API", client},
 	{"admin", "admin create|update|list: the accounts of the admin UI", adminAccounts},
 	{"config", "config dump|diff: the configuration of the database, against the file", configCmd},
+	{"secrets", "secrets status|rekey: the settings the database holds encrypted, and their key", secretsCmd},
 	{"healthcheck", "probe /health of a local server (container HEALTHCHECK)", healthcheck},
 	{"theme", "theme check <dir>: render the pages of a theme as serve does, one line by problem", theme},
 	{"version", "print the version", printVersion},

@@ -20,6 +20,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -48,6 +49,9 @@ type configStore interface {
 	CreateAdmin(ctx context.Context, u store.AdminUser) error
 	UpdateAdmin(ctx context.Context, username string, change func(*store.AdminUser) error) error
 	DeleteAdmin(ctx context.Context, username string) error
+	SetSecrets(keys *secretbox.Keys)
+	EncryptedSettings(ctx context.Context) ([]store.EncryptedSetting, error)
+	Rekey(ctx context.Context) ([]string, error)
 }
 
 // openStore opens the configuration store at dsn. The tests replace it:
@@ -62,14 +66,34 @@ var openStore = func(ctx context.Context, dsn string) (configStore, error) {
 
 // openConfig opens the configuration store of cfg: no write, bootstrap's
 // included, commits a configuration serve would refuse on this configuration
-// (webhookCheck).
+// (configCheck); the keyring of secrets.encryption_key opens and seals its
+// encrypted settings.
 func openConfig(ctx context.Context, cfg *config.Config) (configStore, error) {
+	keys, err := encryptionKeys(cfg)
+	if err != nil {
+		return nil, err
+	}
 	db, err := openStore(ctx, cfg.Store.DSN)
 	if err != nil {
 		return nil, err
 	}
-	db.SetCheck(webhookCheck(cfg.TLS.AllowHTTP, cfg.Secrets.WebhookSigningKey != nil))
+	db.SetCheck(configCheck(cfg.TLS.AllowHTTP, cfg.Secrets.WebhookSigningKey != nil))
+	db.SetSecrets(keys)
 	return db, nil
+}
+
+// encryptionKeys is the keyring of secrets.encryption_key and
+// secrets.encryption_keys_previous; without them, none.
+func encryptionKeys(cfg *config.Config) (*secretbox.Keys, error) {
+	previous := make([][]byte, len(cfg.Secrets.EncryptionKeysPrevious))
+	for i, k := range cfg.Secrets.EncryptionKeysPrevious {
+		previous[i] = k
+	}
+	keys, err := secretbox.New(cfg.Secrets.EncryptionKey, previous...)
+	if err != nil {
+		return nil, fmt.Errorf("secrets.encryption_key: %w", err)
+	}
+	return keys, nil
 }
 
 const configHelp = "configuration file (default: $" + configEnv + ", else DISPATCHER_* variables only)"

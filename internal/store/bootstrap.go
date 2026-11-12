@@ -15,6 +15,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 )
 
 // Mode is what bootstrap does with what the database already holds.
@@ -87,7 +88,7 @@ const bootstrapBy = "bootstrap"
 func (p *Postgres) Bootstrap(ctx context.Context, seed config.Seed, mode Mode, write bool) ([]Change, error) {
 	var b *bootstrap
 	err := p.transact(ctx, "bootstrap", write, func(tx *sql.Tx) error {
-		b = &bootstrap{ctx: ctx, tx: tx, mode: mode}
+		b = &bootstrap{ctx: ctx, tx: tx, mode: mode, keys: p.secrets}
 		for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients} {
 			if err := step(seed); err != nil {
 				return fmt.Errorf("bootstrap: %w", err)
@@ -109,6 +110,8 @@ type bootstrap struct {
 	ctx  context.Context
 	tx   *sql.Tx
 	mode Mode
+	// keys open and seal the encrypted settings.
+	keys *secretbox.Keys
 	// compare reads and writes nothing: Diff.
 	compare bool
 	changes []Change
@@ -126,7 +129,7 @@ func (p *Postgres) Diff(ctx context.Context, seed config.Seed) ([]Change, error)
 		return nil, fmt.Errorf("diff: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	b := &bootstrap{ctx: ctx, tx: tx, mode: Force, compare: true}
+	b := &bootstrap{ctx: ctx, tx: tx, mode: Force, compare: true, keys: p.secrets}
 	for _, step := range []func(config.Seed) error{b.settings, b.apps, b.flows, b.clients} {
 		if err := step(seed); err != nil {
 			return nil, fmt.Errorf("diff: %w", err)
@@ -215,12 +218,21 @@ func (f field) change() (FieldChange, bool) {
 	return FieldChange{Name: f.name, Old: string(o), New: string(n)}, !bytes.Equal(o, n)
 }
 
+// settingField is the change of the value of a setting, a secret's without
+// its values: whether it changes alone.
+func settingField(st setting, before, after []byte) field {
+	if st.secret {
+		return field{name: "value", secret: func() bool { return bytes.Equal(before, after) }}
+	}
+	return field{name: "value", old: json.RawMessage(before), new: json.RawMessage(after)}
+}
+
 func (b *bootstrap) settings(seed config.Seed) error {
 	rows, err := readSettings(b.ctx, b.tx)
 	if err != nil {
 		return fmt.Errorf("read settings: %w", err)
 	}
-	current, _, err := decodeSettings(rows)
+	current, _, err := decodeSettings(rows, b.keys)
 	if err != nil {
 		return err
 	}
@@ -238,7 +250,7 @@ func (b *bootstrap) settings(seed config.Seed) error {
 		case set:
 			reflect.ValueOf(st.field(&next)).Elem().Set(reflect.ValueOf(v))
 			before, after := st.encode(&current), st.encode(&next)
-			if b.decide("setting", st.key, inDB, authors[st.key], []field{{name: "value", old: json.RawMessage(before), new: json.RawMessage(after)}}) {
+			if b.decide("setting", st.key, inDB, authors[st.key], []field{settingField(st, before, after)}) {
 				write = append(write, st)
 			}
 			if inDB && b.mode != Force {
@@ -252,7 +264,7 @@ func (b *bootstrap) settings(seed config.Seed) error {
 			if inDB {
 				// The value the row holds, and the default it gives way to.
 				defaults := DefaultSettings()
-				fc, _ := field{name: "value", old: json.RawMessage(st.encode(&current)), new: json.RawMessage(st.encode(&defaults))}.change()
+				fc, _ := settingField(st, st.encode(&current), st.encode(&defaults)).change()
 				c.Action, c.Fields = Keep, []FieldChange{fc}
 				if b.mode == Force {
 					c.Action, c.By = Reset, overwritten(authors[st.key])
@@ -280,7 +292,7 @@ func (b *bootstrap) settings(seed config.Seed) error {
 		return nil
 	}
 	for _, st := range write {
-		if err := putSetting(b.ctx, b.tx, st, &next, bootstrapBy); err != nil {
+		if err := putSetting(b.ctx, b.tx, st, &next, bootstrapBy, b.keys); err != nil {
 			return err
 		}
 	}
@@ -313,6 +325,17 @@ func seedSettings(s config.SeedSettings) map[string]any {
 	put("supported_locales", s.SupportedLocales != nil, func() any { return []string(*s.SupportedLocales) })
 	put("default_locale", s.DefaultLocale != nil, func() any { return *s.DefaultLocale })
 	put("fallback_locale", s.FallbackLocale != nil, func() any { return *s.FallbackLocale })
+	put("admin_oidc.enabled", s.AdminOIDCEnabled != nil, func() any { return *s.AdminOIDCEnabled })
+	put("admin_oidc.issuer", s.AdminOIDCIssuer != nil, func() any { return *s.AdminOIDCIssuer })
+	put("admin_oidc.client_id", s.AdminOIDCClientID != nil, func() any { return *s.AdminOIDCClientID })
+	put("admin_oidc.client_secret", s.AdminOIDCClientSecret != nil, func() any { return *s.AdminOIDCClientSecret })
+	put("admin_oidc.scopes", s.AdminOIDCScopes != nil, func() any { return []string(*s.AdminOIDCScopes) })
+	put("admin_oidc.username_claim", s.AdminOIDCUsernameClaim != nil, func() any { return *s.AdminOIDCUsernameClaim })
+	put("admin_oidc.required_acr", s.AdminOIDCRequiredACR != nil, func() any { return []string(*s.AdminOIDCRequiredACR) })
+	put("admin_oidc.auto_create", s.AdminOIDCAutoCreate != nil, func() any { return *s.AdminOIDCAutoCreate })
+	put("admin_oidc.authorization_endpoint", s.AdminOIDCAuthorizationEndpoint != nil, func() any { return *s.AdminOIDCAuthorizationEndpoint })
+	put("admin_oidc.token_endpoint", s.AdminOIDCTokenEndpoint != nil, func() any { return *s.AdminOIDCTokenEndpoint })
+	put("admin_oidc.jwks_uri", s.AdminOIDCJWKSURI != nil, func() any { return *s.AdminOIDCJWKSURI })
 	return values
 }
 

@@ -1,11 +1,16 @@
 package store
 
 import (
+	"bytes"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 )
 
 // Every field of Settings has exactly one key, and every key its own field.
@@ -23,11 +28,18 @@ func TestRegistryCoversSettings(t *testing.T) {
 			t.Errorf("%s has no help", st.key)
 		}
 	}
-	if len(fields) != base.NumField() {
-		t.Errorf("%d keys for %d fields of Settings", len(fields), base.NumField())
+	// The leaves of Settings: AdminOIDC counts by its fields.
+	leaves := base.NumField() - 1 + base.FieldByName("AdminOIDC").NumField()
+	if len(fields) != leaves {
+		t.Errorf("%d keys for %d fields of Settings", len(fields), leaves)
 	}
-	if keys := SettingKeys(); len(keys) != len(registry) || keys[0].Key != "app_auto_select" || keys[0].Help == "" {
+	if keys := SettingKeys(); len(keys) != len(registry)-base.FieldByName("AdminOIDC").NumField() || keys[0].Key != "app_auto_select" || keys[0].Help == "" {
 		t.Errorf("SettingKeys = %v", keys)
+	}
+	for _, st := range registry {
+		if strings.HasPrefix(st.key, "admin_oidc.") != (st.block == blockOIDC) || st.secret != (st.key == "admin_oidc.client_secret") {
+			t.Errorf("%s: block %q, secret %v", st.key, st.block, st.secret)
+		}
 	}
 }
 
@@ -57,6 +69,9 @@ func TestSettingsRoundTrip(t *testing.T) {
 		SupportedLocales:             []string{"en"},
 		DefaultLocale:                "en",
 		FallbackLocale:               "fr",
+		AdminOIDC: AdminOIDC{Enabled: true, Issuer: "https://idp.test", ClientID: "dispatcher-admin", Scopes: []string{"openid"},
+			UsernameClaim: "email", RequiredACR: []string{"mfa", "loa2"}, AutoCreate: true,
+			AuthorizationEndpoint: "https://idp.test/a", TokenEndpoint: "https://idp.test/t", JWKSURI: "https://idp.test/k"},
 	}
 	rows := map[string][]byte{}
 	for _, st := range registry {
@@ -65,7 +80,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if got := string(rows["challenge_ttl"]); got != "1800" {
 		t.Errorf("challenge_ttl encoded as %s, want seconds", got)
 	}
-	got, warnings, err := settingsFrom(rows)
+	got, warnings, err := settingsFrom(rows, nil)
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("settingsFrom = %v, %q", err, warnings)
 	}
@@ -79,7 +94,7 @@ func TestSettingsFrom(t *testing.T) {
 		"consent_auto_accept": []byte("true"),
 		"login_remember_for":  []byte(" 3600 "),
 		"session_ttl":         []byte("86400"), // a key of no version
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +129,7 @@ func TestSettingsFrom(t *testing.T) {
 		// One key per case: split the object by hand.
 		key, value, _ := strings.Cut(strings.Trim(raw, "{}"), ":")
 		rows[strings.Trim(strings.TrimSpace(key), `"`)] = []byte(value)
-		_, _, err := settingsFrom(rows)
+		_, _, err := settingsFrom(rows, nil)
 		switch {
 		case want == "" && err != nil:
 			t.Errorf("%s: %v", raw, err)
@@ -123,11 +138,11 @@ func TestSettingsFrom(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{"true false", "true]", "true }"} {
-		if _, _, err := settingsFrom(map[string][]byte{"remember": []byte(raw)}); err == nil || !strings.Contains(err.Error(), "more than one value") {
+		if _, _, err := settingsFrom(map[string][]byte{"remember": []byte(raw)}, nil); err == nil || !strings.Contains(err.Error(), "more than one value") {
 			t.Errorf("%q: err = %v", raw, err)
 		}
 	}
-	if s, _, err := settingsFrom(map[string][]byte{"challenge_ttl": []byte("3600.0")}); err != nil || s.ChallengeTTL != time.Hour {
+	if s, _, err := settingsFrom(map[string][]byte{"challenge_ttl": []byte("3600.0")}, nil); err != nil || s.ChallengeTTL != time.Hour {
 		t.Errorf("3600.0: %v, %v", s.ChallengeTTL, err)
 	}
 }
@@ -186,7 +201,7 @@ func TestWebhookLocations(t *testing.T) {
 // version wrote, or that names a theme's locale, is read as it is.
 func TestSettingsLocales(t *testing.T) {
 	rows := map[string][]byte{"supported_locales": []byte(`["fr", "de", "pt-br"]`), "default_locale": []byte(`"de"`), "fallback_locale": []byte(`"es"`)}
-	got, warnings, err := settingsFrom(rows)
+	got, warnings, err := settingsFrom(rows, nil)
 	if err != nil || len(warnings) != 0 {
 		t.Fatalf("settingsFrom = %v, warnings %q", err, warnings)
 	}
@@ -194,7 +209,85 @@ func TestSettingsLocales(t *testing.T) {
 		t.Errorf("settings = %+v", got)
 	}
 	// What no version would write stays an error.
-	if _, _, err := settingsFrom(map[string][]byte{"supported_locales": []byte(`["fr", "de", "fr"]`)}); err == nil || !strings.Contains(err.Error(), "listed twice") {
+	if _, _, err := settingsFrom(map[string][]byte{"supported_locales": []byte(`["fr", "de", "fr"]`)}, nil); err == nil || !strings.Contains(err.Error(), "listed twice") {
 		t.Errorf("a locale twice: err = %v", err)
+	}
+}
+
+// A secret is encrypted in its row by the active key, opened by its key, and
+// refused when the keyring does not hold it, the key named; an empty secret
+// needs no key; a nil list is written [].
+func TestSecretSetting(t *testing.T) {
+	keyA, keyB := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	a, _ := secretbox.New(keyA)
+	st, _ := lookup("admin_oidc.client_secret")
+	s := DefaultSettings()
+	s.AdminOIDC.ClientSecret = "s3cret"
+	row, err := st.row(&s, a)
+	if err != nil || bytes.Contains(row, []byte("s3cret")) || !bytes.HasPrefix(row, []byte(`"v1:`+seal.KeyID(keyA)+`:`)) {
+		t.Fatalf("row %s %v", row, err)
+	}
+	if kids := encryptedKIDs(map[string][]byte{st.key: row}); kids[st.key] != seal.KeyID(keyA) {
+		t.Errorf("kids %v", kids)
+	}
+	rotated, _ := secretbox.New(keyB, keyA)
+	got, _, err := settingsFrom(map[string][]byte{st.key: row}, rotated)
+	if err != nil || got.AdminOIDC.ClientSecret != "s3cret" {
+		t.Errorf("by a previous key: %q %v", got.AdminOIDC.ClientSecret, err)
+	}
+	b, _ := secretbox.New(keyB)
+	if _, _, err := settingsFrom(map[string][]byte{st.key: row}, b); err == nil || !strings.Contains(err.Error(), "admin_oidc.client_secret") ||
+		!strings.Contains(err.Error(), seal.KeyID(keyA)) {
+		t.Errorf("a key not held: %v", err)
+	}
+	if _, _, err := settingsFrom(map[string][]byte{st.key: []byte(`"s3cret"`)}, a); err == nil {
+		t.Error("a secret in clear in the table is read")
+	}
+	if _, err := st.row(&s, nil); err == nil || !strings.Contains(err.Error(), "secrets.encryption_key") {
+		t.Errorf("no key: %v", err)
+	}
+	s.AdminOIDC.ClientSecret = ""
+	if row, err := st.row(&s, nil); err != nil || string(row) != `""` {
+		t.Errorf("an empty secret: %s %v", row, err)
+	}
+	acr, _ := lookup("admin_oidc.required_acr")
+	if got := string(acr.encode(&Settings{})); got != "[]" {
+		t.Errorf("a nil list: %s", got)
+	}
+	if doc := DefaultSettings().Document(); slices.ContainsFunc(doc, func(v SettingValue) bool { return strings.HasPrefix(v.Key, "admin_oidc.") }) {
+		t.Error("the block admin_oidc in the document of the API")
+	}
+	if oidc := DefaultSettings().AdminOIDCDocument(); len(oidc) != 11 || !oidc[3].Secret || oidc[3].Key != "admin_oidc.client_secret" {
+		t.Errorf("admin_oidc document: %+v", oidc)
+	}
+}
+
+// The rules of the block admin_oidc.
+func TestAdminOIDCCheck(t *testing.T) {
+	for name, c := range map[string]struct {
+		change func(o *AdminOIDC)
+		field  string
+	}{
+		"no issuer": {func(o *AdminOIDC) { o.Enabled, o.ClientID = true, "c" }, "admin_oidc.issuer"},
+		"no client": {func(o *AdminOIDC) { o.Enabled, o.Issuer = true, "https://idp.test" }, "admin_oidc.client_id"},
+		"no openid": {func(o *AdminOIDC) {
+			o.Enabled, o.Issuer, o.ClientID, o.Scopes = true, "https://idp.test", "c", []string{"email"}
+		}, "admin_oidc.scopes"},
+		"a relative issuer":  {func(o *AdminOIDC) { o.Issuer = "/idp" }, "admin_oidc.issuer"},
+		"one endpoint":       {func(o *AdminOIDC) { o.TokenEndpoint = "https://idp.test/t" }, "admin_oidc.authorization_endpoint"},
+		"an acr with spaces": {func(o *AdminOIDC) { o.RequiredACR = []string{"a b"} }, "admin_oidc.required_acr"},
+	} {
+		s := DefaultSettings()
+		c.change(&s.AdminOIDC)
+		v := domain.Collect(s.Check)
+		if !slices.ContainsFunc(v, func(x domain.Violation) bool { return x.Field == c.field }) {
+			t.Errorf("%s: %v", name, v)
+		}
+	}
+	s := DefaultSettings()
+	s.AdminOIDC = AdminOIDC{Enabled: true, Issuer: "https://idp.test", ClientID: "c", Scopes: []string{"openid"}, UsernameClaim: "sub",
+		AuthorizationEndpoint: "https://idp.test/a", TokenEndpoint: "https://idp.test/t", JWKSURI: "https://idp.test/k"}
+	if v := domain.Collect(s.Check); v != nil {
+		t.Errorf("valid: %v", v)
 	}
 }

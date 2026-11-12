@@ -30,11 +30,19 @@ type Options struct {
 // of header, each a comment: the settings snap.StoredSettings names, each in
 // the JSON of the registry, which YAML reads as it is; the apps, receive_claims
 // null or [] kept apart; the flows and their steps; the API clients without
-// their secret, which a database never holds, a comment saying so.
+// their secret, which a database never holds, a comment saying so; a secret
+// setting, which the database holds encrypted, left out, a comment saying so.
 func Write(w io.Writer, snap *store.Snapshot, want map[string]bool, o Options, header ...string) error {
 	doc, err := document(snap, want, o)
 	if err != nil {
 		return err
+	}
+	if want["settings"] {
+		for _, s := range snap.Settings.AdminOIDCDocument() {
+			if s.Secret && slices.Contains(snap.StoredSettings, s.Key) {
+				header = append(header, s.Key+" is held encrypted, and left out: give it by ${...} to write it again.")
+			}
+		}
 	}
 	if err := escape(doc.Content[1], "dispatcher"); err != nil {
 		return err
@@ -131,8 +139,8 @@ func document(snap *store.Snapshot, want map[string]bool, o Options) (*yaml.Node
 	}
 	if want["settings"] {
 		// Each value in the JSON of the registry, which YAML reads as it is.
-		for _, s := range snap.Settings.Document() {
-			if !slices.Contains(snap.StoredSettings, s.Key) {
+		for _, s := range append(snap.Settings.Document(), snap.Settings.AdminOIDCDocument()...) {
+			if !slices.Contains(snap.StoredSettings, s.Key) || s.Secret {
 				continue
 			}
 			var n yaml.Node

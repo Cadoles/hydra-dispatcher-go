@@ -14,6 +14,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -48,6 +49,10 @@ type fakeStore struct {
 	// written are the changes of a write when they differ from those of a
 	// dry run: the database changed in between.
 	written []store.Change
+	// keys are those of SetSecrets; encrypted, the settings it holds
+	// encrypted, which Rekey turns to the active key.
+	keys      *secretbox.Keys
+	encrypted []store.EncryptedSetting
 	// check is that of SetCheck, committed that of OnCommit.
 	check     func(*store.Snapshot) error
 	committed func(context.Context)
@@ -703,4 +708,34 @@ func (f *fakeStore) DeleteAdmin(_ context.Context, username string) error {
 	}
 	f.admins = slices.Delete(f.admins, i, i+1)
 	return nil
+}
+
+func (f *fakeStore) SetSecrets(keys *secretbox.Keys) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = keys
+}
+
+func (f *fakeStore) EncryptedSettings(context.Context) ([]store.EncryptedSetting, error) {
+	f.record("encrypted settings")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.encrypted), nil
+}
+
+func (f *fakeStore) Rekey(context.Context) ([]string, error) {
+	f.record("rekey")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.keys.Active() == "" {
+		return nil, secretbox.ErrNoKey
+	}
+	var done []string
+	for i, e := range f.encrypted {
+		if e.KID != f.keys.Active() {
+			f.encrypted[i].KID = f.keys.Active()
+			done = append(done, e.Key)
+		}
+	}
+	return done, nil
 }

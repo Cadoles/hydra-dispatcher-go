@@ -429,7 +429,7 @@ func (i identified) Snapshot(ctx context.Context) (*store.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := webhookCheck(i.allowHTTP, i.signed)(s); err != nil {
+	if err := configCheck(i.allowHTTP, i.signed)(s); err != nil {
 		return nil, err
 	}
 	// A copy: a source may give the same snapshot twice.
@@ -473,12 +473,23 @@ func rehasherOf(db configStore) func(ctx context.Context, id, old, new string) e
 	return nil
 }
 
-// webhookCheck refuses a snapshot whose webhooks cannot be called
-// (webhook.Check): serve at startup and at each refresh, and every write
-// before its commit (openConfig).
-func webhookCheck(allowHTTP, signed bool) func(*store.Snapshot) error {
+// configCheck refuses a snapshot this configuration cannot serve: webhooks
+// that cannot be called (webhook.Check), an identity provider of the admin in
+// http:// without tls.allow_http. serve at startup and at each refresh, and
+// every write before its commit (openConfig).
+func configCheck(allowHTTP, signed bool) func(*store.Snapshot) error {
 	return func(s *store.Snapshot) error {
-		return webhook.Check(s.Settings, allowHTTP, signed)
+		errs := []error{webhook.Check(s.Settings, allowHTTP, signed)}
+		o := s.Settings.AdminOIDC
+		for _, u := range []struct{ key, value string }{
+			{"admin_oidc.issuer", o.Issuer}, {"admin_oidc.authorization_endpoint", o.AuthorizationEndpoint},
+			{"admin_oidc.token_endpoint", o.TokenEndpoint}, {"admin_oidc.jwks_uri", o.JWKSURI},
+		} {
+			if !allowHTTP && strings.HasPrefix(strings.ToLower(u.value), "http://") {
+				errs = append(errs, fmt.Errorf("setting %s: is in http://, which needs tls.allow_http", u.key))
+			}
+		}
+		return errors.Join(errs...)
 	}
 }
 
@@ -597,6 +608,13 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	watch := s.metrics
 	hydraClient.Observer = watch
 	watch.WatchHydraInFlight(hydraClient.InFlight)
+	watch.WatchEncrypted(func() map[string]int {
+		counts := map[string]int{}
+		for _, kid := range s.config.Snapshot().Encrypted {
+			counts[kid]++
+		}
+		return counts
+	})
 	stateBackend := "memory"
 	if cfg.State.RedisDSN != "" {
 		stateBackend = "redis"

@@ -200,6 +200,17 @@ dispatcher:
   supported_locales: [en, de]
   default_locale: en
   fallback_locale: de
+  admin_oidc.enabled: true
+  admin_oidc.issuer: https://idp.test
+  admin_oidc.client_id: dispatcher-admin
+  admin_oidc.client_secret: s3cret
+  admin_oidc.scopes: [openid, email]
+  admin_oidc.username_claim: email
+  admin_oidc.required_acr: [mfa]
+  admin_oidc.auto_create: false
+  admin_oidc.authorization_endpoint: https://idp.test/authorize
+  admin_oidc.token_endpoint: https://idp.test/token
+  admin_oidc.jwks_uri: https://idp.test/jwks
 `, nil)
 	if err != nil {
 		t.Fatal(err)

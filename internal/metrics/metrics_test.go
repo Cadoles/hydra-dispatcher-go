@@ -637,3 +637,18 @@ func TestExemplars(t *testing.T) {
 		t.Error("an exemplar in the text format")
 	}
 }
+
+// hydra_dispatcher_encrypted_values: the settings encrypted, by kid, as the
+// configuration of the moment has them.
+func TestEncrypted(t *testing.T) {
+	m := New(100, nil)
+	counts := map[string]int{"a1b2c3d4": 1}
+	m.WatchEncrypted(func() map[string]int { return counts })
+	if body := scrape(t, m); !strings.Contains(body, `hydra_dispatcher_encrypted_values{kid="a1b2c3d4"} 1`) {
+		t.Errorf("one:\n%s", body)
+	}
+	counts = map[string]int{}
+	if body := scrape(t, m); strings.Contains(body, `kid="a1b2c3d4"`) {
+		t.Errorf("after the rekey:\n%s", body)
+	}
+}

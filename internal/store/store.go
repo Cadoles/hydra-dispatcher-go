@@ -24,6 +24,7 @@ import (
 	"github.com/pressly/goose/v3/lock"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 )
 
 //go:embed migrations/*.sql
@@ -45,7 +46,14 @@ type Postgres struct {
 	// check and committed are those of SetCheck and OnCommit.
 	check     func(*Snapshot) error
 	committed func(context.Context)
+	// secrets open and seal the encrypted settings (SetSecrets).
+	secrets *secretbox.Keys
 }
+
+// SetSecrets sets the keyring of secrets.encryption_key, which opens the
+// encrypted settings at each read and seals them at each write. Set before
+// the first read; nil, an encrypted setting refuses the read.
+func (p *Postgres) SetSecrets(keys *secretbox.Keys) { p.secrets = keys }
 
 // Open connects to the database at dsn, a postgres:// URL or a pgx
 // connection string, and checks that it answers.
@@ -183,6 +191,9 @@ type Snapshot struct {
 	// APIClients are the clients of the admin API, by id in byte order:
 	// the admin API reads them at each request (Q101).
 	APIClients []APIClient
+	// Encrypted are the kids of the keys the encrypted settings are under, by
+	// key: the gauge hydra_dispatcher_encrypted_values, secrets status.
+	Encrypted map[string]string
 	// Warnings are what this version sets aside of the setting table:
 	// unknown keys, locales without a catalog. serve adds those of the apps'
 	// identification on the emulated API (emulated.Warnings).
@@ -262,11 +273,12 @@ func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 		return nil, fmt.Errorf("read configuration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // read-only: nothing to commit
-	return readSnapshot(ctx, tx)
+	return readSnapshot(ctx, tx, p.secrets)
 }
 
-// readSnapshot reads the whole configuration as q sees it.
-func readSnapshot(ctx context.Context, q querier) (*Snapshot, error) {
+// readSnapshot reads the whole configuration as q sees it, its encrypted
+// settings opened by keys.
+func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapshot, error) {
 	var err error
 	s := &Snapshot{}
 	if s.Apps, err = readApps(ctx, q); err != nil {
@@ -283,7 +295,8 @@ func readSnapshot(ctx context.Context, q querier) (*Snapshot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read settings: %w", err)
 	}
-	if s.Settings, s.Warnings, err = settingsFrom(rows); err != nil {
+	s.Encrypted = encryptedKIDs(rows)
+	if s.Settings, s.Warnings, err = settingsFrom(rows, keys); err != nil {
 		err = unreadable{err}
 		return nil, err
 	}

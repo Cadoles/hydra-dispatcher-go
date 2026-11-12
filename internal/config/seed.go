@@ -69,6 +69,20 @@ type SeedSettings struct {
 	SupportedLocales             *List     `yaml:"supported_locales"`
 	DefaultLocale                *string   `yaml:"default_locale"`
 	FallbackLocale               *string   `yaml:"fallback_locale"`
+	// The block admin_oidc, by the keys of the setting table (P22): the
+	// login to the admin by an identity provider. client_secret is encrypted
+	// in the database by secrets.encryption_key; give it by ${...}.
+	AdminOIDCEnabled               *bool   `yaml:"admin_oidc.enabled"`
+	AdminOIDCIssuer                *string `yaml:"admin_oidc.issuer"`
+	AdminOIDCClientID              *string `yaml:"admin_oidc.client_id"`
+	AdminOIDCClientSecret          *string `yaml:"admin_oidc.client_secret"`
+	AdminOIDCScopes                *List   `yaml:"admin_oidc.scopes"`
+	AdminOIDCUsernameClaim         *string `yaml:"admin_oidc.username_claim"`
+	AdminOIDCRequiredACR           *List   `yaml:"admin_oidc.required_acr"`
+	AdminOIDCAutoCreate            *bool   `yaml:"admin_oidc.auto_create"`
+	AdminOIDCAuthorizationEndpoint *string `yaml:"admin_oidc.authorization_endpoint"`
+	AdminOIDCTokenEndpoint         *string `yaml:"admin_oidc.token_endpoint"`
+	AdminOIDCJWKSURI               *string `yaml:"admin_oidc.jwks_uri"`
 }
 
 type SeedApp struct {
@@ -398,7 +412,7 @@ func (s *Seed) warnings() []string {
 	settings := yamlFields(reflect.TypeFor[SeedSettings]())
 	symfony := map[reflect.Type]string{reflect.TypeFor[*bool](): "true", reflect.TypeFor[*List](): "an empty list"}
 	for _, k := range s.NullSettings {
-		if read, ok := symfony[settings[k]]; ok {
+		if read, ok := symfony[settings[k]]; ok && !strings.HasPrefix(k, "admin_oidc.") {
 			warnings = append(warnings, fmt.Sprintf("dispatcher.%s: ~ resets it to its default, where Symfony read it as %s", k, read))
 		}
 	}
