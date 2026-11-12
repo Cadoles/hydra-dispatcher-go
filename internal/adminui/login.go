@@ -73,17 +73,20 @@ func (ui *UI) loginTokenOK(r *http.Request) bool {
 	return sameToken(r.PostFormValue("csrf"), t.Token)
 }
 
-// login checks a name and a password: the limit of the address first, then
-// the form's own token and origin, then the password, by bcrypt among a
+// login checks a name and a password: the form's own token and origin
+// first, then the limit of the address, then the password, by bcrypt among a
 // bounded number of them, against a dummy hash for a name no account has.
+// The forms another site forges are refused before the limit: a page that
+// posts them from an admin's browser does not exhaust the attempts of the
+// admin's address (revue R40).
 func (ui *UI) login(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if !ui.allowed(w, r) {
-		return
-	}
 	next := r.PostFormValue("next")
 	if !ui.sameOrigin(r) || !ui.loginTokenOK(r) {
 		ui.renderLogin(w, http.StatusForbidden, next, "The form had expired: try again.")
+		return
+	}
+	if !ui.allowed(w, r) {
 		return
 	}
 	username, password := r.PostFormValue("username"), r.PostFormValue("password")
@@ -124,16 +127,27 @@ func (ui *UI) account(ctx context.Context, username string) (a store.AdminUser, 
 	if domain.Collect(func(fail domain.Fail) { domain.CheckUsername(fail, username) }) != nil {
 		return a, false, nil
 	}
+	ctx, cancel := ui.bounded(ctx)
+	defer cancel()
 	return ui.o.Accounts.Admin(ctx, username)
 }
 
-// logout ends every session of the account (Q120), this one included.
+// logout ends every session of the account (Q120), this one included. When
+// the others cannot be ended, the cookie of this browser goes all the same,
+// and the page says so: the audit writes no logout, a stolen cookie being
+// still valid (revue R40).
 func (ui *UI) logout(w http.ResponseWriter, r *http.Request, s *current) {
-	if err := ui.o.Accounts.EndSessions(r.Context(), s.account.Username); err != nil && ui.o.Logger != nil {
-		// The cookie goes all the same: this browser is logged out.
-		ui.o.Logger.ErrorContext(r.Context(), "admin.logout_failed", "cause", err.Error())
-	}
 	ui.setCookie(w, sessionCookie, "", 0)
+	ctx, cancel := ui.bounded(r.Context())
+	defer cancel()
+	if err := ui.o.Accounts.EndSessions(ctx, s.account.Username); err != nil {
+		if ui.o.Logger != nil {
+			ui.o.Logger.ErrorContext(r.Context(), "admin.logout_failed", "cause", err.Error())
+		}
+		ui.status(w, r, http.StatusServiceUnavailable, "Logged out of this browser only",
+			"Your sessions in other browsers could not be ended: log in and out again in a moment.", nil)
+		return
+	}
 	if ui.o.Logout != nil {
 		ui.o.Logout(r.Context(), s.account.Username)
 	}

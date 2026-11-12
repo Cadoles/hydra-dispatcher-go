@@ -118,6 +118,18 @@ type UI struct {
 	prefix string // __Host- in HTTPS with the cookies at /
 	limit  *ratelimit.Limiter
 	bcrypt chan struct{}
+	// accountsWait bounds a read of the accounts: a database that no longer
+	// answers gives a 503, not a request that waits for ever, the server
+	// having no WriteTimeout (revue R40).
+	accountsWait time.Duration
+}
+
+// accountsWait is how long a read of the accounts may take.
+const accountsWait = 2 * time.Second
+
+// bounded is ctx bounded by accountsWait.
+func (ui *UI) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, ui.accountsWait)
 }
 
 // New returns the admin UI.
@@ -134,7 +146,8 @@ func New(o Options) (*UI, error) {
 	}
 	ui := &UI{o: o, mux: http.NewServeMux(), pages: map[string]*template.Template{},
 		origin: u.Scheme + "://" + u.Host, base: strings.TrimSuffix(u.EscapedPath(), "/") + "/admin",
-		secure: u.Scheme == "https", limit: ratelimit.New(o.LoginsPerMinute), bcrypt: make(chan struct{}, runtime.GOMAXPROCS(0))}
+		secure: u.Scheme == "https", limit: ratelimit.New(o.LoginsPerMinute), bcrypt: make(chan struct{}, runtime.GOMAXPROCS(0)),
+		accountsWait: accountsWait}
 	if ui.secure && o.CookiePath == "/" {
 		ui.prefix = "__Host-"
 	}

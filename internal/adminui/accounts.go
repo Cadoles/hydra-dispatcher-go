@@ -61,7 +61,9 @@ func (ui *UI) unreadable(w http.ResponseWriter, r *http.Request, s *current, err
 }
 
 func (ui *UI) accounts(w http.ResponseWriter, r *http.Request, s *current) {
-	users, err := ui.o.Accounts.Admins(r.Context())
+	ctx, cancel := ui.bounded(r.Context())
+	defer cancel()
+	users, err := ui.o.Accounts.Admins(ctx)
 	if err != nil {
 		ui.unreadable(w, r, s, err)
 		return
@@ -75,7 +77,9 @@ func (ui *UI) accounts(w http.ResponseWriter, r *http.Request, s *current) {
 
 // accountOf reads the account of the path, or answers why it cannot.
 func (ui *UI) accountOf(w http.ResponseWriter, r *http.Request, s *current) (store.AdminUser, bool) {
-	u, found, err := ui.o.Accounts.Admin(r.Context(), r.PathValue("name"))
+	ctx, cancel := ui.bounded(r.Context())
+	defer cancel()
+	u, found, err := ui.o.Accounts.Admin(ctx, r.PathValue("name"))
 	switch {
 	case err != nil:
 		ui.unreadable(w, r, s, err)
@@ -255,7 +259,9 @@ func (ui *UI) changePassword(w http.ResponseWriter, r *http.Request, s *current)
 	// The new session opens after the end the change wrote, whatever the
 	// clocks: it is read back.
 	issued := ui.o.Now()
-	if u, found, err := ui.o.Accounts.Admin(r.Context(), name); err == nil && found && !issued.After(u.SessionsValidAfter) {
+	ctx, cancel := ui.bounded(r.Context())
+	defer cancel()
+	if u, found, err := ui.o.Accounts.Admin(ctx, name); err == nil && found && !issued.After(u.SessionsValidAfter) {
 		issued = u.SessionsValidAfter.Add(time.Microsecond)
 	}
 	next := ui.newSession(name, s.session.Method)

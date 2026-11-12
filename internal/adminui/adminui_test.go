@@ -48,10 +48,22 @@ type accounts struct {
 	now   func() time.Time
 	reads atomic.Int32
 	fail  error
+	// hold, when set, holds the reads of an account until it is closed or
+	// their context ends: a database that no longer answers.
+	hold chan struct{}
+	// endFail, when set, is the error of EndSessions.
+	endFail error
 }
 
-func (a *accounts) Admin(_ context.Context, username string) (store.AdminUser, bool, error) {
+func (a *accounts) Admin(ctx context.Context, username string) (store.AdminUser, bool, error) {
 	a.reads.Add(1)
+	if a.hold != nil {
+		select {
+		case <-a.hold:
+		case <-ctx.Done():
+			return store.AdminUser{}, false, ctx.Err()
+		}
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.fail != nil {
@@ -64,6 +76,9 @@ func (a *accounts) Admin(_ context.Context, username string) (store.AdminUser, b
 func (a *accounts) EndSessions(_ context.Context, username string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.endFail != nil {
+		return a.endFail
+	}
 	u, ok := a.users[username]
 	if !ok {
 		return store.ErrNotFound

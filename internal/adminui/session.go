@@ -95,7 +95,9 @@ func (ui *UI) current(r *http.Request) (*current, error) {
 	if now.Sub(time.UnixMicro(s.Issued)) > ui.o.MaxAge || now.Sub(time.UnixMicro(s.Seen)) > ui.o.IdleTimeout {
 		return nil, errNoSession
 	}
-	a, found, err := ui.o.Accounts.Admin(r.Context(), s.User)
+	ctx, cancel := ui.bounded(r.Context())
+	defer cancel()
+	a, found, err := ui.o.Accounts.Admin(ctx, s.User)
 	if err != nil {
 		return nil, err
 	}
