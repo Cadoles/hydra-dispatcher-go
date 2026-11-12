@@ -557,7 +557,7 @@ wait`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if childAlive(pid) {
+		if !childEnds(pid) {
 			t.Errorf("the child %d outlived the program", pid)
 		}
 	})
@@ -620,6 +620,18 @@ echo '{"subject":"bob"}'`)
 
 // childAlive tells whether a process runs, a zombie being dead: its parent, gone,
 // leaves it to be reaped.
+// childEnds tells whether the process pid ends within two seconds: a SIGKILL
+// is delivered after kill returns, and /proc read at once may still show the
+// child running.
+func childEnds(pid int) bool {
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if !childAlive(pid) {
+			return true
+		}
+	}
+	return false
+}
+
 func childAlive(pid int) bool {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
