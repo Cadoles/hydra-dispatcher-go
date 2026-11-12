@@ -165,7 +165,7 @@ func New(o Options) (*UI, error) {
 	}
 	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings",
 		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password", "sso"} {
-		t, err := template.New(name).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
+		t, err := template.New(name).Funcs(funcs).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
 		}
@@ -211,6 +211,11 @@ func New(o Options) (*UI, error) {
 	})
 	return ui, nil
 }
+
+// funcs are those of the pages: path escapes a name or an id as a segment of
+// a path, a / or a % included, which the URLs of html/template keep as they
+// are (revue R41).
+var funcs = template.FuncMap{"path": url.PathEscape}
 
 // Register serves the admin UI on mux, at /admin and below; /admin/v1, the
 // admin API, keeps its own routes, more specific.

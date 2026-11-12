@@ -7,12 +7,12 @@
 <p>It is a step of {{template "flows" .Flows}}: take it out of them first.</p>
 {{- else}}
 <p>It is a step of no flow. Its deletion cannot be undone.</p>
-<form method="post" action="{{$.Base}}/apps/{{.Form.ID}}/delete">
+<form method="post" action="{{$.Base}}/apps/{{path .Form.ID}}/delete">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <button type="submit">Delete the app {{.Form.ID}}</button>
 </form>
 {{- end}}
-<p><a href="{{$.Base}}/apps/{{.Form.ID}}">Back to the app</a></p>
+<p><a href="{{$.Base}}/apps/{{path .Form.ID}}">Back to the app</a></p>
 </article>
 {{- end}}
 {{end}}

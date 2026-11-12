@@ -6,7 +6,7 @@
 </hgroup>
 {{template "notice" $}}
 {{template "general" .Errors}}
-<form method="post" action="{{if .New}}{{$.Base}}/flows{{else}}{{$.Base}}/flows/{{.Form.ID}}{{end}}">
+<form method="post" action="{{if .New}}{{$.Base}}/flows{{else}}{{$.Base}}/flows/{{path .Form.ID}}{{end}}">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="version" value="{{.Form.Version}}">
 <fieldset{{if not $.CanWrite}} disabled{{end}}>
@@ -73,7 +73,7 @@ Enabled: offered to the users
 {{- end}}
 </form>
 {{- if and $.CanWrite (not .New)}}
-<p><a href="{{$.Base}}/flows/{{.Form.ID}}/delete">Delete this flow</a></p>
+<p><a href="{{$.Base}}/flows/{{path .Form.ID}}/delete">Delete this flow</a></p>
 {{- end}}
 <p><a href="{{$.Base}}/flows">Back to the flows</a></p>
 {{- if $.CanWrite}}

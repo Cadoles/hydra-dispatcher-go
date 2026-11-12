@@ -486,7 +486,7 @@ func TestAppModes(t *testing.T) {
 		t.Errorf("mtls: %+v", a)
 	}
 	form.Set("auth_mode", "network")
-	form.Set("receive_claims", "email\nname, groups")
+	form.Set("receive_claims", "email\r\n  name \n\ngroups")
 	form.Set("version", b.version("/admin/apps/pwd"))
 	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusSeeOther {
 		t.Fatalf("to network: %d\n%s", w.Code, w.Body)
@@ -624,5 +624,29 @@ func TestAppChanged(t *testing.T) {
 	}
 	if a, _ := r.config.app("pwd"); a.Method != "theirs" {
 		t.Errorf("theirs lost: %q", a.Method)
+	}
+}
+
+// The claims are one per line: a name with a space or a comma, which the
+// domain takes, stays whole when the app is saved without a change (revue
+// R41).
+func TestAppClaimsByLine(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	r.config.apps[0].ReceiveClaims = []string{"given name", "x,y"}
+	b := r.browser()
+	b.login("alice", password, "")
+	page := b.do(http.MethodGet, "/admin/apps/pwd", nil).Body.String()
+	if !strings.Contains(page, "given name\nx,y</textarea>") {
+		t.Fatalf("page:\n%s", page)
+	}
+	a, _ := r.config.app("pwd")
+	f := appFormOf(a)
+	form := url.Values{"csrf": {b.csrf()}, "version": {f.Version}, "method": {f.Method}, "login_url": {f.LoginURL}, "consent_url": {f.ConsentURL},
+		"auth_mode": {f.AuthMode}, "allowed_sources": {f.AllowedSources}, "receive_claims": {f.Claims}}
+	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusSeeOther {
+		t.Fatalf("save: %d\n%s", w.Code, w.Body)
+	}
+	if a, _ := r.config.app("pwd"); !slices.Equal(a.ReceiveClaims, []string{"given name", "x,y"}) {
+		t.Errorf("claims: %q", a.ReceiveClaims)
 	}
 }

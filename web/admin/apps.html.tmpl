@@ -13,7 +13,7 @@
 <thead><tr><th scope="col">Id</th><th scope="col">Method</th><th scope="col">Login URL</th><th scope="col">Known by</th><th scope="col">Step of</th></tr></thead>
 <tbody>
 {{- range .Apps}}
-<tr><td><a href="{{$.Base}}/apps/{{.ID}}">{{.ID}}</a></td><td>{{.Method}}</td><td>{{.LoginURL}}</td><td>{{if eq .AuthMode "mtls"}}certificate{{else}}network{{end}}</td><td>{{with .Flows}}{{template "flows" .}}{{else}}no flow{{end}}</td></tr>
+<tr><td><a href="{{$.Base}}/apps/{{path .ID}}">{{.ID}}</a></td><td>{{.Method}}</td><td>{{.LoginURL}}</td><td>{{if eq .AuthMode "mtls"}}certificate{{else}}network{{end}}</td><td>{{with .Flows}}{{template "flows" .}}{{else}}no flow{{end}}</td></tr>
 {{- end}}
 </tbody>
 </table>

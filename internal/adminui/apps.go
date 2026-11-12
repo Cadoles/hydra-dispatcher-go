@@ -54,7 +54,7 @@ func (f appForm) app() (store.App, fieldErrors) {
 		a.ClientCertFingerprint = domain.NormalizeFingerprint(f.Fingerprint)
 	}
 	if !f.AllClaims {
-		a.ReceiveClaims = append([]string{}, words(f.Claims)...)
+		a.ReceiveClaims = append([]string{}, lines(f.Claims)...)
 	}
 	return a, nil
 }

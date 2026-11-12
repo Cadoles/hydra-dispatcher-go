@@ -12,7 +12,7 @@
 <thead><tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Logs in by</th></tr></thead>
 <tbody>
 {{- range .Accounts}}
-<tr><td><a href="{{$.Base}}/accounts/{{.Username}}">{{.Username}}</a>{{if .You}} <small>(you)</small>{{end}}</td><td>{{.Role}}</td><td>{{template "methods" .}}</td></tr>
+<tr><td><a href="{{$.Base}}/accounts/{{path .Username}}">{{.Username}}</a>{{if .You}} <small>(you)</small>{{end}}</td><td>{{.Role}}</td><td>{{template "methods" .}}</td></tr>
 {{- end}}
 </tbody>
 </table>

@@ -13,7 +13,7 @@
 <p><a href="{{$.Base}}/account/password" role="button">Change your password</a></p>
 {{- end}}
 {{- else if $.CanWrite}}
-<form method="post" action="{{$.Base}}/accounts/{{.Account.Username}}/role">
+<form method="post" action="{{$.Base}}/accounts/{{path .Account.Username}}/role">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <label>Role
 <select name="role"{{if .Errors.For "role"}} aria-invalid="true"{{end}}>
@@ -26,7 +26,7 @@
 <button type="submit">Change the role</button>
 </form>
 {{- if not .Account.You}}
-<p><a href="{{$.Base}}/accounts/{{.Account.Username}}/delete">Delete this account</a></p>
+<p><a href="{{$.Base}}/accounts/{{path .Account.Username}}/delete">Delete this account</a></p>
 {{- end}}
 {{- end}}
 <p><a href="{{$.Base}}/accounts">Back to the accounts</a></p>

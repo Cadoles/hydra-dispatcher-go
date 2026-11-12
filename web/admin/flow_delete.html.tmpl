@@ -4,11 +4,11 @@
 <h1>Delete the flow {{.ID}}?</h1>
 {{template "general" .Errors}}
 <p>A user in the middle of it ends on an error. Its deletion cannot be undone; disabling it keeps it.</p>
-<form method="post" action="{{$.Base}}/flows/{{.ID}}/delete">
+<form method="post" action="{{$.Base}}/flows/{{path .ID}}/delete">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <button type="submit">Delete the flow {{.ID}}</button>
 </form>
-<p><a href="{{$.Base}}/flows/{{.ID}}">Back to the flow</a></p>
+<p><a href="{{$.Base}}/flows/{{path .ID}}">Back to the flow</a></p>
 </article>
 {{- end}}
 {{end}}

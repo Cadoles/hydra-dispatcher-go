@@ -13,7 +13,7 @@
 <thead><tr><th scope="col">Id</th><th scope="col">Scopes</th></tr></thead>
 <tbody>
 {{- range .Clients}}
-<tr><td><a href="{{$.Base}}/clients/{{.ID}}">{{.ID}}</a></td><td>{{range $i, $s := .Scopes}}{{if $i}}, {{end}}{{$s}}{{else}}none{{end}}</td></tr>
+<tr><td><a href="{{$.Base}}/clients/{{path .ID}}">{{.ID}}</a></td><td>{{range $i, $s := .Scopes}}{{if $i}}, {{end}}{{$s}}{{else}}none{{end}}</td></tr>
 {{- end}}
 </tbody>
 </table>

@@ -8,7 +8,7 @@
 </hgroup>
 {{template "notice" $}}
 {{template "general" .Errors}}
-<form method="post" action="{{if .New}}{{$.Base}}/apps{{else}}{{$.Base}}/apps/{{.Form.ID}}{{end}}">
+<form method="post" action="{{if .New}}{{$.Base}}/apps{{else}}{{$.Base}}/apps/{{path .Form.ID}}{{end}}">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="version" value="{{.Form.Version}}">
 <fieldset{{if not $.CanWrite}} disabled{{end}}>
@@ -69,7 +69,7 @@ Receives every claim of the previous steps
 {{- end}}
 </form>
 {{- if and $.CanWrite (not .New)}}
-<p><a href="{{$.Base}}/apps/{{.Form.ID}}/delete">Delete this app</a></p>
+<p><a href="{{$.Base}}/apps/{{path .Form.ID}}/delete">Delete this app</a></p>
 {{- end}}
 <p><a href="{{$.Base}}/apps">Back to the apps</a></p>
 {{- end}}

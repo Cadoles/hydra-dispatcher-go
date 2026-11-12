@@ -13,7 +13,7 @@
 <thead><tr><th scope="col">Id</th><th scope="col">Title</th><th scope="col">State</th><th scope="col">Steps</th><th scope="col">ACR</th></tr></thead>
 <tbody>
 {{- range .Flows}}
-<tr><td><a href="{{$.Base}}/flows/{{.ID}}">{{.ID}}</a></td><td>{{.Title}}</td><td>{{if .Enabled}}enabled{{else}}<strong>disabled</strong>{{end}}</td><td>{{range $i, $s := .Steps}}{{if $i}} → {{end}}{{$s}}{{end}}</td><td>{{.ACR}}</td></tr>
+<tr><td><a href="{{$.Base}}/flows/{{path .ID}}">{{.ID}}</a></td><td>{{.Title}}</td><td>{{if .Enabled}}enabled{{else}}<strong>disabled</strong>{{end}}</td><td>{{range $i, $s := .Steps}}{{if $i}} → {{end}}{{$s}}{{end}}</td><td>{{.ACR}}</td></tr>
 {{- end}}
 </tbody>
 </table>

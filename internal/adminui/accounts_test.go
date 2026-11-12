@@ -228,3 +228,34 @@ func TestAccountRecreated(t *testing.T) {
 		t.Errorf("the former's cookie: %d", w.Code)
 	}
 }
+
+// A name that holds a / or a %, or segments . and .., reaches its own account
+// alone: its links and forms escape it as a segment of a path (revue R41).
+func TestAccountNamesInPaths(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	for _, name := range []string{"x/../victor", "victo%72"} {
+		r.accounts.set(store.AdminUser{Username: name, OIDCSub: "sub-" + name, Role: domain.RoleViewer})
+	}
+	b := r.browser()
+	b.login("alice", password, "")
+	list := b.do(http.MethodGet, "/admin/accounts", nil).Body.String()
+	for path, name := range map[string]string{"/admin/accounts/x%2f..%2fvictor": "x/../victor", "/admin/accounts/victo%2572": "victo%72"} {
+		if !strings.Contains(strings.ToLower(list), `href="`+path+`"`) {
+			t.Errorf("%s: no link %s in\n%s", name, path, list)
+		}
+		page := b.do(http.MethodGet, path, nil)
+		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "Account "+strings.ReplaceAll(name, "/", "/")) ||
+			!strings.Contains(strings.ToLower(page.Body.String()), `action="`+path+`/role"`) || !strings.Contains(strings.ToLower(page.Body.String()), `href="`+path+`/delete"`) {
+			t.Errorf("%s, its page: %d\n%s", name, page.Code, page.Body)
+		}
+		if w := b.do(http.MethodPost, path+"/role", url.Values{"csrf": {b.csrf()}, "role": {"admin"}}); w.Code != http.StatusSeeOther {
+			t.Errorf("%s, its role: %d\n%s", name, w.Code, w.Body)
+		}
+		if u, _, _ := r.accounts.Admin(t.Context(), name); u.Role != domain.RoleAdmin {
+			t.Errorf("%s: %+v", name, u)
+		}
+	}
+	if u, _, _ := r.accounts.Admin(t.Context(), "victor"); u.Role != domain.RoleViewer {
+		t.Errorf("victor reached: %+v", u)
+	}
+}

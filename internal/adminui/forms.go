@@ -148,6 +148,19 @@ func words(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r == ',' })
 }
 
+// lines splits a field of one value per line, as the claims, whose names may
+// hold a space or a comma: the spaces at the ends of a line and the empty
+// lines left out (revue R41).
+func lines(s string) []string {
+	var l []string
+	for line := range strings.Lines(s) {
+		if line = strings.TrimSpace(line); line != "" {
+			l = append(l, line)
+		}
+	}
+	return l
+}
+
 // changes names the fields that differ, in their order.
 type changes []string
 

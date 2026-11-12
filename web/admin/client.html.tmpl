@@ -6,7 +6,7 @@
 </hgroup>
 {{template "notice" $}}
 {{template "general" .Errors}}
-<form method="post" action="{{if .New}}{{$.Base}}/clients{{else}}{{$.Base}}/clients/{{.ID}}{{end}}">
+<form method="post" action="{{if .New}}{{$.Base}}/clients{{else}}{{$.Base}}/clients/{{path .ID}}{{end}}">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="version" value="{{.Version}}">
 <fieldset{{if not $.CanWrite}} disabled{{end}}>
@@ -30,7 +30,7 @@
 {{- end}}
 </form>
 {{- if and $.CanWrite (not .New)}}
-<p><a href="{{$.Base}}/clients/{{.ID}}/rotate">Turn its secret</a> · <a href="{{$.Base}}/clients/{{.ID}}/delete">Delete this client</a></p>
+<p><a href="{{$.Base}}/clients/{{path .ID}}/rotate">Turn its secret</a> · <a href="{{$.Base}}/clients/{{path .ID}}/delete">Delete this client</a></p>
 {{- end}}
 <p><a href="{{$.Base}}/clients">Back to the API clients</a></p>
 {{- end}}
