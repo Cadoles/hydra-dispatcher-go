@@ -30,6 +30,9 @@ type Writer interface {
 	UpdateFlow(ctx context.Context, by, id string, change func(*store.Flow) error) error
 	DeleteFlow(ctx context.Context, id string) error
 	UpdateSettings(ctx context.Context, by string, values map[string]json.RawMessage) error
+	CreateScope(ctx context.Context, by string, s store.Scope) error
+	UpdateScope(ctx context.Context, by, name string, change func(*store.Scope) error) error
+	DeleteScope(ctx context.Context, name string) error
 }
 
 // Snapshots give the configuration of the moment: a write refreshes that of

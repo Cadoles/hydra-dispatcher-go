@@ -26,6 +26,7 @@ type config struct {
 	flows   []store.Flow
 	stored  map[string]json.RawMessage
 	clients []store.APIClient
+	scopes  []store.Scope
 	// oidc, when set, is the block admin_oidc of the snapshots, its secret in
 	// clear, which the table would hold encrypted.
 	oidc *store.AdminOIDC
@@ -60,7 +61,85 @@ func (c *config) Snapshot() *store.Snapshot {
 	}
 	snap := store.NewSnapshot(slices.Clone(c.apps), slices.Clone(c.flows), settings).WithAPIClients(slices.Clone(c.clients))
 	snap.StoredSettings = slices.Sorted(maps.Keys(c.stored))
+	snap.Scopes = slices.Clone(c.scopes)
+	slices.SortFunc(snap.Scopes, func(a, b store.Scope) int { return strings.Compare(a.Name, b.Name) })
 	return snap
+}
+
+// The catalogue of the scopes as the store writes it: a standard scope
+// renamed alone, its row gone when it renames nothing.
+func (c *config) putScope(s store.Scope, by string) {
+	c.scopes = slices.DeleteFunc(c.scopes, func(x store.Scope) bool { return x.Name == s.Name })
+	renames := len(s.Label) > 0 || slices.ContainsFunc(s.Claims, func(x store.ScopeClaim) bool { return len(x.Label) > 0 })
+	if _, standard := domain.Standard(s.Name); !standard || renames {
+		c.scopes = append(c.scopes, s)
+	}
+	c.by = append(c.by, by)
+}
+
+func (c *config) CreateScope(_ context.Context, by string, s store.Scope) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	if _, standard := domain.Standard(s.Name); standard {
+		return store.ErrStandard
+	}
+	if v := domain.Collect(s.Check); v != nil {
+		return v
+	}
+	if slices.ContainsFunc(c.scopes, func(x store.Scope) bool { return x.Name == s.Name }) {
+		return store.ErrExists
+	}
+	c.putScope(s, by)
+	return nil
+}
+
+func (c *config) UpdateScope(_ context.Context, by, name string, change func(*store.Scope) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	_, standard := domain.Standard(name)
+	i := slices.IndexFunc(c.scopes, func(x store.Scope) bool { return x.Name == name })
+	if i < 0 && !standard {
+		return store.ErrNotFound
+	}
+	s := store.Scope{Name: name}
+	if i >= 0 {
+		s = c.scopes[i]
+		s.Claims = slices.Clone(s.Claims)
+	}
+	if err := change(&s); err != nil {
+		return err
+	}
+	if s.Name != name {
+		return domain.Violations{{Field: "name", Message: "an update cannot change it"}}
+	}
+	if v := domain.Collect(s.Check); v != nil {
+		return v
+	}
+	c.putScope(s, by)
+	return nil
+}
+
+func (c *config) DeleteScope(_ context.Context, name string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	if _, standard := domain.Standard(name); standard {
+		return store.ErrStandard
+	}
+	i := slices.IndexFunc(c.scopes, func(x store.Scope) bool { return x.Name == name })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	c.scopes = slices.Delete(c.scopes, i, i+1)
+	return nil
 }
 
 func (c *config) client(id string) (store.APIClient, bool) {

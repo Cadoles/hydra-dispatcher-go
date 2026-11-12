@@ -11,3 +11,14 @@
 #steps input[name="step_position"] {
   width: 6rem;
 }
+/* A wide table, the labels of a scope by locale, scrolls within the page;
+   a fieldset holding it would otherwise widen to it (min-width: min-content). */
+fieldset {
+  min-width: 0;
+}
+.overflow-auto {
+  overflow-x: auto;
+}
+.overflow-auto input {
+  min-width: 9rem;
+}

@@ -1,0 +1,61 @@
+{{define "content"}}
+{{- with .Data}}
+<hgroup>
+<h1>{{if .New}}New scope{{else}}Scope {{.Form.Name}}{{end}}</h1>
+<p>{{if .Form.Standard}}A standard scope of OpenID Connect: its claims are those of OpenID Connect Core, its labels and theirs alone change. A label left empty is the code's, shown greyed.{{else}}A scope of the business: the claims it covers, and the labels the consent screen shows. A label left empty is the one for every locale, else the fallback locale's.{{end}}</p>
+</hgroup>
+{{template "notice" $}}
+{{template "general" .Errors}}
+<form method="post" action="{{if .New}}{{$.Base}}/scopes{{else}}{{$.Base}}/scopes/{{path .Form.Name}}{{end}}">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="version" value="{{.Form.Version}}">
+{{- range .Form.Locales}}
+<input type="hidden" name="locale" value="{{.}}">
+{{- end}}
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+{{- if .New}}
+<label>Name
+<input name="name" value="{{.Form.Name}}" required maxlength="128" autocomplete="off"{{if .Errors.For "name"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "name"}}
+<small>Up to 128 characters, without a space: as a client asks it. It never changes.</small>
+</label>
+{{- end}}
+<fieldset>
+<legend>Label</legend>
+{{- range .Form.Locales}}
+<label>{{if .}}{{.}}{{else}}Every locale{{end}}
+<input name="label.{{.}}" value="{{index $.Data.Form.Label .}}" placeholder="{{index $.Data.Form.Default .}}">
+</label>
+{{- end}}
+{{template "errors" .Errors.For "label"}}
+</fieldset>
+<fieldset>
+<legend>Claims</legend>
+<div class="overflow-auto">
+<table>
+<thead><tr><th scope="col">Claim</th>{{range .Form.Locales}}<th scope="col">{{if .}}{{.}}{{else}}Every locale{{end}}</th>{{end}}</tr></thead>
+<tbody>
+{{- range $i, $c := .Form.Claims}}
+<tr><td>{{if $.Data.Form.Standard}}<input type="hidden" name="claim" value="{{$c.Claim}}">{{$c.Claim}}{{else}}<input name="claim" value="{{$c.Claim}}" aria-label="Claim {{$i}}"{{if $.Data.Errors.For (printf "claims[%d]" $i)}} aria-invalid="true"{{end}}>{{end}}
+{{- template "errors" ($.Data.Errors.For (printf "claims[%d]" $i))}}</td>
+{{- range $.Data.Form.Locales}}<td><input name="claim_label.{{$i}}.{{.}}" value="{{index $c.Label .}}" placeholder="{{index $c.Default .}}" aria-label="Label of the claim {{$i}}, {{if .}}{{.}}{{else}}every locale{{end}}"></td>{{end}}</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+{{template "errors" .Errors.For "claims"}}
+{{- if not .Form.Standard}}
+<small>A row without a claim is none: save to have more rows.</small>
+{{- end}}
+</fieldset>
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit">{{if .New}}Create the scope{{else}}Save{{end}}</button>
+{{- end}}
+</form>
+{{- if and $.CanWrite (not .New) (not .Form.Standard)}}
+<p><a href="{{$.Base}}/scopes/{{path .Form.Name}}/delete">Delete this scope</a></p>
+{{- end}}
+<p><a href="{{$.Base}}/scopes">Back to the scopes</a></p>
+{{- end}}
+{{end}}

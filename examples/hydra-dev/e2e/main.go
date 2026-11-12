@@ -62,8 +62,9 @@ var identities = map[string]identity{
 type scenario struct {
 	name string
 	run  func(*driver) error
-	// optIn scenarios run only when named.
-	optIn bool
+	// optIn scenarios run only when named; goOnly ones never under -symfony,
+	// what they check being the Go dispatcher's alone.
+	optIn, goOnly bool
 }
 
 var scenarios = []scenario{
@@ -106,11 +107,13 @@ var scenarios = []scenario{
 	{name: "prompt-consent-reject", run: promptConsent("reject")},
 	{name: "back-to-choice", run: (*driver).backToChoice},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
+	{name: "consent-by-catalogue", run: (*driver).consentByCatalogue, goOnly: true},
 	{name: "expired-on-consent", run: (*driver).expiredOnConsent, optIn: true},
 	{name: "limiter-stops-forgery", run: (*driver).limiterStopsForgery, optIn: true},
 	{name: "webhook-rewrites", run: (*driver).webhookRewrites, optIn: true},
 	{name: "webhook-fails", run: (*driver).webhookFails, optIn: true},
 	{name: "webhook-other-subject-at-skip", run: (*driver).webhookOtherSubjectAtSkip, optIn: true},
+	{name: "consent-strict", run: (*driver).consentStrict, optIn: true, goOnly: true},
 }
 
 func main() {
@@ -236,6 +239,12 @@ func run() error {
 	}
 	for _, s := range scenarios {
 		if len(names) > 0 && !slices.Contains(names, s.name) || len(names) == 0 && s.optIn {
+			continue
+		}
+		if *symfony && s.goOnly {
+			if len(names) > 0 {
+				return fmt.Errorf("scenario %q checks the Go dispatcher alone, not under -symfony", s.name)
+			}
 			continue
 		}
 		var dir string
@@ -380,6 +389,8 @@ type outcome struct {
 	end  page
 	// code is the error code of the dispatcher's page the walk ended on.
 	code string
+	// consent is the last consent screen of the dispatcher met.
+	consent page
 }
 
 func (o outcome) saw(kind string) bool { return slices.Contains(o.seen, kind) }
@@ -426,6 +437,7 @@ func (d *driver) drive(p page, l login) (outcome, error) {
 		case "choice":
 			p, err = d.choose(p, l.flow)
 		case "consent":
+			o.consent = p
 			p, err = d.consentScreen(p, l.consent, l.waitOnConsent)
 		case "hydra-sql":
 			p, err = d.sqlLogin(p, l.user)
@@ -2140,6 +2152,98 @@ func (d *driver) expiredOnConsent() error {
 	}
 	if refused != "login_required" {
 		return fmt.Errorf("callback error %q, want login_required", refused)
+	}
+	return nil
+}
+
+// lasql is the scope of the business of hydra-dev's seed (P24,
+// files/apps/dispatcher-go/dispatcher.yaml): hydra-sql's columns lastname and
+// firstname, which no standard scope covers; its labels and theirs, in the
+// locale of the e2e's browser, fr.
+const (
+	lasqlScope     = "openid profile email lasql"
+	lasqlLabel     = `<span class="scope">Votre fiche lasql</span>`
+	lastnameLabel  = "<li>Nom de famille</li>"
+	firstnameLabel = "<li>Prénom usuel</li>"
+)
+
+// withScope authorizes with hydra-sql and prompt=consent, the client asking
+// scope, and gives the consent screen met and the claims of the id_token.
+func (d *driver) withScope(scope string) (page, map[string]any, error) {
+	d.client.scope = scope
+	defer func() { d.client.scope = "" }()
+	o, err := d.authorize(login{flow: "hydra-sql", user: isabelle, consent: "accept", prompt: "consent"})
+	if err != nil {
+		return page{}, nil, err
+	}
+	if !o.saw("consent") {
+		return page{}, nil, fmt.Errorf("no consent screen with prompt=consent: %v", o.seen)
+	}
+	if o.end.URL == nil || d.kind(o.end) != "callback" {
+		return page{}, nil, fmt.Errorf("%w: pages %v, ended on %s %s", errNoCallback, o.seen, o.code, endURL(o))
+	}
+	if refused, err := d.client.callbackError(o.end.URL); err != nil || refused != "" {
+		return page{}, nil, fmt.Errorf("authorization refused: %q %v", refused, err)
+	}
+	claims, err := d.client.redeem(d.ctx, o.end.URL)
+	if err != nil {
+		return page{}, nil, err
+	}
+	return o.consent, claims, identities["hydra-sql"].check(claims)
+}
+
+// consentByCatalogue asks the scope lasql: the consent screen shows it, and
+// lastname and firstname under it, by the labels of the catalogue rather than
+// among the other data by their names; the id_token holds both, which lasql
+// covers whatever consent.claims_filter.
+func (d *driver) consentByCatalogue() error {
+	screen, claims, err := d.withScope(lasqlScope)
+	if err != nil {
+		return err
+	}
+	for _, want := range []string{lasqlLabel, lastnameLabel, firstnameLabel} {
+		if !strings.Contains(screen.Body, want) {
+			return fmt.Errorf("consent screen without %s: is the scope lasql in the seed?", want)
+		}
+	}
+	if strings.Contains(screen.Body, "<li>lastname</li>") {
+		return errors.New("consent screen: lastname by its name, outside lasql")
+	}
+	return holds(claims, true, "lastname", "firstname")
+}
+
+// consentStrict needs consent.claims_filter strict (HYDRA_DEV_CLAIMS_FILTER=
+// strict make up-go): without lasql, lastname and firstname, which no scope
+// asked covers, are neither shown nor sent, email is; with it, both are.
+func (d *driver) consentStrict() error {
+	screen, claims, err := d.withScope("openid profile email")
+	if err != nil {
+		return err
+	}
+	if strings.Contains(screen.Body, "lastname") || strings.Contains(screen.Body, "firstname") {
+		return errors.New("consent screen shows lastname or firstname without lasql: is the stack started with HYDRA_DEV_CLAIMS_FILTER=strict?")
+	}
+	if err := holds(claims, false, "lastname", "firstname"); err != nil {
+		return fmt.Errorf("without lasql: %w", err)
+	}
+	if err := holds(claims, true, "email"); err != nil {
+		return err
+	}
+	if _, claims, err = d.withScope(lasqlScope); err != nil {
+		return err
+	}
+	if err := holds(claims, true, "lastname", "firstname"); err != nil {
+		return fmt.Errorf("with lasql: %w", err)
+	}
+	return nil
+}
+
+// holds checks that the claims of the id_token hold names, or not.
+func holds(claims map[string]any, want bool, names ...string) error {
+	for _, n := range names {
+		if _, ok := claims[n]; ok != want {
+			return fmt.Errorf("id_token: claim %s present %v, want %v", n, ok, want)
+		}
 	}
 	return nil
 }

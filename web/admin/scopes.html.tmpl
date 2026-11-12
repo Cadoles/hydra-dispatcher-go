@@ -1,0 +1,66 @@
+{{define "content"}}
+<hgroup>
+<h1>Scopes</h1>
+<p>The catalogue the consent screen shows the scopes by: the standard scopes of OpenID Connect, whose labels alone change, and those of the business, with the claims each covers.</p>
+</hgroup>
+{{template "notice" .}}
+{{- if .CanWrite}}
+<p><a href="{{.Base}}/new-scope" role="button">New scope</a></p>
+{{- end}}
+{{- with .Data}}
+<div class="overflow-auto">
+<table>
+<thead><tr><th scope="col">Name</th><th scope="col">Label</th><th scope="col">Claims</th><th scope="col">Kind</th></tr></thead>
+<tbody>
+{{- range .Scopes}}
+<tr><td><a href="{{$.Base}}/scopes/{{path .Name}}">{{.Name}}</a></td><td>{{.Label}}</td><td>{{range $i, $c := .Claims}}{{if $i}}, {{end}}{{$c}}{{end}}</td><td>{{if .Standard}}standard{{if .Renamed}}, renamed{{end}}{{else}}business{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+<h2>Overview of the consent</h2>
+<form method="get" action="{{$.Base}}/scopes">
+<fieldset>
+<legend>The scopes a client asks</legend>
+{{- range .Scopes}}
+<label><input type="checkbox" name="preview" value="{{.Name}}"{{if .Chosen}} checked{{end}}> {{.Name}}</label>
+{{- end}}
+</fieldset>
+<button type="submit" class="secondary">Show the consent</button>
+</form>
+{{- if .Preview}}
+<article>
+<p>A client asks for access to the following data (the labels of the default locale, those of the embedded theme by default):</p>
+<ul>
+{{- range .Preview}}
+<li><strong>{{.Label}}</strong>{{with .Claims}}<ul>{{range .}}<li>{{.}}</li>{{end}}</ul>{{end}}</li>
+{{- end}}
+</ul>
+</article>
+{{- end}}
+{{- if .Error}}
+<h2>Scopes asked outside the catalogue</h2>
+<p role="alert">{{.Error}}</p>
+{{- else if .Scanned}}
+<h2>Scopes asked outside the catalogue</h2>
+{{- if .Partial}}
+<p><mark>The first {{.Partial}} clients of Hydra alone are read: those after them may ask others.</mark></p>
+{{- end}}
+{{- if .Asked}}
+<p>Clients of Hydra ask them: the consent screen shows them by their name, and with the strict filter they send no claim.</p>
+<div class="overflow-auto">
+<table>
+<thead><tr><th scope="col">Scope</th><th scope="col">Asked by</th>{{if $.CanWrite}}<th scope="col"></th>{{end}}</tr></thead>
+<tbody>
+{{- range .Asked}}
+<tr><td>{{.Scope}}</td><td>{{range $i, $c := .Clients}}{{if $i}}, {{end}}{{$c}}{{end}}</td>{{if $.CanWrite}}<td><a href="{{$.Base}}/new-scope?name={{.Scope}}">Add it</a></td>{{end}}</tr>
+{{- end}}
+</tbody>
+</table>
+</div>
+{{- else}}
+<p>Every scope the clients of Hydra ask is in the catalogue.</p>
+{{- end}}
+{{- end}}
+{{- end}}
+{{end}}

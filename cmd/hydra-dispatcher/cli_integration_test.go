@@ -186,6 +186,13 @@ dispatcher:
     - { id: off, title: Off, description: D, enabled: false, steps: [{ id: none, order: 3 }] }
   oauth2_clients:
     - { id: ci, secret: s3cret, scopes: [admin:read, admin:flows] }
+  # A scope of the business, a label for every locale among its claims'; a
+  # standard scope renamed (P24).
+  scopes:
+    - name: lasql
+      label: { fr: "Votre fiche", en: "Your record" }
+      claims: [{ claim: lastname, label: Nom }, { claim: firstname }]
+    - { name: email, label: { fr: "Votre courriel" } }
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -198,21 +205,21 @@ dispatcher:
 		return out, errOut
 	}
 	cmd(nil, "bootstrap", "-config", seed, "-force")
-	if out, _ := cmd(nil, "config", "diff", "-config", seed); !strings.HasSuffix(out, "same 10\n") {
+	if out, _ := cmd(nil, "config", "diff", "-config", seed); !strings.HasSuffix(out, "same 12\n") {
 		t.Errorf("diff after the bootstrap:\n%s", out)
 	}
 
 	// The dump, its clients apart, is a seed that changes nothing.
-	dump, _ := cmd(nil, "config", "dump", "-section", "settings,apps,flows")
+	dump, _ := cmd(nil, "config", "dump", "-section", "settings,apps,flows,scopes")
 	if strings.Contains(dump, "oauth2_clients") || strings.Contains(dump, "remember") || !strings.Contains(dump, "receive_claims: null") || !strings.Contains(dump, "receive_claims: []") ||
-		!strings.Contains(dump, "challenge_ttl: 900") || !strings.Contains(dump, "10.0.2.0/24") {
+		!strings.Contains(dump, "challenge_ttl: 900") || !strings.Contains(dump, "10.0.2.0/24") || !strings.Contains(dump, "name: lasql") || !strings.Contains(dump, "name: email") {
 		t.Errorf("dump:\n%s", dump)
 	}
 	dumped := filepath.Join(dir, "dump.yaml")
 	if err := os.WriteFile(dumped, []byte(dump), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := cmd(nil, "config", "diff", "-config", dumped); !strings.HasSuffix(out, "same 9, absent 1\n") || !strings.Contains(out, "absent  api_client ci") {
+	if out, _ := cmd(nil, "config", "diff", "-config", dumped); !strings.HasSuffix(out, "same 11, absent 1\n") || !strings.Contains(out, "absent  api_client ci") {
 		t.Errorf("diff of the dump:\n%s", out)
 	}
 	all, _ := cmd(nil, "config", "dump")
