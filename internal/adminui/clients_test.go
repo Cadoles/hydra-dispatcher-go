@@ -177,3 +177,35 @@ func TestClientSensitive(t *testing.T) {
 		t.Errorf("a viewer turns: %d", w.Code)
 	}
 }
+
+// Two admins on the scopes of a client: refused once; its secret hashed again
+// meanwhile, which no form shows, changes nothing (revue R41).
+func TestClientScopesChanged(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	hash, _ := domain.HashSecret("s3cret")
+	r.config.clients = []store.APIClient{{ID: "ci", SecretHash: hash, Scopes: []string{"admin:read"}}}
+	b := r.browser()
+	b.login("alice", password, "")
+	v := b.version("/admin/clients/ci")
+	again, _ := domain.HashSecret("s3cret") // a rehash: the same secret, another hash
+	r.config.clients[0].SecretHash = again
+	if w := b.do(http.MethodPost, "/admin/clients/ci", url.Values{"csrf": {b.csrf()}, "version": {v}, "scope": {"admin:apps"}}); w.Code != http.StatusSeeOther {
+		t.Fatalf("after a rehash: %d\n%s", w.Code, w.Body)
+	}
+	v = b.version("/admin/clients/ci")
+	r.config.clients[0].Scopes = []string{"admin:flows"} // theirs
+	w := b.do(http.MethodPost, "/admin/clients/ci", url.Values{"csrf": {b.csrf()}, "version": {v}, "scope": {"admin:read"}})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("over theirs: %d\n%s", w.Code, w.Body)
+	}
+	if c, _ := r.config.client("ci"); !slices.Equal(c.Scopes, []string{"admin:flows"}) {
+		t.Errorf("theirs lost: %q", c.Scopes)
+	}
+	m := versionRe.FindStringSubmatch(w.Body.String())
+	if w := b.do(http.MethodPost, "/admin/clients/ci", url.Values{"csrf": {b.csrf()}, "version": {m[1]}, "scope": {"admin:read"}}); w.Code != http.StatusSeeOther {
+		t.Fatalf("again: %d", w.Code)
+	}
+	if c, _ := r.config.client("ci"); !slices.Equal(c.Scopes, []string{"admin:read"}) {
+		t.Errorf("mine: %q", c.Scopes)
+	}
+}

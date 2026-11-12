@@ -263,8 +263,10 @@ type view struct {
 	// SSO offers the login by the identity provider, PasswordLogin the
 	// login by password: the page of login.
 	SSO, PasswordLogin bool
-	Account            *store.AdminUser
-	Dashboard          *Dashboard
+	// Link, with LinkText, is what a status page offers to do.
+	Link, LinkText string
+	Account        *store.AdminUser
+	Dashboard      *Dashboard
 	// Nav is the section of the page in the navigation, Notice what the page
 	// says of the write that led to it, Data what a screen shows.
 	Nav, Notice string

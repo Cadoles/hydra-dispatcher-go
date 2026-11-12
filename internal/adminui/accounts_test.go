@@ -204,7 +204,7 @@ func TestOwnPassword(t *testing.T) {
 	// the new session's.
 	r.advance(6 * time.Minute)
 	w := b.do(http.MethodPost, "/admin/account/password", url.Values{"csrf": {b.csrf()}, "password": {"another password, long"}, "password_again": {"another password, long"}})
-	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "asks for your password again") {
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "asks you to confirm it is you") {
 		t.Errorf("past the window: %d\n%s", w.Code, w.Body)
 	}
 }
@@ -257,5 +257,18 @@ func TestAccountNamesInPaths(t *testing.T) {
 	}
 	if u, _, _ := r.accounts.Admin(t.Context(), "victor"); u.Role != domain.RoleViewer {
 		t.Errorf("victor reached: %+v", u)
+	}
+}
+
+// A subject another account has is said on its field (revue R41).
+func TestAccountSubjectTaken(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	b := r.browser()
+	b.login("alice", password, "")
+	form := accountValues(b, "dora", "viewer", "", "")
+	form.Set("oidc_sub", "sub-1")
+	if w := b.do(http.MethodPost, "/admin/accounts", form); w.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(w.Body.String(), `name="oidc_sub" value="sub-1" autocomplete="off" aria-invalid="true">`) {
+		t.Errorf("taken: %d\n%s", w.Code, w.Body)
 	}
 }

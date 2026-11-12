@@ -2,6 +2,9 @@
 <article>
 <h1>{{.Title}}</h1>
 <p>{{.Message}}</p>
+{{- if .Link}}
+<p><a href="{{.Link}}" role="button">{{.LinkText}}</a></p>
+{{- end}}
 <p><a href="{{.Base}}">Back to the dashboard</a></p>
 </article>
 {{end}}

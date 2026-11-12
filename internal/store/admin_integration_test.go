@@ -384,3 +384,24 @@ func TestAdminBySubject(t *testing.T) {
 		}
 	}
 }
+
+// A subject another account has is refused on its field, not by the
+// constraint of the column (revue R41).
+func TestAdminSubjectTaken(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	for _, u := range []AdminUser{{Username: "alice", OIDCSub: "sub-a", Role: domain.RoleAdmin}, {Username: "bob", OIDCSub: "sub-b", Role: domain.RoleViewer}} {
+		if err := p.CreateAdmin(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.CreateAdmin(ctx, AdminUser{Username: "carol", OIDCSub: "sub-a", Role: domain.RoleViewer}); !violated(err, "oidc_sub") {
+		t.Errorf("create: %v", err)
+	}
+	if err := p.UpdateAdmin(ctx, "bob", func(u *AdminUser) error { u.OIDCSub = "sub-a"; return nil }); !violated(err, "oidc_sub") {
+		t.Errorf("update: %v", err)
+	}
+	if err := p.UpdateAdmin(ctx, "bob", func(u *AdminUser) error { u.Role = domain.RoleAdmin; return nil }); err != nil {
+		t.Errorf("its own subject kept: %v", err)
+	}
+}

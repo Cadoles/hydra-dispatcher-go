@@ -107,3 +107,27 @@ func TestLogoutFailed(t *testing.T) {
 		t.Errorf("audit: %q", r.audited())
 	}
 }
+
+// A sensitive POST past the window offers the confirmation, back to the page
+// of its form; a session of the identity provider confirms there (revue
+// R41).
+func TestReauthLink(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	b := r.browser()
+	b.login("alice", password, "")
+	r.advance(6 * time.Minute)
+	b.headers["Referer"] = "http://dispatcher.test/admin/accounts/victor"
+	w := b.do(http.MethodPost, "/admin/accounts/victor/role", url.Values{"csrf": {b.csrf()}, "role": {"admin"}})
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `href="/admin/reauth?next=%2Fadmin%2Faccounts%2Fvictor" role="button">Confirm it is you`) {
+		t.Errorf("by password: %d\n%s", w.Code, w.Body)
+	}
+	b.headers["Referer"] = "https://evil.test/admin/accounts/victor"
+	if w := b.do(http.MethodPost, "/admin/accounts/victor/role", url.Values{"csrf": {b.csrf()}, "role": {"admin"}}); !strings.Contains(w.Body.String(), `href="/admin/reauth?next=%2Fadmin"`) {
+		t.Errorf("another site's Referer:\n%s", w.Body)
+	}
+	r.ui.o.PasswordLogin = false
+	b.headers["Referer"] = "http://dispatcher.test/admin/clients/ci"
+	if w := b.do(http.MethodPost, "/admin/accounts/victor/role", url.Values{"csrf": {b.csrf()}, "role": {"admin"}}); !strings.Contains(w.Body.String(), `href="/admin/oidc/login?reauth=1&amp;next=%2Fadmin%2Fclients%2Fci"`) {
+		t.Errorf("by the provider:\n%s", w.Body)
+	}
+}

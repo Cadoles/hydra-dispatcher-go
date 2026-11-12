@@ -169,17 +169,29 @@ func (ui *UI) fresh(h func(http.ResponseWriter, *http.Request, *current)) func(h
 			return
 		}
 		if r.Method == http.MethodGet {
-			// A session of the identity provider confirms there, as one
-			// without the login by password.
-			target := ui.base + "/reauth?next="
-			if s.session.Method == "oidc" || !ui.o.PasswordLogin {
-				target = ui.base + "/oidc/login?reauth=1&next="
-			}
-			http.Redirect(w, r, target+url.QueryEscape(ui.root()+r.URL.RequestURI()), http.StatusSeeOther)
+			http.Redirect(w, r, ui.reauthURL(s, ui.root()+r.URL.RequestURI()), http.StatusSeeOther)
 			return
 		}
-		ui.status(w, r, http.StatusForbidden, "Confirm it is you", "This action asks for your password again: open it anew.", s)
+		// The page of the form, by its Referer, which the policy of the pages
+		// sends to the dispatcher alone: the confirmation goes back there,
+		// where the action is made again (revue R41).
+		back := ui.base
+		if ref, err := url.Parse(r.Header.Get("Referer")); err == nil && ref.Scheme+"://"+ref.Host == ui.origin {
+			back = ui.next(ref.RequestURI())
+		}
+		ui.render(w, http.StatusForbidden, "status", view{Title: "Confirm it is you", Account: &s.account, CSRF: s.session.CSRF,
+			Message: "This action asks you to confirm it is you: confirm it, then make it again.", Link: ui.reauthURL(s, back), LinkText: "Confirm it is you"})
 	}
+}
+
+// reauthURL is the re-authentication of the session s, back to next: by the
+// identity provider for a session of it, or without the login by password;
+// by the password otherwise.
+func (ui *UI) reauthURL(s *current, next string) string {
+	if s.session.Method == "oidc" || !ui.o.PasswordLogin {
+		return ui.base + "/oidc/login?reauth=1&next=" + url.QueryEscape(next)
+	}
+	return ui.base + "/reauth?next=" + url.QueryEscape(next)
 }
 
 // root is the path of server.base_url, before /admin.

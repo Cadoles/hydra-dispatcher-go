@@ -120,6 +120,11 @@ func (a *accounts) CreateAdmin(_ context.Context, u store.AdminUser) error {
 	if _, ok := a.users[u.Username]; ok {
 		return store.ErrExists
 	}
+	for _, other := range a.users {
+		if u.OIDCSub != "" && other.OIDCSub == u.OIDCSub {
+			return domain.Violations{{Field: "oidc_sub", Message: "is the subject of the account " + other.Username}}
+		}
+	}
 	u.SessionsValidAfter = a.now() // as the store: its sessions after its creation
 	a.users[u.Username] = u
 	return nil

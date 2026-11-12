@@ -625,6 +625,18 @@ func TestAppChanged(t *testing.T) {
 	if a, _ := r.config.app("pwd"); a.Method != "theirs" {
 		t.Errorf("theirs lost: %q", a.Method)
 	}
+	// The page refused carries the version of now: saved again, the form
+	// writes over, knowingly (revue R41).
+	w := b.do(http.MethodPost, "/admin/apps/pwd", form)
+	m := versionRe.FindStringSubmatch(w.Body.String())
+	form.Set("version", m[1])
+	form.Set("csrf", b.csrf())
+	if w := b.do(http.MethodPost, "/admin/apps/pwd", form); w.Code != http.StatusSeeOther {
+		t.Fatalf("again: %d\n%s", w.Code, w.Body)
+	}
+	if a, _ := r.config.app("pwd"); a.Method != "otp" {
+		t.Errorf("mine: %q", a.Method)
+	}
 }
 
 // The claims are one per line: a name with a space or a comma, which the

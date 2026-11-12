@@ -54,6 +54,9 @@ func (p *Postgres) CreateAdmin(ctx context.Context, u AdminUser) error {
 		if _, found, err := findAdmin(ctx, tx, u.Username); err != nil || found {
 			return cmpErr(err, ErrExists)
 		}
+		if err := subjectFree(ctx, tx, u.OIDCSub, ""); err != nil {
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO admin_user (username, password_hash, oidc_sub, role, sessions_valid_after)
 			VALUES ($1, NULLIF($2, ''), NULLIF($3, ''), $4, $5)`, u.Username, u.PasswordHash, u.OIDCSub, u.Role, time.Now())
 		if err != nil {
@@ -81,6 +84,11 @@ func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func
 		}
 		if v := domain.Collect(func(fail domain.Fail) { u.CheckChanged(fail, was) }); v != nil {
 			return v
+		}
+		if u.OIDCSub != was.OIDCSub {
+			if err := subjectFree(ctx, tx, u.OIDCSub, username); err != nil {
+				return err
+			}
 		}
 		if was.Role == domain.RoleAdmin && u.Role != domain.RoleAdmin {
 			var others int
@@ -177,6 +185,25 @@ func (p *Postgres) AdminBySubject(ctx context.Context, sub string) (AdminUser, b
 		return AdminUser{}, false, err
 	}
 	return users[0], true, nil
+}
+
+// subjectFree refuses a subject at the identity provider another account than
+// but has: the column is unique, and its error would say nothing of the field
+// (revue R41).
+func subjectFree(ctx context.Context, q querier, sub, but string) error {
+	if sub == "" {
+		return nil
+	}
+	users, err := queryAdmins(ctx, q, `oidc_sub = $1`, sub)
+	if err != nil {
+		return err
+	}
+	for _, u := range users {
+		if u.Username != but {
+			return domain.Violations{{Field: "oidc_sub", Message: fmt.Sprintf("is the subject of the account %q", u.Username)}}
+		}
+	}
+	return nil
 }
 
 // readAdmins reads the accounts, the one named username when it is not "".
