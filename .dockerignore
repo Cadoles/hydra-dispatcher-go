@@ -16,6 +16,8 @@
 !web/static/**
 !web/scalar/standalone.js
 !web/scalar/init.js
+!web/pico/pico.classless.min.css
+!web/admin/**
 !api/*.go
 !api/openapi.yaml
 **/*_test.go

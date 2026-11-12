@@ -300,3 +300,23 @@ func TestAdminUser(t *testing.T) {
 		wants(t, name, violations(tt.u.Check), tt.want...)
 	}
 }
+
+// Q121: 12 characters at least, counted as characters, without composition.
+func TestCheckPassword(t *testing.T) {
+	for password, want := range map[string]string{
+		"aaaaaaaaaaaa":  "",
+		"éééééééééééé":  "",
+		"aaaaaaaaaaa":   "password: has 11 characters: 12 at least",
+		"ééééééééééé":   "password: has 11 characters: 12 at least",
+		"":              "password: has 0 characters: 12 at least",
+		"correct horse": "",
+	} {
+		got := ""
+		if v := Collect(func(fail Fail) { CheckPassword(fail, password) }); v != nil {
+			got = v.Error()
+		}
+		if got != want {
+			t.Errorf("%q: %q, want %q", password, got, want)
+		}
+	}
+}

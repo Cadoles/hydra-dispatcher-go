@@ -259,18 +259,18 @@ func TestAdminCommands(t *testing.T) {
 	}
 	for name, tt := range map[string]cliCase{
 		"create, asked twice": {
-			args: []string{"admin", "create", "bob", "-role", "viewer"}, terminal: true, answers: []string{"s3cret", "s3cret"},
+			args: []string{"admin", "create", "bob", "-role", "viewer"}, terminal: true, answers: []string{"s3cret-passw0rd", "s3cret-passw0rd"},
 			stderr: "Password: \nPassword again: \n", calls: []string{"create admin bob viewer", "close"},
 			check: func(t *testing.T, f *fakeStore, _ string) {
-				if u := account(t, f, "bob"); !domain.SecretMatches(u.PasswordHash, "s3cret") || u.Role != domain.RoleViewer {
+				if u := account(t, f, "bob"); !domain.SecretMatches(u.PasswordHash, "s3cret-passw0rd") || u.Role != domain.RoleViewer {
 					t.Errorf("account = %+v", u)
 				}
 			},
 		},
 		"create, from stdin": {
-			args: []string{"admin", "create", "-role", "admin", "-password-stdin", "bob"}, input: "s3cret\n", stderr: `Admin account "bob" created.`,
+			args: []string{"admin", "create", "-role", "admin", "-password-stdin", "bob"}, input: "s3cret-passw0rd\n", stderr: `Admin account "bob" created.`,
 			check: func(t *testing.T, f *fakeStore, _ string) {
-				if u := account(t, f, "bob"); !domain.SecretMatches(u.PasswordHash, "s3cret") || u.Role != domain.RoleAdmin {
+				if u := account(t, f, "bob"); !domain.SecretMatches(u.PasswordHash, "s3cret-passw0rd") || u.Role != domain.RoleAdmin {
 					t.Errorf("account = %+v", u)
 				}
 			},
@@ -284,7 +284,7 @@ func TestAdminCommands(t *testing.T) {
 			},
 		},
 		"create, the two passwords differ": {
-			args: []string{"admin", "create", "bob", "-role", "admin"}, terminal: true, answers: []string{"s3cret", "s3cre"}, err: errOther,
+			args: []string{"admin", "create", "bob", "-role", "admin"}, terminal: true, answers: []string{"s3cret-passw0rd", "s3cret-passw0r"}, err: errOther,
 			calls: []string{},
 		},
 		"create, no role":             {args: []string{"admin", "create", "bob"}, err: errUsage, stderr: "missing -role: admin or viewer"},
@@ -304,13 +304,18 @@ func TestAdminCommands(t *testing.T) {
 		"create, a password after -=":          {args: []string{"admin", "create", "alice", "-=s3cret-pass"}, err: errUsage, stderr: "not printed", calls: []string{}},
 		"create, -role without its value":      {args: []string{"admin", "create", "alice", "-role"}, err: errUsage, stderr: "flag needs an argument: -role", calls: []string{}},
 		"create, its help":                     {args: []string{"admin", "create", "-h"}, stderr: "Usage of admin create", calls: []string{}},
-		"create, a name taken":                 {args: []string{"admin", "create", "alice", "-role", "admin", "-password-stdin"}, input: "s3cret", admins: alice(), err: errFailed, stderr: `Admin account "alice" already exists.`},
-		"create, a name refused":               {args: []string{"admin", "create", "bob ", "-role", "admin", "-password-stdin"}, input: "s3cret", err: errFailed, stderr: `username: "bob " starts or ends with a space`},
-		"update, the role of the last":         {args: []string{"admin", "update", "alice", "-role", "viewer"}, admins: alice(), err: errFailed, stderr: `Admin account "alice": the last admin account keeps the admin role.`},
+		// Q121: 12 characters at least, the password never printed.
+		"create, a password too short": {args: []string{"admin", "create", "bob", "-role", "admin", "-password-stdin"}, input: "s3cret-pass\n", err: errFailed,
+			stderr: `Admin account "bob": password: has 11 characters: 12 at least`, calls: []string{}},
+		"update, a password too short": {args: []string{"admin", "update", "alice", "-password-stdin"}, input: "s3cret-pass\n", admins: alice(), err: errFailed,
+			stderr: "has 11 characters: 12 at least", calls: []string{}},
+		"create, a name taken":         {args: []string{"admin", "create", "alice", "-role", "admin", "-password-stdin"}, input: "s3cret-passw0rd", admins: alice(), err: errFailed, stderr: `Admin account "alice" already exists.`},
+		"create, a name refused":       {args: []string{"admin", "create", "bob ", "-role", "admin", "-password-stdin"}, input: "s3cret-passw0rd", err: errFailed, stderr: `username: "bob " starts or ends with a space`},
+		"update, the role of the last": {args: []string{"admin", "update", "alice", "-role", "viewer"}, admins: alice(), err: errFailed, stderr: `Admin account "alice": the last admin account keeps the admin role.`},
 		"update, the password asked": {
-			args: []string{"admin", "update", "alice", "-password"}, terminal: true, answers: []string{"s3cret", "s3cret"}, admins: alice(), stderr: `Admin account "alice" updated.`,
+			args: []string{"admin", "update", "alice", "-password"}, terminal: true, answers: []string{"s3cret-passw0rd", "s3cret-passw0rd"}, admins: alice(), stderr: `Admin account "alice" updated.`,
 			check: func(t *testing.T, f *fakeStore, _ string) {
-				if u := account(t, f, "alice"); !domain.SecretMatches(u.PasswordHash, "s3cret") || u.Role != domain.RoleAdmin {
+				if u := account(t, f, "alice"); !domain.SecretMatches(u.PasswordHash, "s3cret-passw0rd") || u.Role != domain.RoleAdmin {
 					t.Errorf("account = %+v", u)
 				}
 			},
@@ -346,18 +351,18 @@ func TestBootstrapCreateAdmin(t *testing.T) {
 	alice := []store.AdminUser{{Username: "alice", PasswordHash: hash, Role: domain.RoleViewer}}
 	created := func(t *testing.T, f *fakeStore, _ string) {
 		i := slices.IndexFunc(f.admins, func(u store.AdminUser) bool { return u.Username == "alice" })
-		if i < 0 || !domain.SecretMatches(f.admins[i].PasswordHash, "s3cret") || f.admins[i].Role != domain.RoleAdmin {
+		if i < 0 || !domain.SecretMatches(f.admins[i].PasswordHash, "s3cret-passw0rd") || f.admins[i].Role != domain.RoleAdmin {
 			t.Errorf("accounts = %+v", f.admins)
 		}
 	}
 	for name, tt := range map[string]cliCase{
 		"created": {
-			args: []string{"bootstrap", "-create-admin", "alice", "-password-stdin"}, input: "s3cret\n",
+			args: []string{"bootstrap", "-create-admin", "alice", "-password-stdin"}, input: "s3cret-passw0rd\n",
 			stdout: "empty seed, empty database\n", stderr: `Admin account "alice" created.`,
 			calls: []string{"read admins", "bootstrap missing write", "create admin alice admin", "close"}, check: created,
 		},
 		"asked twice": {
-			args: []string{"bootstrap", "-create-admin", "alice"}, terminal: true, answers: []string{"s3cret", "s3cret"},
+			args: []string{"bootstrap", "-create-admin", "alice"}, terminal: true, answers: []string{"s3cret-passw0rd", "s3cret-passw0rd"},
 			stdout: "empty seed, empty database\n", stderr: `Admin account "alice" created.`, check: created,
 		},
 		"exists, nothing asked": {
@@ -391,7 +396,7 @@ func TestBootstrapCreateAdmin(t *testing.T) {
 	keepLoggers(t)
 	commandEnv(t)
 	f := &fakeStore{changes: someChanges}
-	_, errOut, err := runCLI(t, f, true, "n\n", []string{"s3cret", "s3cret"}, "bootstrap", "-force", "-create-admin", "alice")
+	_, errOut, err := runCLI(t, f, true, "n\n", []string{"s3cret-passw0rd", "s3cret-passw0rd"}, "bootstrap", "-force", "-create-admin", "alice")
 	if err != nil || len(f.admins) != 0 || !strings.Contains(errOut, "Nothing written.") {
 		t.Errorf("refused: %v, accounts %+v\n%s", err, f.admins, errOut)
 	}

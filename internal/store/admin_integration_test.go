@@ -233,3 +233,60 @@ func TestRehashAPIClient(t *testing.T) {
 		t.Error("a secret in clear taken for a hash")
 	}
 }
+
+// Q120: the sessions of an account stop at its logout, and when its password
+// or its role changes; not when its subject at the identity provider does.
+func TestAdminSessions(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	for _, u := range []AdminUser{{Username: "alice", Role: domain.RoleAdmin}, {Username: "bob", Role: domain.RoleAdmin}} {
+		if err := p.CreateAdmin(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func() AdminUser {
+		t.Helper()
+		u, ok, err := p.Admin(ctx, "alice")
+		if err != nil || !ok {
+			t.Fatalf("alice: %v %v", ok, err)
+		}
+		return u
+	}
+	if u := read(); !u.SessionsValidAfter.IsZero() {
+		t.Errorf("a new account: %v", u.SessionsValidAfter)
+	}
+	before := time.Now()
+	if err := p.EndSessions(ctx, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	ended := read().SessionsValidAfter
+	if ended.Before(before.Add(-time.Second)) || ended.After(time.Now().Add(time.Second)) {
+		t.Errorf("logout: %v", ended)
+	}
+	if err := p.UpdateAdmin(ctx, "alice", func(u *AdminUser) error { u.OIDCSub = "sub-1"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := read().SessionsValidAfter; !got.Equal(ended) {
+		t.Errorf("a subject changed: %v, was %v", got, ended)
+	}
+	hash, _ := domain.HashSecret("correct horse battery")
+	for name, change := range map[string]func(*AdminUser) error{
+		"a password": func(u *AdminUser) error { u.PasswordHash = hash; return nil },
+		"a role":     func(u *AdminUser) error { u.Role = domain.RoleViewer; return nil },
+	} {
+		was := read().SessionsValidAfter
+		time.Sleep(5 * time.Millisecond)
+		if err := p.UpdateAdmin(ctx, "alice", change); err != nil {
+			t.Fatal(err)
+		}
+		if got := read().SessionsValidAfter; !got.After(was) {
+			t.Errorf("%s changed: %v, was %v", name, got, was)
+		}
+	}
+	if _, ok, err := p.Admin(ctx, "nobody"); ok || err != nil {
+		t.Errorf("nobody: %v %v", ok, err)
+	}
+	if err := p.EndSessions(ctx, "nobody"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the logout of nobody: %v", err)
+	}
+}

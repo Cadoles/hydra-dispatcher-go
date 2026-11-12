@@ -86,7 +86,7 @@ func exec(t *testing.T, p *Postgres, query string, args ...any) {
 }
 
 // allMigrations are the migrations of an empty database.
-var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql", "00004_admin_writes.sql"}
+var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql", "00004_admin_writes.sql", "00005_admin_sessions.sql"}
 
 // What the code read of the options of an app becomes its receive_claims, and
 // comes back with a rollback: an app restricted before stays restricted.

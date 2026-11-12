@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // terminalAnswers makes the terminal answer each of answers in turn, or read
@@ -100,5 +101,29 @@ func TestSecretInput(t *testing.T) {
 	}
 	if err := in.check(fs); !errors.Is(err, errUsage) || !in.given() {
 		t.Errorf("both flags: %v", err)
+	}
+}
+
+// Ctrl-C at a question answers no at once, without Enter (revue R39).
+func TestConfirmInterrupted(t *testing.T) {
+	signals := make(chan os.Signal, 1)
+	old := confirmSignals
+	confirmSignals = func() (<-chan os.Signal, func()) { return signals, func() {} }
+	t.Cleanup(func() { confirmSignals = old })
+	never, _ := io.Pipe() // a terminal where nobody types
+	done := make(chan bool, 1)
+	var out strings.Builder
+	go func() { done <- confirm(never, &out, "Delete it?") }()
+	signals <- os.Interrupt
+	select {
+	case yes := <-done:
+		if yes {
+			t.Error("an interrupt taken for yes")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the question waits for Enter")
+	}
+	if !strings.HasPrefix(out.String(), "Delete it? [y/N] ") {
+		t.Errorf("asked %q", out.String())
 	}
 }

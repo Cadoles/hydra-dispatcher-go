@@ -51,6 +51,12 @@
       "matchDepNames": ["@scalar/api-reference"],
       "groupName": null,
       "automerge": false
+    },
+    {
+      "description": "Pico CSS of web/pico/fetch.sh, the sheet of the admin UI: its integrity and its sha256 by hand, the sheet fetched again and committed, the admin UI read in a browser for a violation of its CSP (web/pico/README.md); the CI fails until the file is there.",
+      "matchDepNames": ["@picocss/pico"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "customManagers": [
@@ -72,6 +78,12 @@
       "description": "Scalar's API reference of web/scalar/fetch.sh, a version a comment names.",
       "managerFilePatterns": ["/(^|/)web/scalar/fetch\\.sh$/"],
       "matchStrings": ["SCALAR_VERSION=(?<currentValue>[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
+    },
+    {
+      "customType": "regex",
+      "description": "Pico CSS of web/pico/fetch.sh, a version a comment names.",
+      "managerFilePatterns": ["/(^|/)web/pico/fetch\\.sh$/"],
+      "matchStrings": ["PICO_VERSION=(?<currentValue>[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
     }
   ]
 }

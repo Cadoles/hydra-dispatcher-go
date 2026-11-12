@@ -10,18 +10,12 @@ package remember
 import (
 	"bytes"
 	"compress/flate"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
 )
 
 // The bounds of the doc, in bytes: the JSON is deflated beyond deflateAbove,
@@ -54,42 +48,22 @@ var ErrTooLarge = errors.New("remember: the memory of the skip is beyond 3.8 KB"
 
 // Codec seals with the first key and opens with any of them.
 type Codec struct {
-	keys []key
+	keys *seal.Keys
 }
 
-type key struct {
-	id   string
-	aead cipher.AEAD
-}
+// cookie names the cookie in the data associated with its sealed value: the
+// keys of secrets.cookie_key seal dispatcher_admin too (internal/seal).
+const cookie = "dispatcher_remember"
 
 // New returns the codec of secrets.cookie_key, then the keys of
 // secrets.cookie_keys_previous, 32 bytes each.
 func New(active []byte, previous ...[]byte) (*Codec, error) {
-	c := &Codec{}
-	for _, k := range append([][]byte{active}, previous...) {
-		block, err := aes.NewCipher(k)
-		if err != nil || len(k) != 32 {
-			return nil, errors.New("remember: secrets.cookie_key and its previous keys are 32 bytes")
-		}
-		aead, err := cipher.NewGCM(block)
-		if err != nil {
-			return nil, err
-		}
-		c.keys = append(c.keys, key{id: keyID(k), aead: aead})
+	keys, err := seal.New(active, previous...)
+	if err != nil {
+		return nil, errors.New("remember: secrets.cookie_key and its previous keys are 32 bytes")
 	}
-	return c, nil
+	return &Codec{keys: keys}, nil
 }
-
-// keyID is the first 8 hexadecimal characters of the key's SHA-256, as for
-// secrets.encryption_key (Rotation des clés).
-func keyID(k []byte) string {
-	sum := sha256.Sum256(k)
-	return hex.EncodeToString(sum[:4])
-}
-
-// aad binds a sealed value to this cookie and its key: secrets.cookie_key
-// seals dispatcher_admin too.
-func aad(id string) []byte { return []byte("dispatcher_remember." + format + "." + id) }
 
 // Seal returns the cookie value of r; ErrTooLarge beyond 3.8 KB.
 func (c *Codec) Seal(r *flow.Remembered) (string, error) {
@@ -106,10 +80,7 @@ func (c *Codec) Seal(r *flow.Remembered) (string, error) {
 		_ = w.Close()
 		plain = b.Bytes()
 	}
-	k := c.keys[0]
-	nonce := make([]byte, k.aead.NonceSize())
-	_, _ = rand.Read(nonce) // crypto/rand never fails
-	sealed := format + "." + k.id + "." + base64.RawURLEncoding.EncodeToString(k.aead.Seal(nonce, nonce, plain, aad(k.id)))
+	sealed := c.keys.Seal(cookie, format, plain)
 	if len(sealed) > maxSealed {
 		return "", ErrTooLarge
 	}
@@ -133,24 +104,11 @@ func (c *Codec) Open(sealed string) flow.Memory {
 var errUnreadable = errors.New("remember: unreadable")
 
 func (c *Codec) open(sealed string) (*flow.Remembered, error) {
-	f, rest, _ := strings.Cut(sealed, ".")
-	id, data, _ := strings.Cut(rest, ".")
-	raw, err := base64.RawURLEncoding.DecodeString(data)
-	if f != format || err != nil {
+	plain, ok := c.keys.Open(cookie, format, sealed)
+	if !ok {
 		return nil, errUnreadable
 	}
-	for _, k := range c.keys {
-		n := k.aead.NonceSize()
-		if k.id != id || len(raw) < n {
-			continue
-		}
-		plain, err := k.aead.Open(nil, raw[:n], raw[n:], aad(k.id))
-		if err != nil || len(plain) == 0 {
-			continue
-		}
-		return decode(plain)
-	}
-	return nil, errUnreadable
+	return decode(plain)
 }
 
 func decode(plain []byte) (*flow.Remembered, error) {

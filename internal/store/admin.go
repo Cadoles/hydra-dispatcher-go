@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
@@ -68,7 +69,7 @@ func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func
 		if err != nil || !found {
 			return cmpErr(err, ErrNotFound)
 		}
-		was := u.Role
+		was := u
 		if err := change(&u); err != nil {
 			return err
 		}
@@ -78,7 +79,7 @@ func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func
 		if v := domain.Collect(u.Check); v != nil {
 			return v
 		}
-		if was == domain.RoleAdmin && u.Role != domain.RoleAdmin {
+		if was.Role == domain.RoleAdmin && u.Role != domain.RoleAdmin {
 			var others int
 			err := tx.QueryRowContext(ctx, `SELECT count(*) FROM admin_user WHERE role = $1 AND username <> $2`, domain.RoleAdmin, username).Scan(&others)
 			if err != nil {
@@ -88,8 +89,12 @@ func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func
 				return ErrLastAdmin
 			}
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE admin_user SET password_hash = NULLIF($2, ''), oidc_sub = NULLIF($3, ''), role = $4
-			WHERE username = $1`, username, u.PasswordHash, u.OIDCSub, u.Role)
+		// A password or a role changed stops the sessions of the account
+		// (Q120): a stolen session does not outlive the change.
+		end := u.PasswordHash != was.PasswordHash || u.Role != was.Role
+		_, err = tx.ExecContext(ctx, `UPDATE admin_user SET password_hash = NULLIF($2, ''), oidc_sub = NULLIF($3, ''), role = $4,
+			sessions_valid_after = CASE WHEN $5 THEN $6 ELSE sessions_valid_after END
+			WHERE username = $1`, username, u.PasswordHash, u.OIDCSub, u.Role, end, time.Now())
 		if err != nil {
 			return fmt.Errorf("admin account %s: %w", username, err)
 		}
@@ -102,6 +107,27 @@ func (p *Postgres) Admins(ctx context.Context) ([]AdminUser, error) {
 	return readAdmins(ctx, p.db, "")
 }
 
+// Admin reads the account username: the admin UI reads it at each request,
+// so that a role taken or an account deleted takes effect at once (Q120).
+func (p *Postgres) Admin(ctx context.Context, username string) (AdminUser, bool, error) {
+	return findAdmin(ctx, p.db, username)
+}
+
+// EndSessions stops the sessions of the account username at once, those of
+// every browser: its logout (Q120). ErrNotFound when there is none.
+func (p *Postgres) EndSessions(ctx context.Context, username string) error {
+	return p.adminWrite(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `UPDATE admin_user SET sessions_valid_after = $2 WHERE username = $1`, username, time.Now())
+		if err != nil {
+			return fmt.Errorf("admin account %s: %w", username, err)
+		}
+		if n, err := r.RowsAffected(); err != nil || n == 0 {
+			return cmpErr(err, ErrNotFound)
+		}
+		return nil
+	})
+}
+
 func findAdmin(ctx context.Context, q querier, username string) (AdminUser, bool, error) {
 	users, err := readAdmins(ctx, q, username)
 	if err != nil || len(users) == 0 {
@@ -112,7 +138,7 @@ func findAdmin(ctx context.Context, q querier, username string) (AdminUser, bool
 
 // readAdmins reads the accounts, the one named username when it is not "".
 func readAdmins(ctx context.Context, q querier, username string) ([]AdminUser, error) {
-	rows, err := q.QueryContext(ctx, `SELECT username, coalesce(password_hash, ''), coalesce(oidc_sub, ''), role, created_at
+	rows, err := q.QueryContext(ctx, `SELECT username, coalesce(password_hash, ''), coalesce(oidc_sub, ''), role, created_at, sessions_valid_after
 		FROM admin_user WHERE $1 = '' OR username = $1 ORDER BY username COLLATE "C"`, username)
 	if err != nil {
 		return nil, fmt.Errorf("read admin accounts: %w", err)
@@ -121,9 +147,11 @@ func readAdmins(ctx context.Context, q querier, username string) ([]AdminUser, e
 	var users []AdminUser
 	for rows.Next() {
 		var u AdminUser
-		if err := rows.Scan(&u.Username, &u.PasswordHash, &u.OIDCSub, &u.Role, &u.CreatedAt); err != nil {
+		var ended sql.NullTime
+		if err := rows.Scan(&u.Username, &u.PasswordHash, &u.OIDCSub, &u.Role, &u.CreatedAt, &ended); err != nil {
 			return nil, fmt.Errorf("read admin accounts: %w", err)
 		}
+		u.SessionsValidAfter = ended.Time
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {

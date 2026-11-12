@@ -16,3 +16,9 @@ var FS embed.FS
 //
 //go:embed scalar/standalone.js scalar/init.js
 var Scalar embed.FS
+
+// Pico holds pico/: the sheet of the admin UI, Pico CSS without classes,
+// pinned by fetch.sh (Q119).
+//
+//go:embed pico/pico.classless.min.css
+var Pico embed.FS

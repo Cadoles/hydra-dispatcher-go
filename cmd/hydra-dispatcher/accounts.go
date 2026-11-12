@@ -404,6 +404,17 @@ func adminAccounts(ctx context.Context, args []string) error {
 	return subcommand(ctx, "admin", adminCommands, args)
 }
 
+// checkPassword refuses a new password shorter than 12 characters (Q121),
+// without printing it.
+func checkPassword(password, what string) error {
+	// The slice itself, not an error made of it: an empty one in an error is
+	// not nil, and would refuse in silence.
+	if v := domain.Collect(func(fail domain.Fail) { domain.CheckPassword(fail, password) }); v != nil {
+		return refused(v, what)
+	}
+	return nil
+}
+
 func checkRole(fs *flag.FlagSet, role string) error {
 	if role != domain.RoleAdmin && role != domain.RoleViewer {
 		fmt.Fprintf(fs.Output(), "-role %q: admin or viewer\n", role)
@@ -435,6 +446,10 @@ func adminCreate(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	what := fmt.Sprintf("Admin account %q", username)
+	if err := checkPassword(value, what); err != nil {
+		return err
+	}
 	hash, err := domain.HashSecret(value)
 	if err != nil {
 		return err
@@ -444,7 +459,6 @@ func adminCreate(ctx context.Context, args []string) error {
 		return err
 	}
 	defer c.close()
-	what := fmt.Sprintf("Admin account %q", username)
 	if err := refused(c.db.CreateAdmin(ctx, store.AdminUser{Username: username, PasswordHash: hash, Role: *role}), what); err != nil {
 		return err
 	}
@@ -486,6 +500,9 @@ func adminUpdate(ctx context.Context, args []string) error {
 	if *ask || password.given() {
 		value, err := password.read(true)
 		if err != nil {
+			return err
+		}
+		if err := checkPassword(value, fmt.Sprintf("Admin account %q", username)); err != nil {
 			return err
 		}
 		if hash, err = domain.HashSecret(value); err != nil {

@@ -128,13 +128,13 @@ func TestCLIOnPostgres(t *testing.T) {
 	}
 
 	// Accounts.
-	must(nil, "s3cret\n", "admin", "create", "alice", "-role", "admin", "-password-stdin")
+	must(nil, "s3cret-passw0rd\n", "admin", "create", "alice", "-role", "admin", "-password-stdin")
 	hash, role := row(`SELECT password_hash, role FROM admin_user WHERE username = 'alice'`)
-	if !domain.SecretMatches(hash, "s3cret") || role != "admin" {
+	if !domain.SecretMatches(hash, "s3cret-passw0rd") || role != "admin" {
 		t.Errorf("account created: role %q", role)
 	}
 	must(errFailed, "", "admin", "update", "alice", "-role", "viewer")
-	_, errOut, err := onPostgres(t, "b0b-s3cret\n", "bootstrap", "-create-admin", "carol", "-password-stdin")
+	_, errOut, err := onPostgres(t, "b0b-s3cret-passw0rd\n", "bootstrap", "-create-admin", "carol", "-password-stdin")
 	if err != nil || !strings.Contains(errOut, `Admin account "carol" created.`) {
 		t.Fatalf("bootstrap: %v\n%s", err, errOut)
 	}

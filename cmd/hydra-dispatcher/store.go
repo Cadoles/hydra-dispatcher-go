@@ -9,9 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -262,6 +264,9 @@ func prepareAdmin(ctx context.Context, db configStore, username string, password
 	if err != nil {
 		return nil, err
 	}
+	if err := checkPassword(value, fmt.Sprintf("Admin account %q", username)); err != nil {
+		return nil, err
+	}
 	if a.hash, err = domain.HashSecret(value); err != nil {
 		return nil, err
 	}
@@ -455,13 +460,35 @@ var (
 	stdinIsTerminal           = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 )
 
-// confirm asks question on w and reads the answer from r: yes or y.
+// confirmSignals gives what interrupts the question of confirm, and how to
+// stop listening; the tests replace it.
+var confirmSignals = func() (<-chan os.Signal, func()) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	return c, func() { signal.Stop(c) }
+}
+
+// confirm asks question on w and reads the answer from r: yes or y. Ctrl-C
+// answers no at once: main catches SIGINT for its context, and the question
+// waited for Enter (revue R39).
 func confirm(r io.Reader, w io.Writer, question string) bool {
 	fmt.Fprintf(w, "%s [y/N] ", question)
-	answer, _ := bufio.NewReader(r).ReadString('\n')
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
-		return true
+	interrupt, stop := confirmSignals()
+	defer stop()
+	answer := make(chan string, 1)
+	go func() {
+		a, _ := bufio.NewReader(r).ReadString('\n')
+		answer <- a
+	}()
+	select {
+	case a := <-answer:
+		switch strings.ToLower(strings.TrimSpace(a)) {
+		case "y", "yes":
+			return true
+		}
+		return false
+	case <-interrupt:
+		fmt.Fprintln(w)
+		return false
 	}
-	return false
 }

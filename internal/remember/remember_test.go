@@ -2,7 +2,6 @@ package remember
 
 import (
 	"bytes"
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +11,7 @@ import (
 	"testing"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
 )
 
 var (
@@ -139,9 +139,9 @@ func TestOpenFails(t *testing.T) {
 		{"MEM-2, a format unknown", "3" + one[1:], flow.SkipUnreadable},
 		// The first half of a value split in two, before revue R20.
 		{"MEM-2, a first part of former times", "2." + one[:len(one)/2], flow.SkipUnreadable},
-		{"MEM-2, a key unknown", strings.Replace(one, keyID(activeKey), "00000000", 1), flow.SkipUnreadable},
-		{"MEM-2, not base64url", "1." + keyID(activeKey) + ".!!!", flow.SkipUnreadable},
-		{"MEM-2, shorter than a nonce", "1." + keyID(activeKey) + ".AAAA", flow.SkipUnreadable},
+		{"MEM-2, a key unknown", strings.Replace(one, seal.KeyID(activeKey), "00000000", 1), flow.SkipUnreadable},
+		{"MEM-2, not base64url", "1." + seal.KeyID(activeKey) + ".!!!", flow.SkipUnreadable},
+		{"MEM-2, shorter than a nonce", "1." + seal.KeyID(activeKey) + ".AAAA", flow.SkipUnreadable},
 		{"MEM-2, garbage", "garbage", flow.SkipUnreadable},
 		{"MEM-2, sealed by a key the dispatcher no longer has", onlyOld, flow.SkipUnreadable},
 	} {
@@ -170,7 +170,7 @@ func TestRotation(t *testing.T) {
 		t.Fatalf("a cookie of the previous key: %+v", got)
 	}
 	again, _ := after.Seal(remembered(64, false))
-	if !strings.HasPrefix(again, "1."+keyID(activeKey)+".") {
+	if !strings.HasPrefix(again, "1."+seal.KeyID(activeKey)+".") {
 		t.Errorf("sealed by %s", again[:11])
 	}
 }
@@ -179,17 +179,15 @@ func TestRotation(t *testing.T) {
 // another use does not open here.
 func TestOtherUse(t *testing.T) {
 	c := codec(t, activeKey)
-	k := c.keys[0]
-	nonce := make([]byte, k.aead.NonceSize())
+	keys, err := seal.New(activeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	data, _ := json.Marshal(remembered(64, false))
-	sealed := sealWith(k.aead, nonce, append([]byte{plainJSON}, data...), []byte("dispatcher_admin"))
-	if got := c.Open("1." + k.id + "." + sealed); got.Reason != flow.SkipUnreadable {
+	sealed := keys.Seal("dispatcher_admin", format, append([]byte{plainJSON}, data...))
+	if got := c.Open(sealed); got.Reason != flow.SkipUnreadable {
 		t.Errorf("Open = %+v, want unreadable", got)
 	}
-}
-
-func sealWith(aead cipher.AEAD, nonce, plain, ad []byte) string {
-	return base64.RawURLEncoding.EncodeToString(aead.Seal(nonce, nonce, plain, ad))
 }
 
 func TestNewKeys(t *testing.T) {

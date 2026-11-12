@@ -293,6 +293,21 @@ type AdminUser struct {
 	OIDCSub   string
 	Role      string
 	CreatedAt time.Time
+	// SessionsValidAfter is when its sessions stopped last, zero for never: a
+	// session opened before is refused (Q120).
+	SessionsValidAfter time.Time
+}
+
+// MinPasswordLength is the shortest password of an admin account, in
+// characters, without a rule of composition (Q121).
+const MinPasswordLength = 12
+
+// CheckPassword checks a new password of an admin account: the hashes taken
+// over from Symfony are not checked, they are no longer passwords.
+func CheckPassword(fail Fail, password string) {
+	if n := utf8.RuneCountInString(password); n < MinPasswordLength {
+		fail("password", "has %d characters: %d at least", n, MinPasswordLength)
+	}
 }
 
 // maxUsername and maxOIDCSub are the lengths of admin_user.
