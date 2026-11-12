@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -16,12 +17,13 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 )
 
-// fakeHydra is the admin API of Hydra for the clients, in memory: it applies
-// the JSON Patch of a modification to the members of a client, and keeps
-// the rest as it is.
+// fakeHydra is the admin API of Hydra for the clients, in memory: it keeps
+// the members of a client as JSON, as written, numbers included, and applies
+// the JSON Patch of a modification to them as Hydra does: decoded into the
+// client it holds, null and remove leave a member as it was (R43).
 type fakeHydra struct {
 	mu      sync.Mutex
-	clients map[string]map[string]any
+	clients map[string]map[string]json.RawMessage
 	order   []string
 	patches [][]hydra.PatchOp
 	n       int
@@ -29,22 +31,73 @@ type fakeHydra struct {
 	fail, failPatch error
 }
 
-func newFakeHydra() *fakeHydra { return &fakeHydra{clients: map[string]map[string]any{}} }
+func newFakeHydra() *fakeHydra { return &fakeHydra{clients: map[string]map[string]json.RawMessage{}} }
 
+func rawOf(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// put keeps the client c, each member as JSON.
 func (f *fakeHydra) put(c map[string]any) {
+	m := map[string]json.RawMessage{}
+	for k, v := range c {
+		m[k] = rawOf(v)
+	}
+	f.putRaw(m)
+}
+
+// putJSON keeps a client as Hydra writes it, its members as written.
+func (f *fakeHydra) putJSON(doc string) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(doc), &m); err != nil {
+		panic(err)
+	}
+	f.putRaw(m)
+}
+
+func (f *fakeHydra) putRaw(m map[string]json.RawMessage) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	id := c["client_id"].(string)
+	var id string
+	_ = json.Unmarshal(m["client_id"], &id)
 	if _, ok := f.clients[id]; !ok {
 		f.order = append(f.order, id)
 	}
-	f.clients[id] = c
+	f.clients[id] = m
 }
 
+// get is the client id as Hydra holds it, its numbers as json.Number; nil
+// for none.
 func (f *fakeHydra) get(id string) map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.clients[id]
+	c, ok := f.clients[id]
+	if !ok {
+		return nil
+	}
+	d := json.NewDecoder(bytes.NewReader(rawOf(c)))
+	d.UseNumber()
+	var m map[string]any
+	_ = d.Decode(&m)
+	return m
+}
+
+// member is a member of the client id as Hydra writes it, "" when absent.
+func (f *fakeHydra) member(id, name string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return string(f.clients[id][name])
+}
+
+// set changes a member of the client id.
+func (f *fakeHydra) set(id, name string, v any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clients[id][name] = rawOf(v)
 }
 
 func notFound() error {
@@ -59,15 +112,14 @@ func (f *fakeHydra) Clients(_ context.Context, p hydra.ClientsPage) (hydra.Clien
 	}
 	var ids []string
 	for _, id := range f.order {
-		if p.Name == "" || f.clients[id]["client_name"] == p.Name {
+		if p.Name == "" || string(f.clients[id]["client_name"]) == string(rawOf(p.Name)) {
 			ids = append(ids, id)
 		}
 	}
 	from, _ := strconv.Atoi(p.Token)
 	l := hydra.ClientList{Total: len(ids)}
 	for i := from; i < len(ids) && i < from+p.Size; i++ {
-		b, _ := json.Marshal(f.clients[ids[i]])
-		l.Clients = append(l.Clients, b)
+		l.Clients = append(l.Clients, rawOf(f.clients[ids[i]]))
 	}
 	if from+p.Size < len(ids) {
 		l.Next = strconv.Itoa(from + p.Size)
@@ -85,7 +137,7 @@ func (f *fakeHydra) OAuthClient(_ context.Context, id string) (json.RawMessage, 
 	if !ok {
 		return nil, notFound()
 	}
-	return json.Marshal(c)
+	return rawOf(c), nil
 }
 
 func (f *fakeHydra) CreateClient(_ context.Context, body map[string]any) (json.RawMessage, error) {
@@ -98,7 +150,7 @@ func (f *fakeHydra) CreateClient(_ context.Context, body map[string]any) (json.R
 		c[k] = v
 	}
 	f.put(c)
-	return json.Marshal(c)
+	return f.OAuthClient(context.Background(), id)
 }
 
 func (f *fakeHydra) PatchClient(_ context.Context, id string, ops []hydra.PatchOp) (json.RawMessage, error) {
@@ -112,11 +164,15 @@ func (f *fakeHydra) PatchClient(_ context.Context, id string, ops []hydra.PatchO
 		return nil, notFound()
 	}
 	for _, op := range ops {
-		c[strings.TrimPrefix(op.Path, "/")] = normalize(op.Value)
+		v := rawOf(op.Value)
+		if op.Op == "remove" || string(v) == "null" {
+			continue // Hydra keeps it (R43)
+		}
+		c[strings.TrimPrefix(op.Path, "/")] = v
 	}
-	c["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	c["updated_at"] = rawOf(time.Now().UTC().Format(time.RFC3339Nano))
 	f.patches = append(f.patches, ops)
-	return json.Marshal(c)
+	return rawOf(c), nil
 }
 
 func (f *fakeHydra) DeleteClient(_ context.Context, id string) error {
@@ -233,8 +289,8 @@ func TestHydraClientCreate(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/hydra-clients/gen-1?done=created" {
 		t.Fatalf("by its keys: %d\n%s", w.Code, w.Body)
 	}
-	if c := h.get("gen-1"); c["client_secret"] != nil || !slices.Equal(c["metadata"].(map[string]any)["dispatcher"].(map[string]any)["flows"].([]string), []string{"simple"}) {
-		t.Errorf("gen-1: %v", c)
+	if h.member("gen-1", "client_secret") != "" || h.member("gen-1", "metadata") != `{"dispatcher":{"flows":["simple"]}}` {
+		t.Errorf("gen-1: %v", h.get("gen-1"))
 	}
 	values.Set("token_endpoint_auth_method", "client_secret_basic")
 	w = b.do(http.MethodPost, "/admin/hydra-clients", values)
@@ -296,7 +352,7 @@ func TestHydraClientUpdate(t *testing.T) {
 	}
 	// Changed meanwhile: refused once.
 	form = hydraValues(b, "web")
-	h.get("web")["updated_at"] = "2026-11-12T11:00:00Z"
+	h.set("web", "updated_at", "2026-11-12T11:00:00Z")
 	form.Set("client_name", "Mine")
 	if w := b.do(http.MethodPost, "/admin/hydra-clients/web", form); w.Code != http.StatusConflict || h.get("web")["client_name"] != "The web" {
 		t.Errorf("meanwhile: %d", w.Code)

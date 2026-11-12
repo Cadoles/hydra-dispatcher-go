@@ -65,16 +65,17 @@ Skips the consent screen
 </label>
 <fieldset>
 <legend>Flows offered</legend>
-<small>None checked: every flow.</small>
+<small>None checked: every flow.{{if .Form.NoFlow}} <mark>Its metadata list no flow: Hydra's logins by it are refused until one is checked.</mark>{{end}}</small>
 {{- range .Form.FlowBoxes}}
 <label><input type="checkbox" name="flows" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Name}}</label>
 {{- end}}
+{{template "errors" .Errors.For "flows"}}
 </fieldset>
 <details>
 <summary>Lifespans of the tokens, logout, audience, CORS, logo</summary>
 {{- range $l := (lifespans)}}
 <label>{{$l}}
-<input name="{{$l}}" value="{{index $.Data.Form.Lifespans $l}}" placeholder="Hydra's default"{{if $.Data.Errors.For $l}} aria-invalid="true"{{end}}>
+<input name="{{$l}}" value="{{index $.Data.Form.Lifespans $l}}" placeholder="Hydra's default, until one is given"{{if $.Data.Errors.For $l}} aria-invalid="true"{{end}}>
 {{template "errors" $.Data.Errors.For $l}}
 </label>
 {{- end}}

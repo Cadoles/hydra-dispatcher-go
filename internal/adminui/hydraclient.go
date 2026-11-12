@@ -1,7 +1,9 @@
 package adminui
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"slices"
@@ -35,12 +37,15 @@ type hydraClient struct {
 	SkipConsent, HasJWKS                          bool
 	// Lifespans are by their members, "" for Hydra's default.
 	Lifespans map[string]string
-	// Flows are metadata.dispatcher.flows: the flows the client offers, none
-	// for every flow.
-	Flows []string
-	// Metadata is its metadata whole, which a modification keeps but for
-	// dispatcher.flows and dispatcher.secret_rotated_at.
-	Metadata        map[string]any
+	// Flows are the strings of metadata.dispatcher.flows: the flows the
+	// client offers, none for every flow; NoFlow tells an empty list, which
+	// offers none.
+	Flows  []string
+	NoFlow bool
+	// Metadata are its metadata as Hydra holds them, which a write rewrites
+	// only to change dispatcher.flows or dispatcher.secret_rotated_at, their
+	// numbers as written (R43).
+	Metadata        json.RawMessage
 	CreatedAt       time.Time
 	UpdatedAt       string
 	SecretRotatedAt time.Time
@@ -62,7 +67,7 @@ func parseClient(raw json.RawMessage) (hydraClient, error) {
 		Audience       []string        `json:"audience"`
 		CORS           []string        `json:"allowed_cors_origins"`
 		SkipConsent    bool            `json:"skip_consent"`
-		Metadata       map[string]any  `json:"metadata"`
+		Metadata       json.RawMessage `json:"metadata"`
 		CreatedAt      time.Time       `json:"created_at"`
 		UpdatedAt      string          `json:"updated_at"`
 	}
@@ -75,16 +80,20 @@ func parseClient(raw json.RawMessage) (hydraClient, error) {
 		RedirectURIs: doc.RedirectURIs, PostLogoutURIs: doc.PostLogoutURIs, GrantTypes: doc.GrantTypes, ResponseTypes: doc.ResponseTypes,
 		Audience: doc.Audience, CORS: doc.CORS, SkipConsent: doc.SkipConsent, Metadata: doc.Metadata, CreatedAt: doc.CreatedAt,
 		UpdatedAt: doc.UpdatedAt, Lifespans: map[string]string{}}
-	if keys := strings.TrimSpace(string(doc.JWKS)); keys != "" && keys != "null" && keys != "{}" {
-		c.HasJWKS = true
+	// Keys: one at least, Hydra taking {"keys": []} (R43).
+	var jwks struct {
+		Keys []json.RawMessage `json:"keys"`
 	}
+	c.HasJWKS = json.Unmarshal(doc.JWKS, &jwks) == nil && len(jwks.Keys) > 0
 	for _, l := range lifespans {
 		var v string
 		_ = json.Unmarshal(members[l], &v) // a string, or null for the default
 		c.Lifespans[l] = v
 	}
-	if d, ok := doc.Metadata["dispatcher"].(map[string]any); ok {
+	m, _ := metadataOf(doc.Metadata)
+	if d, ok := m["dispatcher"].(map[string]any); ok {
 		if flows, ok := d["flows"].([]any); ok {
+			c.NoFlow = len(flows) == 0
 			for _, f := range flows {
 				if s, ok := f.(string); ok {
 					c.Flows = append(c.Flows, s)
@@ -96,6 +105,68 @@ func parseClient(raw json.RawMessage) (hydraClient, error) {
 		}
 	}
 	return c, nil
+}
+
+// metadataOf decodes metadata as Hydra holds them, their numbers as written
+// (json.Number): an object, nil for none (absent or null), false for another
+// JSON value, which Hydra takes.
+func metadataOf(raw json.RawMessage) (map[string]any, bool) {
+	t := bytes.TrimSpace(raw)
+	if len(t) == 0 || string(t) == "null" {
+		return nil, true
+	}
+	d := json.NewDecoder(bytes.NewReader(t))
+	d.UseNumber()
+	var m map[string]any
+	if d.Decode(&m) != nil {
+		return nil, false
+	}
+	return m, true
+}
+
+// errMetadata refuses to write the flows of a client whose metadata, or
+// their member dispatcher, are not an object: written, they would be lost.
+var errMetadata = errors.New("its metadata, or their member dispatcher, are not a JSON object: the flows cannot be written without losing them; fix them by Hydra's admin API")
+
+// metadataWith are the metadata raw with, when setFlows, the flows (none: the
+// member removed, every flow) and, at a secret set, its time: the rest as
+// Hydra holds it, its numbers as written (R43).
+func metadataWith(raw json.RawMessage, flows []string, setFlows bool, rotated time.Time) (map[string]any, error) {
+	m, ok := metadataOf(raw)
+	if !ok {
+		return nil, errMetadata
+	}
+	if m == nil {
+		m = map[string]any{}
+	}
+	d := map[string]any{}
+	if v, held := m["dispatcher"]; held {
+		if d, ok = v.(map[string]any); !ok {
+			return nil, errMetadata
+		}
+	}
+	if setFlows {
+		delete(d, "flows")
+		if len(flows) > 0 {
+			d["flows"] = flows
+		}
+	}
+	if !rotated.IsZero() {
+		d["secret_rotated_at"] = rotated.UTC().Format(time.RFC3339)
+	}
+	delete(m, "dispatcher")
+	if len(d) > 0 {
+		m["dispatcher"] = d
+	}
+	return m, nil
+}
+
+// sameSet tells whether a and b hold the same strings, in any order.
+func sameSet(a, b []string) bool {
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(slices.Compact(x), slices.Compact(y))
 }
 
 // secretless tells whether the client has no secret: a public client, or

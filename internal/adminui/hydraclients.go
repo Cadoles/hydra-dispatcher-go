@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -94,20 +93,27 @@ func (ui *UI) hydraFormOf(c hydraClient) hydraForm {
 // form shows replaced, the rest kept.
 func readHydraForm(r *http.Request, c hydraClient) (hydraClient, fieldErrors) {
 	v := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
-	held := c.AuthMethod
+	heldMethod := c.AuthMethod
 	c.Name, c.Scope, c.AuthMethod, c.JWKSURI, c.LogoURI = v("client_name"), v("scope"), v("token_endpoint_auth_method"), v("jwks_uri"), v("logo_uri")
 	c.RedirectURIs, c.PostLogoutURIs = lines(r.PostFormValue("redirect_uris")), lines(r.PostFormValue("post_logout_redirect_uris"))
 	c.Audience, c.CORS = lines(r.PostFormValue("audience")), lines(r.PostFormValue("allowed_cors_origins"))
 	c.GrantTypes, c.ResponseTypes, c.Flows = r.PostForm["grant_types"], r.PostForm["response_types"], r.PostForm["flows"]
 	c.SkipConsent = r.PostFormValue("skip_consent") != ""
 	errs := fieldErrors{}
-	if !slices.Contains(authMethods, c.AuthMethod) && c.AuthMethod != held {
+	if !slices.Contains(authMethods, c.AuthMethod) && c.AuthMethod != heldMethod {
 		errs["token_endpoint_auth_method"] = append(errs["token_endpoint_auth_method"], "is not a method the form offers")
 	}
+	held := c.Lifespans
 	c.Lifespans = map[string]string{}
 	for _, l := range lifespans {
 		s := v(l)
-		if s != "" {
+		switch {
+		case s == "" && held[l] != "":
+			// Hydra decodes a patch into the client it holds: null and remove
+			// leave the lifespan as it was (R43).
+			errs[l] = append(errs[l], "is held by Hydra, which never empties it: give a duration")
+			s = held[l]
+		case s != "":
 			if d, err := time.ParseDuration(s); err != nil || d <= 0 {
 				errs[l] = append(errs[l], "is not a positive duration: 30m, 1h, 720h")
 				continue
@@ -135,36 +141,10 @@ func sameDuration(a, b string) bool {
 // list gives l, never nil: Hydra writes [] where the form gives none.
 func list(l []string) []string { return append([]string{}, l...) }
 
-// withMetadata is the metadata of c with its flows and, at a secret set, the
-// time of it: the other metadata kept.
-func withMetadata(c hydraClient, rotated time.Time) map[string]any {
-	m := map[string]any{}
-	for k, v := range c.Metadata {
-		m[k] = v
-	}
-	d := map[string]any{}
-	if old, ok := m["dispatcher"].(map[string]any); ok {
-		for k, v := range old {
-			d[k] = v
-		}
-	}
-	delete(d, "flows")
-	if len(c.Flows) > 0 {
-		d["flows"] = c.Flows
-	}
-	if !rotated.IsZero() {
-		d["secret_rotated_at"] = rotated.UTC().Format(time.RFC3339)
-	}
-	delete(m, "dispatcher")
-	if len(d) > 0 {
-		m["dispatcher"] = d
-	}
-	return m
-}
-
 // patchOf is the JSON Patch from the client was to the client now: its members
-// that change alone, and their names.
-func patchOf(was, now hydraClient) ([]hydra.PatchOp, []string) {
+// that change alone, and their names; the metadata only when the flows
+// checked change, the rest of them as Hydra holds it (R43).
+func patchOf(was, now hydraClient) ([]hydra.PatchOp, []string, error) {
 	var ops []hydra.PatchOp
 	var fields []string
 	set := func(member string, changed bool, value any) {
@@ -185,30 +165,20 @@ func patchOf(was, now hydraClient) ([]hydra.PatchOp, []string) {
 	set("jwks_uri", was.JWKSURI != now.JWKSURI, now.JWKSURI)
 	set("skip_consent", was.SkipConsent != now.SkipConsent, now.SkipConsent)
 	set("logo_uri", was.LogoURI != now.LogoURI, now.LogoURI)
+	// A lifespan Hydra holds is never emptied (readHydraForm): a change is a
+	// duration.
 	for _, l := range lifespans {
-		var value any // null: Hydra's default
-		if now.Lifespans[l] != "" {
-			value = now.Lifespans[l]
-		}
-		set(l, !sameDuration(was.Lifespans[l], now.Lifespans[l]), value)
+		set(l, !sameDuration(was.Lifespans[l], now.Lifespans[l]), now.Lifespans[l])
 	}
-	if m := withMetadata(now, time.Time{}); !reflect.DeepEqual(normalize(was.Metadata), normalize(m)) {
+	if !sameSet(was.Flows, now.Flows) {
+		m, err := metadataWith(was.Metadata, now.Flows, true, time.Time{})
+		if err != nil {
+			return nil, nil, err
+		}
 		ops = append(ops, hydra.PatchOp{Op: "add", Path: "/metadata", Value: m})
 		fields = append(fields, "metadata.dispatcher.flows")
 	}
-	return ops, fields
-}
-
-// normalize is v as JSON reads it back: the metadata of a form compared with
-// those of Hydra.
-func normalize(v any) any {
-	b, _ := json.Marshal(v)
-	var n any
-	_ = json.Unmarshal(b, &n)
-	if m, ok := n.(map[string]any); ok && len(m) == 0 {
-		return nil
-	}
-	return n
+	return ops, fields, nil
 }
 
 type hydraRow struct {
@@ -279,7 +249,14 @@ func (ui *UI) hydraFailed(w http.ResponseWriter, r *http.Request, s *current, er
 		again(http.StatusUnprocessableEntity, fieldErrors{"": {"Hydra refuses it: " + httpx.BoundedCause(why)}})
 	default:
 		if ui.o.Logger != nil {
-			ui.o.Logger.ErrorContext(r.Context(), "admin.hydra_failed", "cause", httpx.BoundedCause(err.Error()))
+			// The operation, the status and a cause without the answer of
+			// Hydra, whose error document the log never holds (R43); the
+			// text of another error.
+			op, status, cause := hydra.Failure(err)
+			if op == "" {
+				cause = httpx.BoundedCause(err.Error())
+			}
+			ui.o.Logger.ErrorContext(r.Context(), "admin.hydra_failed", "op", op, "status", status, "cause", cause)
 		}
 		ui.status(w, r, http.StatusServiceUnavailable, "Unavailable", "Hydra cannot be reached now: try again in a moment.", s)
 	}
@@ -337,8 +314,15 @@ func (ui *UI) hydraPageOf(c hydraClient, f hydraForm, errs fieldErrors, isNew bo
 		p.SecretSince, p.SecretExact = c.secretSince()
 		p.SecretOld = ui.secretOld(p.SecretSince)
 	}
-	others := withMetadata(hydraClient{Metadata: c.Metadata}, time.Time{})
+	// Its other metadata: those of the dispatcher apart, which the page
+	// shows; metadata that are not an object as Hydra holds them.
+	others, ok := metadataOf(c.Metadata)
+	if !ok {
+		p.Others = string(c.Metadata)
+		return p
+	}
 	if d, ok := others["dispatcher"].(map[string]any); ok {
+		delete(d, "flows")
 		delete(d, "secret_rotated_at")
 		if len(d) == 0 {
 			delete(others, "dispatcher")
@@ -409,7 +393,7 @@ func (ui *UI) createHydraClient(w http.ResponseWriter, r *http.Request, s *curre
 		secret, rotated = domain.NewSecret(), ui.o.Now()
 		body["client_secret"] = secret
 	}
-	if m := withMetadata(c, rotated); len(m) > 0 {
+	if m, _ := metadataWith(nil, c.Flows, true, rotated); len(m) > 0 {
 		body["metadata"] = m
 	}
 	raw, err := ui.o.HydraClients.CreateClient(r.Context(), body)
@@ -458,7 +442,11 @@ func (ui *UI) updateHydraClient(w http.ResponseWriter, r *http.Request, s *curre
 		again(http.StatusUnprocessableEntity, deviationErrors(d))
 		return
 	}
-	ops, fields := patchOf(was, now)
+	ops, fields, err := patchOf(was, now)
+	if err != nil {
+		again(http.StatusUnprocessableEntity, fieldErrors{"flows": {err.Error()}})
+		return
+	}
 	if len(ops) > 0 {
 		if _, err := ui.o.HydraClients.PatchClient(r.Context(), was.ID, ops); err != nil {
 			ui.hydraFailed(w, r, s, err, again)
@@ -511,7 +499,12 @@ func (ui *UI) rotateHydraClient(w http.ResponseWriter, r *http.Request, s *curre
 		return
 	}
 	secret := domain.NewSecret()
-	ops := []hydra.PatchOp{{Op: "add", Path: "/client_secret", Value: secret}, {Op: "add", Path: "/metadata", Value: withMetadata(c, ui.o.Now())}}
+	ops := []hydra.PatchOp{{Op: "add", Path: "/client_secret", Value: secret}}
+	// Its time in the metadata, the rest of them as Hydra holds it (R43);
+	// metadata that cannot hold it are left, the secret turned all the same.
+	if m, err := metadataWith(c.Metadata, nil, false, ui.o.Now()); err == nil {
+		ops = append(ops, hydra.PatchOp{Op: "add", Path: "/metadata", Value: m})
+	}
 	if _, err := ui.o.HydraClients.PatchClient(r.Context(), c.ID, ops); err != nil {
 		ui.hydraFailed(w, r, s, err, again)
 		return
