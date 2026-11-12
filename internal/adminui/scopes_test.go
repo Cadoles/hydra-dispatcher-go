@@ -37,6 +37,7 @@ func TestScopes(t *testing.T) {
 	r.config.scopes = []store.Scope{
 		{Name: "profile", Label: map[string]string{"fr": "Qui vous êtes"}},
 		{Name: "groups", Label: map[string]string{"": "Équipes"}, Claims: []store.ScopeClaim{{Claim: "groups", Label: map[string]string{"fr": "Groupes"}}}},
+		{Name: "<i>x", Label: map[string]string{"": "<b>y"}, Claims: []store.ScopeClaim{{Claim: "<u>z", Label: map[string]string{"fr": "<s>w"}}}},
 		{Name: "https://api.test/read", Claims: []store.ScopeClaim{}},
 	}
 	h := withHydra(r)
@@ -77,6 +78,19 @@ func TestScopes(t *testing.T) {
 		t.Errorf("%s: %d\n%s", m[1], w.Code, w.Body)
 	}
 
+	// Names and labels escaped, in the list, the overview and the form (R44).
+	hostile := []string{"<i>", "<b>", "<u>", "<s>"}
+	for _, path := range []string{"/admin/scopes", "/admin/scopes?preview=%3Ci%3Ex", "/admin/scopes/%3Ci%3Ex"} {
+		page := b.do(http.MethodGet, path, nil).Body.String()
+		for _, h := range hostile {
+			if strings.Contains(page, h) {
+				t.Errorf("%s: %s not escaped:\n%s", path, h, page)
+			}
+		}
+		if !strings.Contains(page, "&lt;") {
+			t.Errorf("%s: nothing escaped shown:\n%s", path, page)
+		}
+	}
 	preview := b.do(http.MethodGet, "/admin/scopes?preview=profile&preview=groups&preview=other", nil).Body.String()
 	for _, want := range []string{`value="profile" checked`, `value="groups" checked`, "<li><strong>Qui vous êtes</strong><ul><li>Nom complet</li>",
 		"<li><strong>Équipes</strong><ul><li>Groupes</li></ul></li>", "<li><strong>other</strong></li>"} {

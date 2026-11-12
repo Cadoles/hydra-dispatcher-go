@@ -1654,7 +1654,7 @@ func TestRememberHTTPS(t *testing.T) {
 func TestConsentCatalogue(t *testing.T) {
 	snap := testSnapshot()
 	snap.Scopes = []store.Scope{
-		{Name: "groups", Label: map[string]string{"en": "Your teams"}, Claims: []store.ScopeClaim{{Claim: "groups", Label: map[string]string{"": "Teams"}}}},
+		{Name: "groups", Label: map[string]string{"en": "Your teams <i>"}, Claims: []store.ScopeClaim{{Claim: "groups", Label: map[string]string{"": "Teams <b>"}}}},
 		{Name: "profile", Label: map[string]string{"fr": "Qui vous êtes"}, Claims: []store.ScopeClaim{{Claim: "name", Label: map[string]string{"en": "Your name"}}}},
 	}
 	w := newWorld(t, worldOptions{base: base, snapshot: snap})
@@ -1662,7 +1662,11 @@ func TestConsentCatalogue(t *testing.T) {
 	w.appSession(w.choose("hydra-sql"), "alice", `{"id_token":{"email":"alice@example.org","name":"Alice","groups":["staff"]}}`)
 	location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL), nil), http.StatusSeeOther)
 	body := text(t, w.do(http.MethodGet, "/consent?consent_challenge="+hydraC, nil))
-	for _, want := range []string{"Your teams", "<li>Teams</li>", "Your profile", "<li>Your name</li>", "Your email address"} {
+	// The labels of the catalogue escaped (R44).
+	if strings.Contains(body, "<i>") || strings.Contains(body, "<b>") {
+		t.Errorf("a label not escaped:\n%s", body)
+	}
+	for _, want := range []string{"Your teams &lt;i&gt;", "<li>Teams &lt;b&gt;</li>", "Your profile", "<li>Your name</li>", "Your email address"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("no %q:\n%s", want, body)
 		}

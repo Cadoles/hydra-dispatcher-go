@@ -35,7 +35,20 @@ func TestStrictClaims(t *testing.T) {
 		}
 	}
 	answer := &ConsentHookAnswer{GrantScope: []string{"openid", "email", "groups"},
-		IDToken: json.RawMessage(`{"email":"alice@example.org","groups":["staff"],"secret_of_the_hook":1}`)}
+		IDToken:     json.RawMessage(`{"email":"alice@example.org","groups":["staff"],"secret_of_the_hook":1}`),
+		AccessToken: json.RawMessage(`{"groups":["staff"],"secret_of_the_hook":1}`)}
+	tokens := func(idt, act string) func(t *testing.T, p played) {
+		return func(t *testing.T, p played) {
+			t.Helper()
+			b := p.calls[len(p.calls)-1].AcceptConsent
+			if got := rawJSON(b.Session.IdToken); got != idt {
+				t.Errorf("id_token %s, want %s", got, idt)
+			}
+			if got := rawJSON(b.Session.AccessToken); got != act {
+				t.Errorf("access_token %s, want %s", got, act)
+			}
+		}
+	}
 	for _, tc := range []pageCase{
 		{name: "strict, Hydra's skip: step, of no scope asked, not sent", ev: get, stored: acceptedFlow(t), env: strict,
 			says: hydraSays{GetConsent: read(skip), AcceptConsent: {redirectTo: hydraDone}},
@@ -56,11 +69,11 @@ func TestStrictClaims(t *testing.T) {
 		{name: "strict, the webhook's claims by the scopes it grants", ev: get, stored: acceptedFlow(t), env: hooked(true),
 			says: hydraSays{GetConsent: read(nil), ConsentHook: {consentHook: answer}, AcceptConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, ConsentHook, AcceptConsent}, write: finishedWithCR,
-			check: idToken(`{"email":"alice@example.org","groups":["staff"]}`)},
+			check: tokens(`{"email":"alice@example.org","groups":["staff"]}`, `{"groups":["staff"]}`)},
 		{name: "permissive, the webhook's claims as they are", ev: get, stored: acceptedFlow(t), env: hooked(false),
 			says: hydraSays{GetConsent: read(nil), ConsentHook: {consentHook: answer}, AcceptConsent: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, ConsentHook, AcceptConsent}, write: finishedWithCR,
-			check: idToken(`{"email":"alice@example.org","groups":["staff"],"secret_of_the_hook":1}`)},
+			check: tokens(`{"email":"alice@example.org","groups":["staff"],"secret_of_the_hook":1}`, `{"groups":["staff"],"secret_of_the_hook":1}`)},
 	} {
 		tc.run(t)
 	}
