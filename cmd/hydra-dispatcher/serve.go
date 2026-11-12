@@ -720,6 +720,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Dashboard: func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
 		Config:    s.config,
 		Writer:    s.adminWriter,
+		Scopes:    admin.Scopes,
 		Wrote:     s.audit.UIWrote,
 		Version:   version,
 	})

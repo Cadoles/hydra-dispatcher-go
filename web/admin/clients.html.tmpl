@@ -1,0 +1,24 @@
+{{define "content"}}
+<hgroup>
+<h1>API clients</h1>
+<p>The clients of the admin API, /admin/v1: their scopes. Their secrets are never shown again.</p>
+</hgroup>
+{{template "notice" .}}
+{{- if .CanWrite}}
+<p><a href="{{.Base}}/clients/_new" role="button">New API client</a></p>
+{{- end}}
+{{- with .Data}}
+{{- if .Clients}}
+<table>
+<thead><tr><th scope="col">Id</th><th scope="col">Scopes</th></tr></thead>
+<tbody>
+{{- range .Clients}}
+<tr><td><a href="{{$.Base}}/clients/{{.ID}}">{{.ID}}</a></td><td>{{range $i, $s := .Scopes}}{{if $i}}, {{end}}{{$s}}{{else}}none{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- else}}
+<p>No API client yet.</p>
+{{- end}}
+{{- end}}
+{{end}}

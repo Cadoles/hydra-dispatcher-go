@@ -23,6 +23,9 @@ type Writer interface {
 	CreateApp(ctx context.Context, by string, a store.App) error
 	UpdateApp(ctx context.Context, by, id string, change func(*store.App) error) error
 	DeleteApp(ctx context.Context, id string) error
+	CreateAPIClient(ctx context.Context, by string, c store.APIClient) error
+	UpdateAPIClient(ctx context.Context, by, id string, change func(*store.APIClient) error) error
+	DeleteAPIClient(ctx context.Context, id string) error
 	CreateFlow(ctx context.Context, by string, f store.Flow) error
 	UpdateFlow(ctx context.Context, by, id string, change func(*store.Flow) error) error
 	DeleteFlow(ctx context.Context, id string) error
@@ -92,12 +95,18 @@ func (ui *UI) failed(w http.ResponseWriter, r *http.Request, s *current, err err
 	case errors.As(err, &refused):
 		again(http.StatusUnprocessableEntity, errorsOf(refused.Violations(), fields))
 	case errors.Is(err, store.ErrExists):
-		again(http.StatusConflict, fieldErrors{"id": {"is taken: another has this id"}})
+		if slices.Contains(fields, "username") {
+			again(http.StatusConflict, fieldErrors{"username": {"is taken: another account has this name"}})
+		} else {
+			again(http.StatusConflict, fieldErrors{"id": {"is taken: another has this id"}})
+		}
 	case errors.As(err, &ref):
 		again(http.StatusConflict, fieldErrors{"": {"It is a step of the flows " + strings.Join(ref.Flows, ", ") + ": take it out of them first."}})
 	case errors.Is(err, errChanged):
 		again(http.StatusConflict, fieldErrors{"": {"Another admin changed it since you opened this page. Your changes are below, not saved: " +
 			"save again to write them over theirs, or open the page anew to see theirs."}})
+	case errors.Is(err, store.ErrLastAdmin):
+		again(http.StatusConflict, fieldErrors{"": {"It is the last account of the role admin: give the role to another first."}})
 	case errors.Is(err, store.ErrNotFound):
 		ui.status(w, r, http.StatusNotFound, "Not found", "It does not exist, or no longer: another admin may have deleted it.", s)
 	default:

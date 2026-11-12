@@ -692,3 +692,15 @@ func (f *fakeStore) EndSessions(_ context.Context, username string) error {
 	f.admins[i].SessionsValidAfter = time.Now()
 	return nil
 }
+
+func (f *fakeStore) DeleteAdmin(_ context.Context, username string) error {
+	f.record("delete admin " + username)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.IndexFunc(f.admins, func(x store.AdminUser) bool { return x.Username == username })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	f.admins = slices.Delete(f.admins, i, i+1)
+	return nil
+}

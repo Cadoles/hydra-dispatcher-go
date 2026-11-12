@@ -1,0 +1,16 @@
+{{define "content"}}
+{{- with .Data}}
+<article>
+<h1>{{.Title}}</h1>
+{{template "general" .Errors}}
+<p>{{.Message}}</p>
+{{- if .Action}}
+<form method="post" action="{{.Action}}">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<button type="submit">{{.Button}}</button>
+</form>
+{{- end}}
+<p><a href="{{.Back}}">Back</a></p>
+</article>
+{{- end}}
+{{end}}

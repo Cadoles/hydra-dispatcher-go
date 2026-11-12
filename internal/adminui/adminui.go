@@ -35,10 +35,15 @@ import (
 const csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; form-action 'self'; " +
 	"connect-src 'self'; base-uri 'none'; frame-ancestors 'none'"
 
-// Accounts are the admin accounts of the store, read at each request (Q120).
+// Accounts are the admin accounts of the store, read at each request (Q120),
+// and written by the screen of the accounts under the lock of the accounts.
 type Accounts interface {
 	Admin(ctx context.Context, username string) (store.AdminUser, bool, error)
 	EndSessions(ctx context.Context, username string) error
+	Admins(ctx context.Context) ([]store.AdminUser, error)
+	CreateAdmin(ctx context.Context, u store.AdminUser) error
+	UpdateAdmin(ctx context.Context, username string, change func(*store.AdminUser) error) error
+	DeleteAdmin(ctx context.Context, username string) error
 }
 
 // Options configure the admin UI.
@@ -75,6 +80,9 @@ type Options struct {
 	// served. Writer writes it; nil, the screens are read alone.
 	Config Snapshots
 	Writer Writer
+	// Scopes are those an API client may have (admin.Scopes): the boxes of
+	// its form.
+	Scopes []string
 	// Wrote, nil for none, is told of each write of a screen done: the audit
 	// (admin.write), the names of the fields written, never their values.
 	Wrote   func(ctx context.Context, user, resource, id, action string, fields []string)
@@ -130,7 +138,8 @@ func New(o Options) (*UI, error) {
 	if ui.secure && o.CookiePath == "/" {
 		ui.prefix = "__Host-"
 	}
-	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings"} {
+	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings",
+		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password"} {
 		t, err := template.New(name).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
@@ -167,7 +176,9 @@ func New(o Options) (*UI, error) {
 		ui.registerApps()
 		ui.registerFlows()
 		ui.registerSettings()
+		ui.registerClients()
 	}
+	ui.registerAccounts()
 	ui.mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {
 		ui.status(w, r, http.StatusNotFound, "Not found", "No page of the admin has this address.", nil)
 	})

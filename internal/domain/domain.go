@@ -328,6 +328,24 @@ func (u AdminUser) Check(fail Fail) {
 	text(fail, "oidc_sub", u.OIDCSub, maxOIDCSub)
 }
 
+// CheckChanged checks of u what differs from was: an account imported out of
+// the rules, a name Symfony took, can have its role or its password changed
+// without its name refusing the write (report of R37).
+func (u AdminUser) CheckChanged(fail Fail, was AdminUser) {
+	if u.Username != was.Username {
+		CheckUsername(fail, u.Username)
+	}
+	if u.Role != was.Role && u.Role != RoleAdmin && u.Role != RoleViewer {
+		fail("role", "%q is not admin or viewer", u.Role)
+	}
+	if u.PasswordHash != was.PasswordHash && u.PasswordHash != "" {
+		checkHash(fail, "password", u.PasswordHash, "each login computing it")
+	}
+	if u.OIDCSub != was.OIDCSub {
+		text(fail, "oidc_sub", u.OIDCSub, maxOIDCSub)
+	}
+}
+
 // CheckUsername checks the name of an admin account: 1 to 180 characters,
 // without a control character or a space at either end. Symfony took any
 // string; its accounts are imported (P19).

@@ -47,6 +47,7 @@ type configStore interface {
 	EndSessions(ctx context.Context, username string) error
 	CreateAdmin(ctx context.Context, u store.AdminUser) error
 	UpdateAdmin(ctx context.Context, username string, change func(*store.AdminUser) error) error
+	DeleteAdmin(ctx context.Context, username string) error
 }
 
 // openStore opens the configuration store at dsn. The tests replace it:

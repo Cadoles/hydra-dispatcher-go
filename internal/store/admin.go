@@ -62,7 +62,8 @@ func (p *Postgres) CreateAdmin(ctx context.Context, u AdminUser) error {
 }
 
 // UpdateAdmin applies change to the account username: ErrNotFound when there
-// is none, ErrLastAdmin when it takes the role of the last admin.
+// is none, ErrLastAdmin when it takes the role of the last admin. Only what
+// changes is checked: an account imported out of the rules is repaired.
 func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func(*AdminUser) error) error {
 	return p.adminWrite(ctx, func(tx *sql.Tx) error {
 		u, found, err := findAdmin(ctx, tx, username)
@@ -76,7 +77,7 @@ func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func
 		if u.Username != username {
 			return domain.Violations{{Field: "username", Message: fmt.Sprintf("is %q, and an update cannot change it to %q", username, u.Username)}}
 		}
-		if v := domain.Collect(u.Check); v != nil {
+		if v := domain.Collect(func(fail domain.Fail) { u.CheckChanged(fail, was) }); v != nil {
 			return v
 		}
 		if was.Role == domain.RoleAdmin && u.Role != domain.RoleAdmin {
@@ -96,6 +97,32 @@ func (p *Postgres) UpdateAdmin(ctx context.Context, username string, change func
 			sessions_valid_after = CASE WHEN $5 THEN $6 ELSE sessions_valid_after END
 			WHERE username = $1`, username, u.PasswordHash, u.OIDCSub, u.Role, end, time.Now())
 		if err != nil {
+			return fmt.Errorf("admin account %s: %w", username, err)
+		}
+		return nil
+	})
+}
+
+// DeleteAdmin deletes the account username: ErrNotFound when there is none,
+// ErrLastAdmin when it is the last account of the role admin. Its sessions
+// end with it: the admin UI reads the account at each request.
+func (p *Postgres) DeleteAdmin(ctx context.Context, username string) error {
+	return p.adminWrite(ctx, func(tx *sql.Tx) error {
+		u, found, err := findAdmin(ctx, tx, username)
+		if err != nil || !found {
+			return cmpErr(err, ErrNotFound)
+		}
+		if u.Role == domain.RoleAdmin {
+			var others int
+			err := tx.QueryRowContext(ctx, `SELECT count(*) FROM admin_user WHERE role = $1 AND username <> $2`, domain.RoleAdmin, username).Scan(&others)
+			if err != nil {
+				return fmt.Errorf("admin accounts: %w", err)
+			}
+			if others == 0 {
+				return ErrLastAdmin
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM admin_user WHERE username = $1`, username); err != nil {
 			return fmt.Errorf("admin account %s: %w", username, err)
 		}
 		return nil

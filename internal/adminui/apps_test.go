@@ -21,11 +21,12 @@ import (
 // config is the configuration of the store, its rules those of the domain:
 // what the screens read and write.
 type config struct {
-	mu     sync.Mutex
-	apps   []store.App
-	flows  []store.Flow
-	stored map[string]json.RawMessage
-	by     []string
+	mu      sync.Mutex
+	apps    []store.App
+	flows   []store.Flow
+	stored  map[string]json.RawMessage
+	clients []store.APIClient
+	by      []string
 	// fail, when set, is the error of the next writes.
 	fail error
 }
@@ -51,9 +52,71 @@ func (c *config) Snapshot() *store.Snapshot {
 	if err != nil {
 		panic(err)
 	}
-	snap := store.NewSnapshot(slices.Clone(c.apps), slices.Clone(c.flows), settings)
+	snap := store.NewSnapshot(slices.Clone(c.apps), slices.Clone(c.flows), settings).WithAPIClients(slices.Clone(c.clients))
 	snap.StoredSettings = slices.Sorted(maps.Keys(c.stored))
 	return snap
+}
+
+func (c *config) client(id string) (store.APIClient, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	i := slices.IndexFunc(c.clients, func(x store.APIClient) bool { return x.ID == id })
+	if i < 0 {
+		return store.APIClient{}, false
+	}
+	return c.clients[i], true
+}
+
+func (c *config) CreateAPIClient(_ context.Context, by string, x store.APIClient) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	if v := domain.Collect(x.Check); v != nil {
+		return v
+	}
+	if slices.ContainsFunc(c.clients, func(y store.APIClient) bool { return y.ID == x.ID }) {
+		return store.ErrExists
+	}
+	c.clients, c.by = append(c.clients, x), append(c.by, by)
+	return nil
+}
+
+func (c *config) UpdateAPIClient(_ context.Context, by, id string, change func(*store.APIClient) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	i := slices.IndexFunc(c.clients, func(x store.APIClient) bool { return x.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	x := c.clients[i]
+	x.Scopes = slices.Clone(x.Scopes)
+	if err := change(&x); err != nil {
+		return err
+	}
+	if v := domain.Collect(x.Check); v != nil {
+		return v
+	}
+	c.clients[i], c.by = x, append(c.by, by)
+	return nil
+}
+
+func (c *config) DeleteAPIClient(_ context.Context, id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	i := slices.IndexFunc(c.clients, func(x store.APIClient) bool { return x.ID == id })
+	if i < 0 {
+		return store.ErrNotFound
+	}
+	c.clients = slices.Delete(c.clients, i, i+1)
+	return nil
 }
 
 func (c *config) flow(id string) (store.Flow, bool) {

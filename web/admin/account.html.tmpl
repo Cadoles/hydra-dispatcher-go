@@ -1,0 +1,34 @@
+{{define "content"}}
+{{- with .Data}}
+{{- with .Account}}
+<hgroup>
+<h1>{{if and .You (eq $.Nav "account")}}Your account{{else}}Account {{.Username}}{{end}}</h1>
+<p>{{.Role}}{{if .You}}, you{{end}}; logs in by {{template "methods" .}}.</p>
+</hgroup>
+{{- end}}
+{{template "notice" $}}
+{{template "general" .Errors}}
+{{- if eq $.Nav "account"}}
+{{- if .Account.PasswordHash}}
+<p><a href="{{$.Base}}/account/password" role="button">Change your password</a></p>
+{{- end}}
+{{- else if $.CanWrite}}
+<form method="post" action="{{$.Base}}/accounts/{{.Account.Username}}/role">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Role
+<select name="role"{{if .Errors.For "role"}} aria-invalid="true"{{end}}>
+<option value="admin"{{if eq .Account.Role "admin"}} selected{{end}}>admin: writes</option>
+<option value="viewer"{{if eq .Account.Role "viewer"}} selected{{end}}>viewer: reads</option>
+</select>
+{{template "errors" .Errors.For "role"}}
+<small>A role changed ends the sessions of the account{{if .Account.You}}, yours among them{{end}}.</small>
+</label>
+<button type="submit">Change the role</button>
+</form>
+{{- if not .Account.You}}
+<p><a href="{{$.Base}}/accounts/{{.Account.Username}}/delete">Delete this account</a></p>
+{{- end}}
+{{- end}}
+<p><a href="{{$.Base}}/accounts">Back to the accounts</a></p>
+{{- end}}
+{{end}}

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,6 +73,79 @@ func (a *accounts) EndSessions(_ context.Context, username string) error {
 	return nil
 }
 
+func (a *accounts) Admins(context.Context) ([]store.AdminUser, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.fail != nil {
+		return nil, a.fail
+	}
+	return slices.SortedFunc(maps.Values(a.users), func(x, y store.AdminUser) int { return strings.Compare(x.Username, y.Username) }), nil
+}
+
+func (a *accounts) CreateAdmin(_ context.Context, u store.AdminUser) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if v := domain.Collect(u.Check); v != nil {
+		return v
+	}
+	if _, ok := a.users[u.Username]; ok {
+		return store.ErrExists
+	}
+	a.users[u.Username] = u
+	return nil
+}
+
+// others counts the accounts of the role admin but username.
+func (a *accounts) others(username string) int {
+	n := 0
+	for _, u := range a.users {
+		if u.Role == domain.RoleAdmin && u.Username != username {
+			n++
+		}
+	}
+	return n
+}
+
+// UpdateAdmin is the store's: what changes checked, the last admin kept,
+// the sessions ended by a password or a role changed.
+func (a *accounts) UpdateAdmin(_ context.Context, username string, change func(*store.AdminUser) error) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	was, ok := a.users[username]
+	if !ok {
+		return store.ErrNotFound
+	}
+	u := was
+	if err := change(&u); err != nil {
+		return err
+	}
+	if v := domain.Collect(func(fail domain.Fail) { u.CheckChanged(fail, was) }); v != nil {
+		return v
+	}
+	if was.Role == domain.RoleAdmin && u.Role != domain.RoleAdmin && a.others(username) == 0 {
+		return store.ErrLastAdmin
+	}
+	if u.PasswordHash != was.PasswordHash || u.Role != was.Role {
+		u.SessionsValidAfter = a.now()
+	}
+	a.users[username] = u
+	return nil
+}
+
+func (a *accounts) DeleteAdmin(_ context.Context, username string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	u, ok := a.users[username]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if u.Role == domain.RoleAdmin && a.others(username) == 0 {
+		return store.ErrLastAdmin
+	}
+	delete(a.users, username)
+	return nil
+}
+
 func (a *accounts) set(u store.AdminUser) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -128,7 +203,7 @@ func newRig(t *testing.T, baseURL string) *rig {
 		Dashboard: func(context.Context) Dashboard {
 			return Dashboard{Version: "test", Instance: "i1", Dependencies: []Dependency{{Name: "database", OK: true}}, Apps: 3, Flows: 2, FlowsEnabled: 1}
 		},
-		Config: r.config, Writer: r.config,
+		Config: r.config, Writer: r.config, Scopes: []string{"admin:apps", "admin:flows", "admin:clients", "admin:settings", "admin:read"},
 		Wrote: func(_ context.Context, user, resource, id, action string, fields []string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -291,7 +366,7 @@ func TestLogin(t *testing.T) {
 		t.Error("the cookie of the login kept")
 	}
 	w = b.do(http.MethodGet, "/admin", nil)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "alice <small>(admin)</small>") || !strings.Contains(w.Body.String(), "1 of 2") {
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `<a href="/admin/account">alice</a> <small>(admin)</small>`) || !strings.Contains(w.Body.String(), "1 of 2") {
 		t.Errorf("dashboard: %d\n%s", w.Code, w.Body)
 	}
 	if got := r.audited(); len(got) != 1 || got[0] != "login alice password granted" {

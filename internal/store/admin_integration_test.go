@@ -290,3 +290,49 @@ func TestAdminSessions(t *testing.T) {
 		t.Errorf("the logout of nobody: %v", err)
 	}
 }
+
+// The last admin is kept from a deletion as from a demotion; an account
+// imported out of the rules is repaired, only what changes being checked.
+func TestAdminDelete(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	for _, u := range []AdminUser{{Username: "alice", Role: domain.RoleAdmin}, {Username: "bob", Role: domain.RoleAdmin}, {Username: "victor", Role: domain.RoleViewer}} {
+		u.OIDCSub = u.Username
+		if err := p.CreateAdmin(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.DeleteAdmin(ctx, "nobody"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("nobody: %v", err)
+	}
+	if err := p.DeleteAdmin(ctx, "victor"); err != nil {
+		t.Errorf("a viewer: %v", err)
+	}
+	if err := p.DeleteAdmin(ctx, "bob"); err != nil {
+		t.Errorf("an admin of two: %v", err)
+	}
+	if err := p.DeleteAdmin(ctx, "alice"); !errors.Is(err, ErrLastAdmin) {
+		t.Errorf("the last admin: %v", err)
+	}
+	if users, err := p.Admins(ctx); err != nil || len(users) != 1 || users[0].Username != "alice" {
+		t.Errorf("left: %+v %v", users, err)
+	}
+
+	// A name Symfony took, written as the import writes it.
+	if _, err := p.db.ExecContext(ctx, `INSERT INTO admin_user (username, role) VALUES ('carol ', 'viewer')`); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := domain.HashSecret("a password long enough")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.UpdateAdmin(ctx, "carol ", func(u *AdminUser) error { u.PasswordHash, u.Role = hash, domain.RoleAdmin; return nil }); err != nil {
+		t.Errorf("repaired: %v", err)
+	}
+	if err := p.UpdateAdmin(ctx, "carol ", func(u *AdminUser) error { u.Role = "root"; return nil }); !violated(err, "role") {
+		t.Errorf("a role unknown: %v", err)
+	}
+	if err := p.UpdateAdmin(ctx, "carol ", func(u *AdminUser) error { u.PasswordHash = "$2y$13$short"; return nil }); !violated(err, "password") {
+		t.Errorf("a hash broken: %v", err)
+	}
+}

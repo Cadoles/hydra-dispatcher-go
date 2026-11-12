@@ -1,0 +1,36 @@
+{{define "content"}}
+{{- with .Data}}
+<h1>New account</h1>
+{{template "general" .Errors}}
+<form method="post" action="{{$.Base}}/accounts">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<label>Name
+<input name="username" value="{{.Username}}" required maxlength="180" autocomplete="off"{{if .Errors.For "username"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "username"}}
+</label>
+<label>Role
+<select name="role" required{{if .Errors.For "role"}} aria-invalid="true"{{end}}>
+<option value=""{{if not .Role}} selected{{end}}>— choose —</option>
+<option value="admin"{{if eq .Role "admin"}} selected{{end}}>admin: writes</option>
+<option value="viewer"{{if eq .Role "viewer"}} selected{{end}}>viewer: reads</option>
+</select>
+{{template "errors" .Errors.For "role"}}
+</label>
+<label>Password
+<input type="password" name="password" minlength="12" autocomplete="new-password"{{if .Errors.For "password"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "password"}}
+<small>12 characters at least. Empty for an account of the identity provider alone.</small>
+</label>
+<label>The password again
+<input type="password" name="password_again" autocomplete="new-password">
+</label>
+<label>OIDC subject
+<input name="oidc_sub" value="{{.OIDCSub}}" autocomplete="off"{{if .Errors.For "oidc_sub"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "oidc_sub"}}
+<small>Its sub at the identity provider, for the login by OIDC; empty for none.</small>
+</label>
+<button type="submit">Create</button>
+</form>
+<p><a href="{{$.Base}}/accounts">Back to the accounts</a></p>
+{{- end}}
+{{end}}

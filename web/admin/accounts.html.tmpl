@@ -1,0 +1,20 @@
+{{define "content"}}
+<hgroup>
+<h1>Accounts</h1>
+<p>Those who log in to the admin: the role admin writes, the role viewer reads.</p>
+</hgroup>
+{{template "notice" .}}
+{{- if .CanWrite}}
+<p><a href="{{.Base}}/new-account" role="button">New account</a></p>
+{{- end}}
+{{- with .Data}}
+<table>
+<thead><tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Logs in by</th></tr></thead>
+<tbody>
+{{- range .Accounts}}
+<tr><td><a href="{{$.Base}}/accounts/{{.Username}}">{{.Username}}</a>{{if .You}} <small>(you)</small>{{end}}</td><td>{{.Role}}</td><td>{{template "methods" .}}</td></tr>
+{{- end}}
+</tbody>
+</table>
+{{- end}}
+{{end}}
