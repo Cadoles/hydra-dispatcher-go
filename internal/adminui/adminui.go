@@ -97,6 +97,10 @@ type Options struct {
 	// Scopes are those an API client may have (admin.Scopes): the boxes of
 	// its form.
 	Scopes []string
+	// LogLevel is observability.log_level, and DebugMaxDuration
+	// observability.debug_max_duration: the screen of the level (P25).
+	LogLevel         string
+	DebugMaxDuration time.Duration
 	// Wrote, nil for none, is told of each write of a screen done: the audit
 	// (admin.write), the names of the fields written, never their values.
 	Wrote   func(ctx context.Context, user, resource, id, action string, fields []string)
@@ -171,7 +175,7 @@ func New(o Options) (*UI, error) {
 		ui.prefix = "__Host-"
 	}
 	for _, name := range []string{"login", "reauth", "dashboard", "status", "apps", "app", "app_delete", "flows", "flow", "flow_delete", "settings",
-		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password", "sso", "hydra_clients", "hydra_client", "scopes", "scope"} {
+		"clients", "client", "client_secret", "confirm", "accounts", "account", "account_new", "password", "sso", "hydra_clients", "hydra_client", "scopes", "scope", "log_level"} {
 		t, err := template.New(name).Funcs(funcs).ParseFS(web.Admin, "admin/layout.html.tmpl", "admin/parts.html.tmpl", "admin/"+name+".html.tmpl")
 		if err != nil {
 			return nil, fmt.Errorf("adminui: %s: %w", name, err)
@@ -211,6 +215,7 @@ func New(o Options) (*UI, error) {
 		ui.registerScopes()
 		ui.registerClients()
 		ui.registerSSO()
+		ui.registerLogLevel()
 	}
 	if o.HydraClients != nil {
 		ui.registerHydraClients()

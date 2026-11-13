@@ -32,6 +32,7 @@ type fakeWriter struct {
 	clients  []store.APIClient
 	scopes   []store.Scope
 	settings map[string]json.RawMessage // the last UpdateSettings
+	debug    *store.DebugWindow
 	authors  []string
 	// fail fails CreateApp, as the database out of reach would.
 	fail error
@@ -43,7 +44,33 @@ func (f *fakeWriter) publish() {
 	s := store.NewSnapshot(f.apps, f.flows, store.DefaultSettings()).WithAPIClients(f.clients)
 	s.Scopes = slices.Clone(f.scopes)
 	slices.SortFunc(s.Scopes, func(a, b store.Scope) int { return strings.Compare(a.Name, b.Name) })
+	s.Debug = f.debug
 	f.config.s = s
+}
+
+// SetDebugWindow writes the window as the store does: its rules, its flow and
+// its app known.
+func (f *fakeWriter) SetDebugWindow(_ context.Context, by string, w *store.DebugWindow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if w != nil {
+		if v := domain.Collect(w.Check); v != nil {
+			return v
+		}
+		if w.Flow != "" && !slices.ContainsFunc(f.flows, func(x store.Flow) bool { return x.ID == w.Flow }) {
+			return domain.Violations{{Field: "flow", Message: fmt.Sprintf("%q is no flow", w.Flow)}}
+		}
+		if w.App != "" && !f.knownApp(w.App) {
+			return domain.Violations{{Field: "app", Message: fmt.Sprintf("%q is no app", w.App)}}
+		}
+		c := *w
+		c.UpdatedBy = by
+		w = &c
+	}
+	f.debug = w
+	f.by(by)
+	f.publish()
+	return nil
 }
 
 // The writes of the catalogue, by the rules of the store.
@@ -319,7 +346,8 @@ func newResources(t *testing.T) *resources {
 	api := mustNew(t, Options{
 		Keys: keys, Config: config, Issuer: issuer, TokenTTL: 15 * time.Minute,
 		AuthorizedHosts: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, RatePerMinute: 100000,
-		Writer: writer,
+		Writer:   writer,
+		LogLevel: "info", DebugMaxDuration: time.Hour,
 		Logger: slog.New(slog.NewJSONHandler(&r.logs, nil)),
 		Wrote: func(_ context.Context, client, resource, id, method string, fields []string) {
 			r.mu.Lock()

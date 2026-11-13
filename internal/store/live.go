@@ -42,6 +42,9 @@ type Live struct {
 	// OnRefresh, nil for none, is told of each refresh that ended, nil for one that
 	// succeeded; not of one the caller canceled. It is set before Run.
 	OnRefresh func(err error)
+	// OnSnapshot, nil for none, is given each snapshot read, once it is the
+	// current one: the window of debug of the level (P25). It is set before Run.
+	OnSnapshot func(s *Snapshot)
 }
 
 // NewLive reads a first snapshot: without one, nothing can be served. The
@@ -97,6 +100,9 @@ func (l *Live) Refresh(ctx context.Context) error {
 		l.warned = s.Warnings
 	}
 	l.current.Store(s)
+	if l.OnSnapshot != nil {
+		l.OnSnapshot(s)
+	}
 	return nil
 }
 

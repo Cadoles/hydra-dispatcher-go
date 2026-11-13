@@ -339,3 +339,32 @@ func TestLiveOnRefresh(t *testing.T) {
 		t.Errorf("heard %v", heard)
 	}
 }
+
+// OnSnapshot is given each snapshot read, once it is the current one; not the
+// one a failed refresh would have given (P25: the window of debug).
+func TestLiveOnSnapshot(t *testing.T) {
+	first := &Snapshot{}
+	src := &fakeSource{snapshot: first}
+	logger := slog.New(slog.DiscardHandler)
+	live, err := NewLive(context.Background(), src, logger, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var given []*Snapshot
+	live.OnSnapshot = func(s *Snapshot) {
+		if live.Snapshot() != s {
+			t.Error("given before it is the current one")
+		}
+		given = append(given, s)
+	}
+	second := &Snapshot{Debug: &DebugWindow{Flow: "main"}}
+	src.set(second, nil)
+	if err := live.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	src.set(nil, errors.New("down"))
+	_ = live.Refresh(context.Background())
+	if len(given) != 1 || given[0] != second {
+		t.Errorf("given %v", given)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/netip"
@@ -30,7 +31,9 @@ type config struct {
 	// oidc, when set, is the block admin_oidc of the snapshots, its secret in
 	// clear, which the table would hold encrypted.
 	oidc *store.AdminOIDC
-	by   []string
+	// debug is the window of debug, nil for none.
+	debug *store.DebugWindow
+	by    []string
 	// fail, when set, is the error of the next writes.
 	fail error
 }
@@ -63,7 +66,35 @@ func (c *config) Snapshot() *store.Snapshot {
 	snap.StoredSettings = slices.Sorted(maps.Keys(c.stored))
 	snap.Scopes = slices.Clone(c.scopes)
 	slices.SortFunc(snap.Scopes, func(a, b store.Scope) int { return strings.Compare(a.Name, b.Name) })
+	snap.Debug = c.debug
 	return snap
+}
+
+// SetDebugWindow writes the window as the store does: its rules, its flow and
+// its app known.
+func (c *config) SetDebugWindow(_ context.Context, by string, w *store.DebugWindow) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
+	if w != nil {
+		if v := domain.Collect(w.Check); v != nil {
+			return v
+		}
+		if w.Flow != "" && !slices.ContainsFunc(c.flows, func(f store.Flow) bool { return f.ID == w.Flow }) {
+			return domain.Violations{{Field: "flow", Message: fmt.Sprintf("%q is no flow", w.Flow)}}
+		}
+		if w.App != "" && !slices.ContainsFunc(c.apps, func(a store.App) bool { return a.ID == w.App }) {
+			return domain.Violations{{Field: "app", Message: fmt.Sprintf("%q is no app", w.App)}}
+		}
+		x := *w
+		x.UpdatedBy = by
+		w = &x
+	}
+	c.debug = w
+	c.by = append(c.by, by)
+	return nil
 }
 
 // The catalogue of the scopes as the store writes it: a standard scope

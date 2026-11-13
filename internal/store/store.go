@@ -198,6 +198,9 @@ type Snapshot struct {
 	// Encrypted are the kids of the keys the encrypted settings are under, by
 	// key: the gauge hydra_dispatcher_encrypted_values, secrets status.
 	Encrypted map[string]string
+	// Debug is the window of debug of the application log (P25, Q131), nil
+	// for none; one past its end too, which the level leaves aside.
+	Debug *DebugWindow
 	// Warnings are what this version sets aside of the setting table:
 	// unknown keys, locales without a catalog. serve adds those of the apps'
 	// identification on the emulated API (emulated.Warnings).
@@ -297,6 +300,9 @@ func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapsh
 	}
 	if s.Scopes, err = readScopes(ctx, q); err != nil {
 		return nil, fmt.Errorf("read scopes: %w", err)
+	}
+	if s.Debug, err = readDebugWindow(ctx, q); err != nil {
+		return nil, fmt.Errorf("read the window of debug: %w", err)
 	}
 	rows, err := readSettings(ctx, q)
 	if err != nil {

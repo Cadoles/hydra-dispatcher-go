@@ -169,8 +169,8 @@ func TestRouteScopes(t *testing.T) {
 			checked++
 		}
 	}
-	if checked != 27 {
-		t.Errorf("%d operations checked, want 27", checked)
+	if checked != 29 {
+		t.Errorf("%d operations checked, want 29", checked)
 	}
 	// Without a token, these alone: a route of a resource documented with
 	// security: [] would escape the check above (revue R36).

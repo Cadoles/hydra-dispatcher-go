@@ -28,6 +28,8 @@ type Writer interface {
 	CreateScope(ctx context.Context, by string, s store.Scope) error
 	UpdateScope(ctx context.Context, by, name string, change func(*store.Scope) error) error
 	DeleteScope(ctx context.Context, name string) error
+	// SetDebugWindow opens the window of debug, nil closing it (P25).
+	SetDebugWindow(ctx context.Context, by string, w *store.DebugWindow) error
 }
 
 // problem is an error of the resources, the form of API Platform without the

@@ -86,7 +86,8 @@ func exec(t *testing.T, p *Postgres, query string, args ...any) {
 }
 
 // allMigrations are the migrations of an empty database.
-var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql", "00004_admin_writes.sql", "00005_admin_sessions.sql", "00006_scopes.sql"}
+var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql", "00004_admin_writes.sql", "00005_admin_sessions.sql", "00006_scopes.sql",
+	"00007_debug_window.sql"}
 
 // What the code read of the options of an app becomes its receive_claims, and
 // comes back with a rollback: an app restricted before stays restricted.
@@ -151,9 +152,22 @@ func TestMigrateDown(t *testing.T) {
 		if got, err := p.MigrateDown(ctx); err != nil || got != name {
 			t.Fatalf("MigrateDown = %q, %v; want %s", got, err, name)
 		}
-		if name == "00004_admin_writes.sql" {
-			if _, err := p.Snapshot(ctx); err != nil {
+		if name == "00007_debug_window.sql" {
+			// A version on a database it has not migrated does not read it.
+			if _, err := p.Snapshot(ctx); err == nil || !strings.Contains(err.Error(), "debug_window") {
 				t.Errorf("snapshot after the rollback of %s: %v", name, err)
+			}
+		}
+		if name == "00004_admin_writes.sql" {
+			// The tables 00004 changed, read as before it.
+			if _, err := readApps(ctx, p.db); err != nil {
+				t.Errorf("apps after the rollback of %s: %v", name, err)
+			}
+			if _, err := readFlows(ctx, p.db); err != nil {
+				t.Errorf("flows after the rollback of %s: %v", name, err)
+			}
+			if _, err := readAPIClients(ctx, p.db); err != nil {
+				t.Errorf("API clients after the rollback of %s: %v", name, err)
 			}
 		}
 		if name == "00003_app_receive_claims.sql" {
@@ -198,7 +212,7 @@ func TestMigrate(t *testing.T) {
 	if applied, err := p.Migrate(ctx); err != nil || len(applied) != 0 {
 		t.Errorf("second Migrate = %q, %v; want nothing applied", applied, err)
 	}
-	want := []string{"admin_user", "api_client", "app", "dispatcher_schema_version", "flow", "flow_step", "scope", "setting"}
+	want := []string{"admin_user", "api_client", "app", "debug_window", "dispatcher_schema_version", "flow", "flow_step", "scope", "setting"}
 	if tables := publicTables(t, p); !slices.Equal(tables, want) {
 		t.Errorf("tables = %q, want %q", tables, want)
 	}

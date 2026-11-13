@@ -43,6 +43,7 @@ Enabled: offered to the users
 <h2>Steps</h2>
 {{template "errors" .Errors.For "steps"}}
 <p><small>In the order of their positions; an app left at — is no step. {{if $.CanWrite}}Drag the rows to order them, or type their positions.{{end}}</small></p>
+<div class="overflow-auto">
 <table id="steps">
 <thead><tr><th scope="col"></th><th scope="col">App</th><th scope="col">Position</th><th scope="col">Subject check</th><th scope="col">Claim</th></tr></thead>
 <tbody>
@@ -67,6 +68,7 @@ Enabled: offered to the users
 {{- end}}
 </tbody>
 </table>
+</div>
 </fieldset>
 {{- if $.CanWrite}}
 <button type="submit">{{if .New}}Create{{else}}Save{{end}}</button>

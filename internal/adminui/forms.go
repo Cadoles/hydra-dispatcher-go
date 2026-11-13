@@ -33,6 +33,7 @@ type Writer interface {
 	CreateScope(ctx context.Context, by string, s store.Scope) error
 	UpdateScope(ctx context.Context, by, name string, change func(*store.Scope) error) error
 	DeleteScope(ctx context.Context, name string) error
+	SetDebugWindow(ctx context.Context, by string, w *store.DebugWindow) error
 }
 
 // Snapshots give the configuration of the moment: a write refreshes that of
@@ -175,4 +176,5 @@ func (c *changes) add(field string, differ bool) {
 
 // notices are what a page says of the write that led to it, by the done of
 // its address: fixed texts, an address cannot make a page say anything else.
-var notices = map[string]string{"created": "Created.", "saved": "Saved.", "deleted": "Deleted."}
+var notices = map[string]string{"created": "Created.", "saved": "Saved.", "deleted": "Deleted.",
+	"opened": "The window of debug is open, on every instance within a second.", "closed": "The window of debug is closed."}

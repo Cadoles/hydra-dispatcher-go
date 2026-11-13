@@ -18,6 +18,7 @@
 <p>Clients named {{.Query}}, page by page.</p>
 {{- end}}
 {{- if .Rows}}
+<div class="overflow-auto">
 <table>
 <thead><tr><th scope="col">Id</th><th scope="col">Name</th><th scope="col">Grants</th><th scope="col">Authenticates by</th><th scope="col">Secret</th><th scope="col">Rules of the ANSSI</th></tr></thead>
 <tbody>
@@ -28,6 +29,7 @@
 {{- end}}
 </tbody>
 </table>
+</div>
 {{- end}}
 <p>{{if not .First}}<a href="{{$.Base}}/hydra-clients?q={{.Query}}">First page</a>{{end}}{{if and (not .First) .Next}} · {{end}}{{if .Next}}<a href="{{$.Base}}/hydra-clients?q={{.Query}}&amp;page={{.Next}}">Next page</a>{{end}}</p>
 {{- end}}

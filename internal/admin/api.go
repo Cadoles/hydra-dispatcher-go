@@ -75,6 +75,10 @@ type Options struct {
 	// Wrote, nil for none, is told of each write done: the audit (admin.write),
 	// the names of the fields written, never their values.
 	Wrote func(ctx context.Context, client, resource, id, method string, fields []string)
+	// LogLevel is observability.log_level, and DebugMaxDuration
+	// observability.debug_max_duration: /log-level (P25).
+	LogLevel         string
+	DebugMaxDuration time.Duration
 	// Now is the clock, time.Now when nil.
 	Now func() time.Time
 }
@@ -113,6 +117,7 @@ func New(o Options) (*API, error) {
 		a.registerClients()
 		a.registerSettings()
 		a.registerScopes()
+		a.registerLogLevel()
 	}
 	return a, nil
 }

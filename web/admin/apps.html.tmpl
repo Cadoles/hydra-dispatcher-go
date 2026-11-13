@@ -9,6 +9,7 @@
 {{- end}}
 {{- with .Data}}
 {{- if .Apps}}
+<div class="overflow-auto">
 <table>
 <thead><tr><th scope="col">Id</th><th scope="col">Method</th><th scope="col">Login URL</th><th scope="col">Known by</th><th scope="col">Step of</th></tr></thead>
 <tbody>
@@ -17,6 +18,7 @@
 {{- end}}
 </tbody>
 </table>
+</div>
 {{- else}}
 <p>No app yet.</p>
 {{- end}}

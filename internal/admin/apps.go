@@ -246,6 +246,8 @@ func resourceName(r Resource) string {
 		return "settings"
 	case Catalogue:
 		return "scopes"
+	case Debug:
+		return "log-level"
 	}
 	return string(r)
 }

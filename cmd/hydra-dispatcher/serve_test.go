@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,6 +36,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -209,7 +211,7 @@ func TestHandler(t *testing.T) {
 
 func TestLogHandler(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _, _ := newLoggers(&buf, testConfig(t, "http://hydra:4445").Observability)
+	logger := newLoggers(&buf, testConfig(t, "http://hydra:4445").Observability).app
 	logger.Warn("server.started")
 	// An event's attribute named like a field of the line is renamed: the
 	// line keeps one time, level, log_type, instance and version.
@@ -255,7 +257,8 @@ func TestLoggersLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	logger, accessLogger, _ := newLoggers(&buf, cfg.Observability)
+	logs := newLoggers(&buf, cfg.Observability)
+	logger, accessLogger := logs.app, logs.access
 	logger.Info("flow.started")
 	logger.Warn("challenge.invalid")
 	h, err := newHandler(cfg, logger, accessLogger, testServices(t, func(context.Context) error { return nil }))
@@ -581,6 +584,71 @@ func TestServeWarningsAtErrorLevel(t *testing.T) {
 	if !strings.Contains(logs, `"detail":"app open has no allowed_sources`) {
 		t.Errorf("the app's warning is missing:\n%s", logs)
 	}
+}
+
+// The window of debug of the database reaches the level of the application
+// log at startup, which tells of it whatever log_level (P25, Q131).
+func TestServeDebugWindow(t *testing.T) {
+	keepLoggers(t)
+	for _, kv := range append(requiredEnv("http://127.0.0.1:1"),
+		"DISPATCHER_OBSERVABILITY_LOG_LEVEL=error", "DISPATCHER_SERVER_LISTEN=127.0.0.1:0", configEnv+"=") {
+		k, v, _ := strings.Cut(kv, "=")
+		t.Setenv(k, v)
+	}
+	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	useStore(t, &fakeStore{debug: &store.DebugWindow{Until: until, Flow: "main", UpdatedBy: "admin:alice"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var err error
+	logs := stdoutOf(t, func() { err = serve(ctx, nil) })
+	if err != nil || !strings.Contains(logs, `"log_type":"app","until":"`+until.Format(time.RFC3339)+`","scope_flow":"main"}`) || !strings.Contains(logs, `"level":"info","msg":"log.debug_started"`) {
+		t.Errorf("err = %v, logs:\n%s", err, logs)
+	}
+	if strings.Contains(logs, "alice") {
+		t.Errorf("the author in the application log:\n%s", logs)
+	}
+}
+
+// The level follows the window of each snapshot, not only the first.
+func TestFollowDebug(t *testing.T) {
+	src := &switchSource{s: store.NewSnapshot(nil, nil, store.DefaultSettings())}
+	logger := slog.New(slog.DiscardHandler)
+	live, err := store.NewLive(context.Background(), src, logger, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	level := loglevel.New(slog.LevelInfo, nil)
+	followDebug(live, level)
+	if level.Window() != nil {
+		t.Fatal("a window at first")
+	}
+	next := store.NewSnapshot(nil, nil, store.DefaultSettings())
+	next.Debug = &store.DebugWindow{Until: time.Now().Add(time.Hour), App: "sql"}
+	src.set(next)
+	if err := live.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if w := level.Window(); w == nil || w.App != "sql" {
+		t.Errorf("window %+v", w)
+	}
+}
+
+// switchSource gives the snapshot it was last set.
+type switchSource struct {
+	mu sync.Mutex
+	s  *store.Snapshot
+}
+
+func (s *switchSource) Snapshot(context.Context) (*store.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.s, nil
+}
+
+func (s *switchSource) set(snap *store.Snapshot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.s = snap
 }
 
 // snapshotSource gives the same snapshot at each read.

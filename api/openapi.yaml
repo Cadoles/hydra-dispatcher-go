@@ -7,7 +7,8 @@ info:
     Two APIs, by their tags.
 
     **Admin API** (`/admin/v1`): the configuration of the dispatcher, its apps,
-    flows, API clients, settings and catalogue of the scopes. Only the addresses of
+    flows, API clients, settings and catalogue of the scopes, and the level of
+    its application log. Only the addresses of
     `security.admin_authorized_hosts` reach it (403 otherwise, before anything);
     100 requests a minute and per address by default (`X-RateLimit-Remaining`,
     `X-RateLimit-Reset`, and `Retry-After` on a 429). A token comes from
@@ -39,6 +40,8 @@ tags:
     description: The settings, one document.
   - name: Scopes
     description: The catalogue of the scopes, what the consent shows and filters.
+  - name: Log level
+    description: The level of the application log, and its window of debug.
   - name: Documentation
     description: This document, and the page that shows it.
   - name: Emulated API
@@ -579,6 +582,57 @@ paths:
       description: A standard scope is never deleted (409).
       security: [{ bearer: [admin:scopes] }]
       responses: *deletes
+
+  /admin/v1/log-level:
+    get:
+      tags: [Log level]
+      operationId: getLogLevel
+      summary: Read the level of the application log
+      description: |
+        The level observability.log_level sets, and the window of debug open,
+        null for none: every instance answers the same, the window being the
+        database's.
+      security: [{ bearer: [admin:debug] }, { bearer: [admin:read] }]
+      responses:
+        "200":
+          description: The level.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogLevel" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+    put:
+      tags: [Log level]
+      operationId: setLogLevel
+      summary: Open or close the window of debug
+      description: |
+        A window lets the lines of debug of the application log pass on every
+        instance, for its duration (15 minutes by default, at most
+        observability.debug_max_duration), those of its scope alone when it
+        has one: a flow, an app, a trace id, each given narrowing it. It
+        replaces the one open; null closes it. Then the configured level comes
+        back. The lines of debug hold names, never values.
+      security: [{ bearer: [admin:debug] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LogLevelWrite" }
+      responses:
+        "200":
+          description: The level, as written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogLevel" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/Invalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /admin/v1/docs:
     get:
@@ -1190,6 +1244,39 @@ components:
       type: object
       description: 'A text by locale, "" for every locale.'
       additionalProperties: { type: string }
+    LogLevel:
+      type: object
+      required: [level, debug]
+      properties:
+        level: { type: string, enum: [debug, info, warn, error], description: 'observability.log_level.' }
+        debug:
+          description: The window of debug open, null for none.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [until, flow, app, traceId, updatedBy]
+              properties:
+                until: { type: string, format: date-time }
+                flow: { type: [string, "null"] }
+                app: { type: [string, "null"] }
+                traceId: { type: [string, "null"] }
+                updatedBy: { type: string, description: 'Who opened it, as the updatedBy of the store.' }
+    LogLevelWrite:
+      type: object
+      additionalProperties: false
+      required: [debug]
+      properties:
+        debug:
+          description: A window to open, null to close the one open.
+          oneOf:
+            - type: "null"
+            - type: object
+              additionalProperties: false
+              properties:
+                duration: { type: [string, "null"], description: 'A Go duration, 15m by default, at most observability.debug_max_duration.', examples: [15m] }
+                flow: { type: [string, "null"], description: 'A flow: its lines alone.' }
+                app: { type: [string, "null"], description: 'An app: its lines alone.' }
+                traceId: { type: [string, "null"], pattern: '^[0-9a-f]{32}$', description: 'A trace id: the lines of its request alone.' }
 
     EmulatedError:
       type: object

@@ -3,6 +3,7 @@
 {{- with .Dashboard}}
 <section>
 <h2>Dependencies</h2>
+<div class="overflow-auto">
 <table>
 <thead><tr><th scope="col">Dependency</th><th scope="col">State</th></tr></thead>
 <tbody>
@@ -11,9 +12,11 @@
 {{- end}}
 </tbody>
 </table>
+</div>
 </section>
 <section>
 <h2>Configuration</h2>
+<div class="overflow-auto">
 <table>
 <tbody>
 <tr><th scope="row">Flows enabled</th><td>{{.FlowsEnabled}} of {{.Flows}}</td></tr>
@@ -21,15 +24,18 @@
 <tr><th scope="row">API clients</th><td>{{.APIClients}}</td></tr>
 </tbody>
 </table>
+</div>
 </section>
 <section>
 <h2>Instance</h2>
+<div class="overflow-auto">
 <table>
 <tbody>
 <tr><th scope="row">Version</th><td>{{.Version}}</td></tr>
 <tr><th scope="row">Instance</th><td>{{.Instance}}</td></tr>
 </tbody>
 </table>
+</div>
 </section>
 {{- end}}
 {{end}}

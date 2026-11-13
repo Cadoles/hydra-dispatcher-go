@@ -8,6 +8,7 @@
 <p><a href="{{.Base}}/new-account" role="button">New account</a></p>
 {{- end}}
 {{- with .Data}}
+<div class="overflow-auto">
 <table>
 <thead><tr><th scope="col">Name</th><th scope="col">Role</th><th scope="col">Logs in by</th></tr></thead>
 <tbody>
@@ -16,5 +17,6 @@
 {{- end}}
 </tbody>
 </table>
+</div>
 {{- end}}
 {{end}}

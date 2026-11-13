@@ -17,16 +17,27 @@
 {{- if .Account}}
 <ul>
 <li><a href="{{.Base}}"{{if eq .Nav "dashboard"}} aria-current="page"{{end}}>Dashboard</a></li>
+<li><details>
+<summary>Configuration</summary>
+<ul>
 <li><a href="{{.Base}}/flows"{{if eq .Nav "flows"}} aria-current="page"{{end}}>Flows</a></li>
 <li><a href="{{.Base}}/apps"{{if eq .Nav "apps"}} aria-current="page"{{end}}>Apps</a></li>
+<li><a href="{{.Base}}/scopes"{{if eq .Nav "scopes"}} aria-current="page"{{end}}>Scopes</a></li>
+<li><a href="{{.Base}}/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a></li>
+</ul>
+</details></li>
 {{- if .HydraClients}}
 <li><a href="{{.Base}}/hydra-clients"{{if eq .Nav "hydra"}} aria-current="page"{{end}}>Hydra clients</a></li>
 {{- end}}
-<li><a href="{{.Base}}/scopes"{{if eq .Nav "scopes"}} aria-current="page"{{end}}>Scopes</a></li>
-<li><a href="{{.Base}}/clients"{{if eq .Nav "clients"}} aria-current="page"{{end}}>API clients</a></li>
-<li><a href="{{.Base}}/settings"{{if eq .Nav "settings"}} aria-current="page"{{end}}>Settings</a></li>
+<li><details>
+<summary>Administration</summary>
+<ul>
 <li><a href="{{.Base}}/accounts"{{if eq .Nav "accounts"}} aria-current="page"{{end}}>Accounts</a></li>
+<li><a href="{{.Base}}/clients"{{if eq .Nav "clients"}} aria-current="page"{{end}}>API clients</a></li>
 <li><a href="{{.Base}}/sso"{{if eq .Nav "sso"}} aria-current="page"{{end}}>SSO</a></li>
+<li><a href="{{.Base}}/log-level"{{if eq .Nav "log-level"}} aria-current="page"{{end}}>Log level</a></li>
+</ul>
+</details></li>
 <li><a href="{{.Base}}/account"{{if eq .Nav "account"}} aria-current="page"{{end}}>{{.Account.Username}}</a> <small>({{.Account.Role}})</small></li>
 <li><form method="post" action="{{.Base}}/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Log out</button></form></li>
 </ul>

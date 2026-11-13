@@ -32,6 +32,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/limiter"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
@@ -143,6 +144,7 @@ func serve(ctx context.Context, args []string) error {
 	}
 	watch.ConfigRefreshed(nil)
 	live.OnRefresh = watch.ConfigRefreshed
+	followDebug(live, logs.level)
 	// A write reads back at once on the instance that made it; those of the
 	// other instances show as soon as Listen hears of them (Q99), every
 	// RefreshEvery at worst.
@@ -333,8 +335,19 @@ func closeAudit(ctx context.Context, queue *audit.Queue, closer func()) {
 	}
 }
 
-// loggers are the application, access and warnings loggers of newLoggers.
-type loggers struct{ app, access, warnings *slog.Logger }
+// followDebug gives level the window of debug of each snapshot of live, the
+// current one first (Q131): the database's, which every instance reads.
+func followDebug(live *store.Live, level *loglevel.Level) {
+	level.Set(live.Snapshot().Debug)
+	live.OnSnapshot = func(s *store.Snapshot) { level.Set(s.Debug) }
+}
+
+// loggers are the application, access and warnings loggers of newLoggers,
+// and the level of the first.
+type loggers struct {
+	app, access, warnings *slog.Logger
+	level                 *loglevel.Level
+}
 
 // loadConfig reads the configuration, makes its application logger, writing
 // to w, the default and logs its warnings.
@@ -347,8 +360,7 @@ func loadConfig(path string, w io.Writer) (*config.Config, loggers, error) {
 		}
 		return nil, loggers{}, fmt.Errorf("configuration: %w", err)
 	}
-	var l loggers
-	l.app, l.access, l.warnings = newLoggers(w, cfg.Observability)
+	l := newLoggers(w, cfg.Observability)
 	slog.SetDefault(l.app)
 	for _, w := range warnings {
 		l.warnings.Warn("config.warning", "detail", w)
@@ -705,10 +717,11 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 				watch.AdminRateLimited()
 				s.audit.AdminRateLimited(c)
 			},
-			Token:  s.audit.Token,
-			Rehash: s.adminRehash,
-			Writer: s.adminWriter,
-			Wrote:  s.audit.Wrote,
+			Token:    s.audit.Token,
+			Rehash:   s.adminRehash,
+			Writer:   s.adminWriter,
+			Wrote:    s.audit.Wrote,
+			LogLevel: cfg.Observability.LogLevel, DebugMaxDuration: cfg.Observability.DebugMaxDuration.Std(),
 		})
 		if err != nil {
 			return nil, err
@@ -744,12 +757,12 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 			watch.AdminRateLimited()
 			s.audit.AdminRateLimited(c)
 		},
-		Login:        s.audit.AdminLogin,
-		Logout:       s.audit.AdminLogout,
-		Dashboard:    func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
-		Config:       s.config,
-		Writer:       s.adminWriter,
-		Scopes:       admin.Scopes,
+		Login:     s.audit.AdminLogin,
+		Logout:    s.audit.AdminLogout,
+		Dashboard: func(c context.Context) adminui.Dashboard { return dashboard(c, s.config.Snapshot(), ready) },
+		Config:    s.config,
+		Writer:    s.adminWriter,
+		Scopes:    admin.Scopes, LogLevel: cfg.Observability.LogLevel, DebugMaxDuration: cfg.Observability.DebugMaxDuration.Std(),
 		HydraClients: hydraClients, AllowHTTP: cfg.TLS.AllowHTTP, SecretMaxAge: cfg.Admin.ClientSecretMaxAge.Std(),
 		Wrote:   s.audit.UIWrote,
 		Version: version,
@@ -842,19 +855,23 @@ func appSource(s *store.Snapshot, ip netip.Addr) bool {
 	return false
 }
 
-// newLoggers returns the application, access and warnings loggers. The access
-// log has its own level, info: access_log_sample sets its volume, and its
-// errors and aborted requests are written whatever log_level. The warnings
-// logger, at warn, writes the configuration warnings whatever log_level too,
-// those of the file at startup and those of the database's snapshots: some
-// warn of an allowlist open to every client.
-func newLoggers(w io.Writer, o config.Observability) (app, access, warnings *slog.Logger) {
-	var level slog.Level
-	_ = level.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
-	app = slog.New(newLogHandler(w, o.LogFormat, level)).With("log_type", "app")
-	access = slog.New(newLogHandler(w, o.LogFormat, slog.LevelInfo)).With("log_type", "access")
-	warnings = slog.New(newLogHandler(w, o.LogFormat, slog.LevelWarn)).With("log_type", "app")
-	return app, access, warnings
+// newLoggers returns the application, access and warnings loggers. The
+// application log is at log_level, and below it in a window of debug (P25,
+// Q131), which its level tells of whatever log_level, as of the configuration
+// warnings. The access log has its own level, info: access_log_sample sets its
+// volume, and its errors and aborted requests are written whatever log_level.
+// The warnings logger, at warn, writes the configuration warnings whatever
+// log_level too, those of the file at startup and those of the database's
+// snapshots: some warn of an allowlist open to every client.
+func newLoggers(w io.Writer, o config.Observability) loggers {
+	var configured slog.Level
+	_ = configured.UnmarshalText([]byte(o.LogLevel)) // validated by config.Load
+	var l loggers
+	l.level = loglevel.New(configured, slog.New(newLogHandler(w, o.LogFormat, slog.LevelInfo)).With("log_type", "app"))
+	l.app = slog.New(l.level.Handler(newLogHandler(w, o.LogFormat, slog.LevelDebug))).With("log_type", "app")
+	l.access = slog.New(newLogHandler(w, o.LogFormat, slog.LevelInfo)).With("log_type", "access")
+	l.warnings = slog.New(newLogHandler(w, o.LogFormat, slog.LevelWarn)).With("log_type", "app")
+	return l
 }
 
 // newLogHandler writes one JSON (or text) line per record, stamped with the

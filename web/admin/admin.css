@@ -22,3 +22,48 @@ fieldset {
 .overflow-auto input {
   min-width: 9rem;
 }
+/* The navigation (P25): two menus of <details>, without a script, and the
+   lines that wrap on a narrow screen rather than widen the page. */
+nav,
+nav ul {
+  flex-wrap: wrap;
+}
+nav details {
+  position: relative;
+  margin: 0;
+}
+nav details > summary {
+  cursor: pointer;
+  /* Pico's 1rem would lift it above the links beside it. */
+  line-height: inherit;
+}
+/* Above Pico's [type=submit], of a higher weight than an element. */
+nav button[type="submit"] {
+  padding: 0.25rem 0.75rem;
+}
+nav form {
+  margin: 0;
+}
+/* A long address, a callback or a secret, breaks rather than widen the page. */
+code {
+  overflow-wrap: anywhere;
+}
+nav details:has([aria-current]) > summary {
+  font-weight: bold;
+}
+nav details > ul {
+  position: absolute;
+  z-index: 10;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 11rem;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem 0;
+  background: var(--pico-background-color);
+  border: var(--pico-border-width) solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  box-shadow: var(--pico-card-box-shadow);
+}
+nav details > ul li {
+  padding: 0.25rem 1rem;
+}

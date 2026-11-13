@@ -1,0 +1,70 @@
+{{define "content"}}
+<hgroup>
+<h1>Log level</h1>
+<p>The application log is at <strong>{{.Data.Configured}}</strong>, as observability.log_level sets it. A window of debug lets its lines of debug pass too, on every instance, for a while; those of a flow, an app or a request alone when it has a scope. They hold names, never values.</p>
+</hgroup>
+{{template "notice" .}}
+{{- with .Data}}
+{{template "general" .Errors}}
+{{- with .Window}}
+<article>
+<p>A window of debug is open until <time datetime="{{.UntilISO}}">{{.Until}}</time>, opened by {{.UpdatedBy}}. Its scope:
+{{- if or .Flow .App .TraceID}}
+{{- if .Flow}} the flow <code>{{.Flow}}</code>{{end}}
+{{- if .App}}{{if .Flow}},{{end}} the app <code>{{.App}}</code>{{end}}
+{{- if .TraceID}}{{if or .Flow .App}},{{end}} the request <code>{{.TraceID}}</code>{{end}}.
+{{- else}} every line.
+{{- end}}</p>
+{{- if $.CanWrite}}
+<form method="post" action="{{$.Base}}/log-level">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<button type="submit" name="action" value="close">Close the window</button>
+</form>
+{{- end}}
+</article>
+{{- else}}
+<p>No window of debug is open.</p>
+{{- end}}
+<form method="post" action="{{$.Base}}/log-level">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<fieldset{{if not $.CanWrite}} disabled{{end}}>
+<legend>{{if .Window}}Another window, in place of this one{{else}}A window of debug{{end}}</legend>
+<label>Duration
+<select name="duration"{{if .Errors.For "duration"}} aria-invalid="true"{{end}}>
+{{- range .Durations}}
+<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Value}}</option>
+{{- end}}
+</select>
+{{template "errors" .Errors.For "duration"}}
+<small>At most observability.debug_max_duration; then the configured level comes back by itself.</small>
+</label>
+<label>Flow
+<select name="flow"{{if .Errors.For "flow"}} aria-invalid="true"{{end}}>
+<option value="">Every flow</option>
+{{- range .Flows}}
+<option value="{{.}}"{{if eq . $.Data.Flow}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select>
+{{template "errors" .Errors.For "flow"}}
+</label>
+<label>App
+<select name="app"{{if .Errors.For "app"}} aria-invalid="true"{{end}}>
+<option value="">Every app</option>
+{{- range .Apps}}
+<option value="{{.}}"{{if eq . $.Data.App}} selected{{end}}>{{.}}</option>
+{{- end}}
+</select>
+{{template "errors" .Errors.For "app"}}
+</label>
+<label>Trace id
+<input name="trace_id" value="{{.TraceID}}" autocomplete="off" spellcheck="false" placeholder="every request"{{if .Errors.For "trace_id"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "trace_id"}}
+<small>32 hexadecimal digits: the trace_id of a line, or of an error page.</small>
+</label>
+</fieldset>
+{{- if $.CanWrite}}
+<button type="submit" name="action" value="open">Open the window</button>
+{{- end}}
+</form>
+{{- end}}
+{{end}}

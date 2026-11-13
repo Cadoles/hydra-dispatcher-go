@@ -20,11 +20,14 @@ const (
 	// ScopeScopes writes the catalogue of the scopes (Q124), admin:read
 	// reading it too.
 	ScopeScopes = "admin:scopes"
-	ScopeRead   = "admin:read"
+	// ScopeDebug opens and closes the window of debug, /log-level (Q124):
+	// given to no client by default, nor by the import of Symfony.
+	ScopeDebug = "admin:debug"
+	ScopeRead  = "admin:read"
 )
 
 // Scopes are those the API knows, in the order of the doc.
-var Scopes = []string{ScopeApps, ScopeFlows, ScopeClients, ScopeSettings, ScopeScopes, ScopeRead}
+var Scopes = []string{ScopeApps, ScopeFlows, ScopeClients, ScopeSettings, ScopeScopes, ScopeDebug, ScopeRead}
 
 // Resource is a resource of the admin API, by the scope of its writes.
 type Resource string
@@ -36,6 +39,8 @@ const (
 	Settings Resource = ScopeSettings
 	// Catalogue is the catalogue of the scopes, /scopes.
 	Catalogue Resource = ScopeScopes
+	// Debug is the level of the application log, /log-level.
+	Debug Resource = ScopeDebug
 )
 
 // Required are the scopes that allow method on r, any one of them: the

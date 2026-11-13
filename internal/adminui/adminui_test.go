@@ -239,6 +239,7 @@ func newRig(t *testing.T, baseURL string) *rig {
 			return Dashboard{Version: "test", Instance: "i1", Dependencies: []Dependency{{Name: "database", OK: true}}, Apps: 3, Flows: 2, FlowsEnabled: 1}
 		},
 		Config: r.config, Writer: r.config, Scopes: []string{"admin:apps", "admin:flows", "admin:clients", "admin:settings", "admin:read"},
+		LogLevel: "info", DebugMaxDuration: time.Hour,
 		Wrote: func(_ context.Context, user, resource, id, action string, fields []string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
