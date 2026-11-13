@@ -224,9 +224,7 @@ func (ui *UI) scopes(w http.ResponseWriter, r *http.Request, s *current) {
 	var err error
 	var partial bool
 	if p.Asked, p.Scanned, partial, err = ui.askedOutside(r); err != nil {
-		if ui.o.Logger != nil {
-			ui.o.Logger.ErrorContext(r.Context(), "admin.hydra_failed", "cause", err.Error())
-		}
+		ui.hydraFailedLog(r.Context(), err)
 		p.Error = "The clients of Hydra cannot be read now: the scopes they ask are not shown."
 	}
 	if partial {
@@ -448,6 +446,13 @@ func (ui *UI) updateScope(w http.ResponseWriter, r *http.Request, s *current) {
 		if now := version(*old); now != v {
 			v = now
 			return errChanged
+		}
+		// What only lost its spaces stays as stored (revue R45).
+		sc.Label = untouched(old.Label, sc.Label)
+		for i, c := range sc.Claims {
+			if j := slices.IndexFunc(old.Claims, func(o store.ScopeClaim) bool { return strings.TrimSpace(o.Claim) == c.Claim }); j >= 0 {
+				sc.Claims[i].Claim, sc.Claims[i].Label = old.Claims[j].Claim, untouched(old.Claims[j].Label, c.Label)
+			}
 		}
 		var c changes
 		c.add("label", !maps.Equal(nonNil(old.Label), sc.Label))

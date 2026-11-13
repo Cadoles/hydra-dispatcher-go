@@ -133,17 +133,53 @@ var errChanged = errors.New("adminui: changed since the form was shown")
 // saved, which it is.
 var errUnchanged = errors.New("adminui: nothing changed")
 
-// untouched is typed, a map of locale to text read trimmed, with each text
-// that only lost the spaces at its ends given back as stored: a value no one
-// touched stays as it is (revue R41).
+// nl writes the line ends of s as LF: a <textarea> sends CRLF.
+func nl(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+
+// kept is typed, a value of a form read trimmed, or stored when typed is
+// stored but for the spaces at its ends and the line ends a <textarea> sends:
+// a value no one touched stays as it is, and a save that changes nothing
+// writes nothing (revues R41, R45).
+func kept(stored, typed string) string {
+	if strings.TrimSpace(nl(stored)) == strings.TrimSpace(nl(typed)) {
+		return stored
+	}
+	return typed
+}
+
+// keptList is typed, a list of a form, or stored when each of its items is
+// kept.
+func keptList(stored, typed []string) []string {
+	if (stored == nil) != (typed == nil) || len(stored) != len(typed) {
+		return typed
+	}
+	for i := range stored {
+		if kept(stored[i], typed[i]) != stored[i] {
+			return typed
+		}
+	}
+	return stored
+}
+
+// keptWords is typed, words separated by spaces, or stored when it holds the
+// same words, in the same order.
+func keptWords(stored, typed string) string {
+	if strings.Join(strings.Fields(stored), " ") == strings.Join(strings.Fields(typed), " ") {
+		return stored
+	}
+	return typed
+}
+
+// untouched is typed, a map of locale to text read trimmed, each text kept as
+// stored when it is.
 func untouched(stored, typed map[string]string) map[string]string {
 	if typed == nil {
 		return nil
 	}
 	out := make(map[string]string, len(typed))
 	for l, t := range typed {
-		if old, ok := stored[l]; ok && strings.TrimSpace(old) == t {
-			t = old
+		if old, ok := stored[l]; ok {
+			t = kept(old, t)
 		}
 		out[l] = t
 	}

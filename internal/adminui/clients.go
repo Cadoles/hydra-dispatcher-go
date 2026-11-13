@@ -159,7 +159,8 @@ func (ui *UI) updateClient(w http.ResponseWriter, r *http.Request, s *current) {
 			v = now
 			return errChanged
 		}
-		if slices.Equal(c.Scopes, scopes) {
+		// The same scopes in another order change nothing (revue R45).
+		if slices.Equal(slices.Sorted(slices.Values(c.Scopes)), slices.Sorted(slices.Values(scopes))) {
 			return errUnchanged
 		}
 		fields = []string{"scopes"}

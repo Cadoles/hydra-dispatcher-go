@@ -94,9 +94,11 @@ func (ui *UI) hydraFormOf(c hydraClient) hydraForm {
 func readHydraForm(r *http.Request, c hydraClient) (hydraClient, fieldErrors) {
 	v := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
 	heldMethod := c.AuthMethod
-	c.Name, c.Scope, c.AuthMethod, c.JWKSURI, c.LogoURI = v("client_name"), v("scope"), v("token_endpoint_auth_method"), v("jwks_uri"), v("logo_uri")
-	c.RedirectURIs, c.PostLogoutURIs = lines(r.PostFormValue("redirect_uris")), lines(r.PostFormValue("post_logout_redirect_uris"))
-	c.Audience, c.CORS = lines(r.PostFormValue("audience")), lines(r.PostFormValue("allowed_cors_origins"))
+	// What only lost its spaces stays as Hydra holds it (revue R45).
+	c.Name, c.Scope, c.AuthMethod = kept(c.Name, v("client_name")), keptWords(c.Scope, v("scope")), kept(c.AuthMethod, v("token_endpoint_auth_method"))
+	c.JWKSURI, c.LogoURI = kept(c.JWKSURI, v("jwks_uri")), kept(c.LogoURI, v("logo_uri"))
+	c.RedirectURIs, c.PostLogoutURIs = keptList(c.RedirectURIs, lines(r.PostFormValue("redirect_uris"))), keptList(c.PostLogoutURIs, lines(r.PostFormValue("post_logout_redirect_uris")))
+	c.Audience, c.CORS = keptList(c.Audience, lines(r.PostFormValue("audience"))), keptList(c.CORS, lines(r.PostFormValue("allowed_cors_origins")))
 	c.GrantTypes, c.ResponseTypes, c.Flows = r.PostForm["grant_types"], r.PostForm["response_types"], r.PostForm["flows"]
 	c.SkipConsent = r.PostFormValue("skip_consent") != ""
 	errs := fieldErrors{}
@@ -254,18 +256,24 @@ func (ui *UI) hydraFailed(w http.ResponseWriter, r *http.Request, s *current, er
 		}
 		again(http.StatusUnprocessableEntity, fieldErrors{"": {"Hydra refuses it: " + httpx.BoundedCause(why)}})
 	default:
-		if ui.o.Logger != nil {
-			// The operation, the status and a cause without the answer of
-			// Hydra, whose error document the log never holds (R43); the
-			// text of another error.
-			op, status, cause := hydra.Failure(err)
-			if op == "" {
-				cause = httpx.BoundedCause(err.Error())
-			}
-			ui.o.Logger.ErrorContext(r.Context(), "admin.hydra_failed", "op", op, "status", status, "cause", cause)
-		}
+		ui.hydraFailedLog(r.Context(), err)
 		ui.status(w, r, http.StatusServiceUnavailable, "Unavailable", "Hydra cannot be reached now: try again in a moment.", s)
 	}
+}
+
+// hydraFailedLog writes admin.hydra_failed: the operation, the status and a
+// cause without the answer of Hydra, whose error document the log never holds
+// (R43, R45); the text of another error. Every screen that calls Hydra logs
+// its failures by it.
+func (ui *UI) hydraFailedLog(ctx context.Context, err error) {
+	if ui.o.Logger == nil {
+		return
+	}
+	op, status, cause := hydra.Failure(err)
+	if op == "" {
+		cause = httpx.BoundedCause(err.Error())
+	}
+	ui.o.Logger.ErrorContext(ctx, "admin.hydra_failed", "op", op, "status", status, "cause", cause)
 }
 
 func (ui *UI) hydraClients(w http.ResponseWriter, r *http.Request, s *current) {
