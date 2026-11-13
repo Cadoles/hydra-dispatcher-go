@@ -3,6 +3,7 @@ package adminui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
@@ -141,22 +142,49 @@ func (ui *UI) account(ctx context.Context, username string) (a store.AdminUser, 
 // the others cannot be ended, the cookie of this browser goes all the same,
 // and the page says so: the audit writes no logout, a stolen cookie being
 // still valid (revue R40).
+// logoutRequest is POST /admin/logout: the logout of the session, its account
+// read as for any action; or, the accounts unreadable, of this browser alone,
+// by its cookie and the token of its form (revue R41): the cookie forgotten,
+// the logout audited as local.
+func (ui *UI) logoutRequest(w http.ResponseWriter, r *http.Request) {
+	if _, err := ui.current(r); err == nil || errors.Is(err, errNoSession) {
+		ui.authed(anyRole, ui.logout).ServeHTTP(w, r)
+		return
+	}
+	s, ok := ui.sealed(r)
+	if !ok || !ui.sameOrigin(r) || !sameToken(r.PostFormValue("csrf"), s.CSRF) {
+		ui.authed(anyRole, ui.logout).ServeHTTP(w, r) // its 503, as any action's
+		return
+	}
+	ui.setCookie(w, sessionCookie, "", 0)
+	ui.loggedOutHere(w, r, s.User, errors.New("the admin accounts cannot be read"))
+}
+
 func (ui *UI) logout(w http.ResponseWriter, r *http.Request, s *current) {
 	ui.setCookie(w, sessionCookie, "", 0)
 	ctx, cancel := ui.bounded(r.Context())
 	defer cancel()
 	if err := ui.o.Accounts.EndSessions(ctx, s.account.Username); err != nil {
-		if ui.o.Logger != nil {
-			ui.o.Logger.ErrorContext(r.Context(), "admin.logout_failed", "cause", err.Error())
-		}
-		ui.status(w, r, http.StatusServiceUnavailable, "Logged out of this browser only",
-			"Your sessions in other browsers could not be ended: log in and out again in a moment.", nil)
+		ui.loggedOutHere(w, r, s.account.Username, err)
 		return
 	}
 	if ui.o.Logout != nil {
-		ui.o.Logout(r.Context(), s.account.Username)
+		ui.o.Logout(r.Context(), s.account.Username, "ended")
 	}
 	http.Redirect(w, r, ui.base+"/login", http.StatusSeeOther)
+}
+
+// loggedOutHere answers a logout of this browser alone, the sessions of the
+// account elsewhere not ended for cause: logged, audited as local.
+func (ui *UI) loggedOutHere(w http.ResponseWriter, r *http.Request, user string, cause error) {
+	if ui.o.Logger != nil {
+		ui.o.Logger.ErrorContext(r.Context(), "admin.logout_failed", "cause", cause.Error())
+	}
+	if ui.o.Logout != nil {
+		ui.o.Logout(r.Context(), user, "local")
+	}
+	ui.status(w, r, http.StatusServiceUnavailable, "Logged out of this browser only",
+		"Your sessions in other browsers could not be ended: log in and out again in a moment.", nil)
 }
 
 func (ui *UI) reauthForm(w http.ResponseWriter, r *http.Request, s *current) {

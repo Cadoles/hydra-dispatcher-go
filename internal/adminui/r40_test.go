@@ -93,7 +93,7 @@ func TestAccountsFrozen(t *testing.T) {
 }
 
 // A logout whose sessions cannot be ended logs this browser out and says so;
-// the audit writes no logout.
+// the audit writes it as local, of this browser alone (revue R41).
 func TestLogoutFailed(t *testing.T) {
 	r := newRig(t, "http://dispatcher.test")
 	b := r.browser()
@@ -103,8 +103,8 @@ func TestLogoutFailed(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "could not be ended") || b.cookies[sessionCookie] != nil {
 		t.Errorf("logout: %d %v\n%s", w.Code, b.cookies[sessionCookie], w.Body)
 	}
-	if slices.Contains(r.audited(), "logout alice") {
-		t.Errorf("audit: %q", r.audited())
+	if got := r.audited(); got[len(got)-1] != "logout alice local" || slices.Contains(got, "logout alice ended") {
+		t.Errorf("audit: %q", got)
 	}
 }
 

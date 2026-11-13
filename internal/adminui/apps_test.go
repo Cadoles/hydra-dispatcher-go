@@ -33,7 +33,10 @@ type config struct {
 	oidc *store.AdminOIDC
 	// debug is the window of debug, nil for none.
 	debug *store.DebugWindow
-	by    []string
+	// secretWrites counts the writes of the secret of admin_oidc: the digest
+	// of its sealed form, as the store's changes at each write (a nonce).
+	secretWrites int
+	by           []string
 	// fail, when set, is the error of the next writes.
 	fail error
 }
@@ -67,6 +70,9 @@ func (c *config) Snapshot() *store.Snapshot {
 	snap.Scopes = slices.Clone(c.scopes)
 	slices.SortFunc(snap.Scopes, func(a, b store.Scope) int { return strings.Compare(a.Name, b.Name) })
 	snap.Debug = c.debug
+	if c.oidc != nil && c.oidc.ClientSecret != "" {
+		snap.Sealed = map[string]string{"admin_oidc.client_secret": fmt.Sprintf("sealed-%d", c.secretWrites)}
+	}
 	return snap
 }
 
@@ -327,8 +333,13 @@ func (c *config) UpdateSettings(_ context.Context, by string, values map[string]
 	oidcWritten := false
 	for k, v := range values {
 		if f, ok := fields[k]; ok {
+			was := block.ClientSecret
 			if err := json.Unmarshal(v, f); err != nil {
 				return domain.Violations{{Field: k, Message: err.Error()}}
+			}
+			// As the store: the same secret is not written again.
+			if k == "admin_oidc.client_secret" && block.ClientSecret != was {
+				c.secretWrites++
 			}
 			oidcWritten = true
 			continue

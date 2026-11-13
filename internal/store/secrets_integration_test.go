@@ -75,6 +75,22 @@ func TestSecretsOnPostgres(t *testing.T) {
 	if after := rawSetting(t, p, "admin_oidc.client_secret"); after != before {
 		t.Error("an unchanged secret written again")
 	}
+	// The digest of its sealed form: the same while the row is, another once
+	// another secret is written; none for a setting in clear (revue R42).
+	sealed := snap.Sealed["admin_oidc.client_secret"]
+	if again, err := p.Snapshot(ctx); err != nil || sealed == "" || again.Sealed["admin_oidc.client_secret"] != sealed || len(again.Sealed) != 1 ||
+		strings.Contains(sealed, "s3cret") {
+		t.Errorf("sealed %q, again %v, %v", sealed, again.Sealed, err)
+	}
+	if err := p.UpdateSettings(ctx, "test", map[string]json.RawMessage{"admin_oidc.client_secret": json.RawMessage(`"another-s3cret"`)}); err != nil {
+		t.Fatal(err)
+	}
+	if next, err := p.Snapshot(ctx); err != nil || next.Sealed["admin_oidc.client_secret"] == sealed {
+		t.Errorf("another secret, the same digest: %v", err)
+	}
+	if err := p.UpdateSettings(ctx, "test", map[string]json.RawMessage{"admin_oidc.client_secret": json.RawMessage(`"s3cret-of-the-idp"`)}); err != nil {
+		t.Fatal(err)
+	}
 
 	// A key no longer held: the snapshot is refused, the key and the setting
 	// named.

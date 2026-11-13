@@ -2214,9 +2214,12 @@ func (d *driver) consentByCatalogue() error {
 
 // consentStrict needs consent.claims_filter strict (HYDRA_DEV_CLAIMS_FILTER=
 // strict make up-go): without lasql, lastname and firstname, which no scope
-// asked covers, are neither shown nor sent, email is; with it, both are.
+// asked covers, are neither shown nor sent, in the id_token as in the access
+// token, email is; on the path of the skip too, a second login in the same
+// session from the remember cookie (revue R44). With lasql, both are.
 func (d *driver) consentStrict() error {
-	screen, claims, err := d.withScope("openid profile email")
+	const scope = "openid profile email"
+	screen, claims, err := d.withScope(scope)
 	if err != nil {
 		return err
 	}
@@ -2229,11 +2232,52 @@ func (d *driver) consentStrict() error {
 	if err := holds(claims, true, "email"); err != nil {
 		return err
 	}
+	if err := d.accessHolds(false, "lastname", "firstname"); err != nil {
+		return fmt.Errorf("without lasql: %w", err)
+	}
+	// The skip: the same scopes, Hydra's session and the remember cookie of
+	// the login above.
+	d.client.scope = scope
+	p, err := d.start("")
+	d.client.scope = ""
+	if err != nil {
+		return err
+	}
+	if err := d.skipped(p); err != nil {
+		return fmt.Errorf("the skip: %w", err)
+	}
+	if p.URL == nil || d.kind(p) != "callback" {
+		return fmt.Errorf("the skip: %w", errUnexpected(p))
+	}
+	if claims, err = d.client.redeem(d.ctx, p.URL); err != nil {
+		return fmt.Errorf("the skip: %w", err)
+	}
+	if err := holds(claims, false, "lastname", "firstname"); err != nil {
+		return fmt.Errorf("the skip: %w", err)
+	}
+	if err := d.accessHolds(false, "lastname", "firstname"); err != nil {
+		return fmt.Errorf("the skip: %w", err)
+	}
 	if _, claims, err = d.withScope(lasqlScope); err != nil {
 		return err
 	}
 	if err := holds(claims, true, "lastname", "firstname"); err != nil {
 		return fmt.Errorf("with lasql: %w", err)
+	}
+	return nil
+}
+
+// accessHolds checks that the claims of the access token redeemed last, as
+// Hydra introspects it, hold names, or not.
+func (d *driver) accessHolds(want bool, names ...string) error {
+	ext, err := d.client.accessClaims(d.ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if _, ok := ext[n]; ok != want {
+			return fmt.Errorf("access_token: claim %s present %v, want %v", n, ok, want)
+		}
 	}
 	return nil
 }

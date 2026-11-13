@@ -128,6 +128,28 @@ func (ui *UI) failed(w http.ResponseWriter, r *http.Request, s *current, err err
 // without a word.
 var errChanged = errors.New("adminui: changed since the form was shown")
 
+// errUnchanged stops the write of a form that changes nothing: neither its
+// author nor its date rewritten, nothing audited (revue R41). The page says
+// saved, which it is.
+var errUnchanged = errors.New("adminui: nothing changed")
+
+// untouched is typed, a map of locale to text read trimmed, with each text
+// that only lost the spaces at its ends given back as stored: a value no one
+// touched stays as it is (revue R41).
+func untouched(stored, typed map[string]string) map[string]string {
+	if typed == nil {
+		return nil
+	}
+	out := make(map[string]string, len(typed))
+	for l, t := range typed {
+		if old, ok := stored[l]; ok && strings.TrimSpace(old) == t {
+			t = old
+		}
+		out[l] = t
+	}
+	return out
+}
+
 // version is that of an entity as a form shows it: the form carries it, and
 // its save is refused when the entity no longer has it.
 func version(v any) string {

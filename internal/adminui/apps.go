@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -180,10 +181,16 @@ func (ui *UI) updateApp(w http.ResponseWriter, r *http.Request, s *current) {
 			f.Version = v // saved again, the form writes over
 			return errChanged
 		}
-		fields = appChanges(*old, a)
+		if fields = appChanges(*old, a); len(fields) == 0 {
+			return errUnchanged
+		}
 		*old = a
 		return nil
 	})
+	if errors.Is(err, errUnchanged) {
+		http.Redirect(w, r, ui.appPath(id)+"?done=saved", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		ui.failed(w, r, s, err, appFields, again)
 		return

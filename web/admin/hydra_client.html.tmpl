@@ -2,12 +2,23 @@
 {{- with .Data}}
 <hgroup>
 <h1>{{if .New}}New Hydra client{{else}}Hydra client {{.Form.ID}}{{end}}</h1>
-{{- if not .New}}
+{{- if .Unreadable}}
+<p>{{if .Form.Name}}{{.Form.Name}}. {{end}}Hydra holds it in a form this screen does not read.</p>
+{{- else if not .New}}
 <p>{{if .Form.Name}}{{.Form.Name}}. {{end}}{{if .SecretSince.IsZero}}No secret: it authenticates by {{.Form.AuthMethod}}.{{else}}Its secret is {{if not .SecretExact}}at least {{end}}of {{.SecretSince.Format "2006-01-02"}}{{if .SecretOld}}: <strong>older than admin.client_secret_max_age, to turn</strong>{{end}}.{{end}}</p>
 {{- end}}
 </hgroup>
 {{template "notice" $}}
 {{template "general" .Errors}}
+{{- if .Unreadable}}
+<article>
+<p><strong>This client cannot be changed here:</strong> a member of it is not of the type the form reads. Change it by Hydra's admin API; turning its secret and deleting it stay allowed.</p>
+<p><code>{{.Unreadable}}</code></p>
+</article>
+{{- if $.CanWrite}}
+<p>{{if not .Secretless}}<a href="{{$.Base}}/hydra-clients/{{path .Form.ID}}/rotate">Turn its secret</a> · {{end}}<a href="{{$.Base}}/hydra-clients/{{path .Form.ID}}/delete">Delete this client</a></p>
+{{- end}}
+{{- else}}
 {{- if and (not .New) .Deviations}}
 <article>
 <p><strong>This client breaks the rules of the ANSSI:</strong> it is saved only once they are kept. Turning its secret and deleting it stay allowed.</p>
@@ -104,6 +115,7 @@ Skips the consent screen
 {{- end}}
 {{- if and $.CanWrite (not .New)}}
 <p>{{if not .SecretSince.IsZero}}<a href="{{$.Base}}/hydra-clients/{{path .Form.ID}}/rotate">Turn its secret</a> · {{end}}<a href="{{$.Base}}/hydra-clients/{{path .Form.ID}}/delete">Delete this client</a></p>
+{{- end}}
 {{- end}}
 <p><a href="{{$.Base}}/hydra-clients">Back to the Hydra clients</a></p>
 {{- end}}

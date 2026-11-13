@@ -71,10 +71,11 @@ type Options struct {
 	// address past the limit of its attempts.
 	Refused     func(ctx context.Context)
 	RateLimited func(ctx context.Context)
-	// Login is told of a login, granted or refused, and Logout of a logout:
-	// the audit (Durcissements, point 8).
+	// Login is told of a login, granted or refused, and Logout of a logout,
+	// ended (every session of the account) or local (this browser alone, the
+	// accounts out of reach): the audit (Durcissements, point 8).
 	Login  func(ctx context.Context, user, method, result, reason string)
-	Logout func(ctx context.Context, user string)
+	Logout func(ctx context.Context, user, result string)
 	// Dashboard gives what the dashboard shows.
 	Dashboard func(ctx context.Context) Dashboard
 	// Config is the configuration the screens show; nil, they are not
@@ -205,9 +206,10 @@ func New(o Options) (*UI, error) {
 	ui.mux.Handle("GET /admin/{$}", ui.authed(anyRole, ui.dashboard))
 	ui.mux.HandleFunc("GET /admin/login", ui.loginForm)
 	ui.mux.HandleFunc("POST /admin/login", ui.login)
-	ui.mux.Handle("POST /admin/logout", ui.authed(anyRole, ui.logout))
+	ui.mux.HandleFunc("POST /admin/logout", ui.logoutRequest)
 	ui.mux.Handle("GET /admin/reauth", ui.authed(anyRole, ui.reauthForm))
 	ui.mux.Handle("POST /admin/reauth", ui.authed(anyRole, ui.reauth))
+	ui.mux.Handle("GET /admin/secret", ui.authed(anyRole, ui.secret))
 	if o.Config != nil {
 		ui.registerApps()
 		ui.registerFlows()

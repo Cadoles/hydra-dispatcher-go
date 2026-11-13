@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"unicode"
 )
 
 // Scope is a scope of the catalogue (Page de consent): its label and the
@@ -52,14 +51,19 @@ func Standard(name string) ([]string, bool) {
 // maxScope is the length of scope.name.
 const maxScope = 128
 
-// CheckScopeName checks the name of a scope: 1 to 128 characters, without a
-// space nor a control character, as a token request separates them.
+// CheckScopeName checks the name of a scope: a scope-token of RFC 6749,
+// section 3.3, 1 to 128 characters of printable ASCII but the space, " and \;
+// neither "." nor "..", which name a segment of a path, not a scope (revue
+// R44). An invisible character, a zero-width space after email, would
+// otherwise make a scope that reads email.
 func CheckScopeName(fail Fail, s string) {
 	switch {
 	case s == "":
 		fail("name", "is required")
-	case strings.ContainsFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }):
-		fail("name", "%q holds a space or a control character", s)
+	case strings.ContainsFunc(s, func(r rune) bool { return r < 0x21 || r > 0x7e || r == '"' || r == '\\' }):
+		fail("name", "%q holds a character a scope cannot: printable ASCII alone, without a space, \" nor \\ (RFC 6749, 3.3)", s)
+	case s == "." || s == "..":
+		fail("name", "%q names no scope: it is a segment of a path", s)
 	default:
 		text(fail, "name", s, maxScope)
 	}

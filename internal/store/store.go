@@ -198,6 +198,9 @@ type Snapshot struct {
 	// Encrypted are the kids of the keys the encrypted settings are under, by
 	// key: the gauge hydra_dispatcher_encrypted_values, secrets status.
 	Encrypted map[string]string
+	// Sealed are the digests of the encrypted settings as the table holds
+	// them, by key: the version of the screen SSO (revue R42).
+	Sealed map[string]string
 	// Debug is the window of debug of the application log (P25, Q131), nil
 	// for none; one past its end too, which the level leaves aside.
 	Debug *DebugWindow
@@ -308,7 +311,7 @@ func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapsh
 	if err != nil {
 		return nil, fmt.Errorf("read settings: %w", err)
 	}
-	s.Encrypted = encryptedKIDs(rows)
+	s.Encrypted, s.Sealed = encryptedKIDs(rows), sealedDigests(rows)
 	if s.Settings, s.Warnings, err = settingsFrom(rows, keys); err != nil {
 		err = unreadable{err}
 		return nil, err

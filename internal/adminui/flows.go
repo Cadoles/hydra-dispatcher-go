@@ -2,6 +2,7 @@ package adminui
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -294,10 +295,17 @@ func (ui *UI) updateFlow(w http.ResponseWriter, r *http.Request, s *current) {
 			f.Version = v
 			return errChanged
 		}
-		fields = flowChanges(*old, fl)
+		fl.Title, fl.Description, fl.IconURL = untouched(old.Title, fl.Title), untouched(old.Description, fl.Description), untouched(old.IconURL, fl.IconURL)
+		if fields = flowChanges(*old, fl); len(fields) == 0 {
+			return errUnchanged
+		}
 		*old = fl
 		return nil
 	})
+	if errors.Is(err, errUnchanged) {
+		http.Redirect(w, r, ui.flowPath(id)+"?done=saved", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		ui.failed(w, r, s, err, f.fields(), again)
 		return

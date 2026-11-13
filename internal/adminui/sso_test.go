@@ -16,8 +16,8 @@ import (
 func ssoValues(b *browser) url.Values {
 	b.r.t.Helper()
 	page := b.do(http.MethodGet, "/admin/sso", nil)
-	o := b.r.config.Snapshot().Settings.AdminOIDC
-	f := ssoFormOf(o)
+	snap := b.r.config.Snapshot()
+	f := ssoFormOf(snap.Settings.AdminOIDC, snap.Sealed["admin_oidc.client_secret"])
 	v := url.Values{"csrf": {token(b.r.t, page)}, "version": {f.Version}, "admin_oidc.issuer": {f.Issuer}, "admin_oidc.client_id": {f.ClientID},
 		"admin_oidc.scopes": {f.Scopes}, "admin_oidc.username_claim": {f.UsernameClaim}, "admin_oidc.required_acr": {f.RequiredACR},
 		"admin_oidc.authorization_endpoint": {f.AuthorizationEndpoint}, "admin_oidc.token_endpoint": {f.TokenEndpoint}, "admin_oidc.jwks_uri": {f.JWKSURI}}

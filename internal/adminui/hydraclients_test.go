@@ -295,8 +295,8 @@ func TestHydraClientCreate(t *testing.T) {
 		t.Errorf("gen-1: %v", h.get("gen-1"))
 	}
 	values.Set("token_endpoint_auth_method", "client_secret_basic")
-	w = b.do(http.MethodPost, "/admin/hydra-clients", values)
-	if w.Code != http.StatusCreated {
+	w = b.handed(b.do(http.MethodPost, "/admin/hydra-clients", values))
+	if w.Code != http.StatusOK {
 		t.Fatalf("by a secret: %d\n%s", w.Code, w.Body)
 	}
 	secret := secretOf(t, page{w.Body.String()})
@@ -391,7 +391,7 @@ func TestHydraClientLegacy(t *testing.T) {
 	if w := b.do(http.MethodPost, "/admin/hydra-clients/legacy", form); w.Code != http.StatusUnprocessableEntity || len(h.patches) != 0 {
 		t.Errorf("kept out of the rules: %d", w.Code)
 	}
-	w := b.do(http.MethodPost, "/admin/hydra-clients/legacy/rotate", url.Values{"csrf": {b.csrf()}})
+	w := b.handed(b.do(http.MethodPost, "/admin/hydra-clients/legacy/rotate", url.Values{"csrf": {b.csrf()}}))
 	if w.Code != http.StatusOK || h.get("legacy")["client_secret"] != secretOf(t, page2(w.Body.String())) {
 		t.Errorf("rotation: %d\n%s", w.Code, w.Body)
 	}

@@ -2,6 +2,7 @@ package adminui
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -124,5 +125,56 @@ func TestAbortedDiscovery(t *testing.T) {
 	r.handler.ServeHTTP(httptest.NewRecorder(), req)
 	if w := r.browser().do(http.MethodGet, "/admin/oidc/login", nil); w.Code != http.StatusSeeOther {
 		t.Errorf("after an aborted discovery: %d", w.Code)
+	}
+}
+
+// The version of the screen SSO holds the secret, sealed: another admin who
+// writes it, the same or another, between the page and its save makes the
+// save refused, the secret typed or forgotten as the rest (revue R42). The
+// page never holds the secret, nor a digest of it in clear.
+func TestSSOVersionHoldsTheSecret(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	withIdP(r)
+	b := r.browser()
+	b.login("alice", password, "")
+	for name, mod := range map[string]func(v map[string][]string){
+		"a secret typed":     func(v map[string][]string) { v["admin_oidc.client_secret"] = []string{"mine-mine-mine"} },
+		"the secret forgot":  func(v map[string][]string) { v["forget_secret"] = []string{"true"} },
+		"nothing else typed": func(map[string][]string) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := ssoValues(b)
+			mod(v)
+			// Another admin writes another secret.
+			theirs := "theirs-" + name
+			if err := r.config.UpdateSettings(context.Background(), "admin:other", map[string]json.RawMessage{"admin_oidc.client_secret": json.RawMessage(`"` + theirs + `"`)}); err != nil {
+				t.Fatal(err)
+			}
+			w := b.do(http.MethodPost, "/admin/sso", v)
+			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "Another admin changed it") {
+				t.Fatalf("%d\n%s", w.Code, w.Body)
+			}
+			if got := r.config.Snapshot().Settings.AdminOIDC.ClientSecret; got != theirs {
+				t.Errorf("the secret of the other admin written over: %q", got)
+			}
+			if strings.Contains(w.Body.String(), theirs) {
+				t.Error("the secret in the page")
+			}
+		})
+	}
+	// The same secret written again changes nothing, nor the version.
+	v := ssoValues(b)
+	if err := r.config.UpdateSettings(context.Background(), "admin:other", map[string]json.RawMessage{"admin_oidc.client_secret": json.RawMessage(`"` + r.config.Snapshot().Settings.AdminOIDC.ClientSecret + `"`)}); err != nil {
+		t.Fatal(err)
+	}
+	v.Set("admin_oidc.scopes", "openid email")
+	if w := b.do(http.MethodPost, "/admin/sso", v); w.Code != http.StatusSeeOther {
+		t.Errorf("the same secret: %d", w.Code)
+	}
+	// The form shown again carries the version of now: saved.
+	v = ssoValues(b)
+	v["admin_oidc.client_secret"] = []string{"mine-mine-mine"}
+	if w := b.do(http.MethodPost, "/admin/sso", v); w.Code != http.StatusSeeOther || r.config.Snapshot().Settings.AdminOIDC.ClientSecret != "mine-mine-mine" {
+		t.Errorf("saved: %d\n%s", w.Code, w.Body)
 	}
 }

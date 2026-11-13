@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"net/url"
 	"slices"
 	"strings"
@@ -49,9 +50,40 @@ type hydraClient struct {
 	CreatedAt       time.Time
 	UpdatedAt       string
 	SecretRotatedAt time.Time
+	// Unreadable says why the screen does not read the client as Hydra holds
+	// it, a member of another type than the form's: "" for none. Such a
+	// client keeps its id, its name, its method and its metadata, read alone;
+	// listed, its secret turned and itself deleted, never written by the form
+	// (revue R43).
+	Unreadable string
 }
 
+// parseClient reads a client of Hydra; one the form does not read is read in
+// part, Unreadable saying why. An error for a document that is no client: not
+// an object, or no id.
 func parseClient(raw json.RawMessage) (hydraClient, error) {
+	c, err := readClient(raw)
+	if err == nil {
+		return c, nil
+	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal(raw, &members) != nil {
+		return hydraClient{}, err
+	}
+	str := func(k string) string {
+		var v string
+		_ = json.Unmarshal(members[k], &v)
+		return v
+	}
+	c = hydraClient{ID: str("client_id"), Name: str("client_name"), AuthMethod: str("token_endpoint_auth_method"), Scope: str("scope"),
+		Metadata: members["metadata"], Lifespans: map[string]string{}, Unreadable: httpx.BoundedCause(err.Error())}
+	if c.ID == "" {
+		return hydraClient{}, err
+	}
+	return c, nil
+}
+
+func readClient(raw json.RawMessage) (hydraClient, error) {
 	var doc struct {
 		ID             string          `json:"client_id"`
 		Name           string          `json:"client_name"`

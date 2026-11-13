@@ -95,8 +95,9 @@ func TestFlowOtherLocale(t *testing.T) {
 	if f, _ := r.config.flow("simple"); f.Title["de"] != "Einfach" {
 		t.Errorf("de lost: %+v", f.Title)
 	}
-	if got := r.wrote(); !slices.Equal(got, []string{"write alice flows simple update "}) {
-		t.Errorf("audit: %q", got)
+	// Nothing changed: nothing written nor audited (revue R41).
+	if got := r.wrote(); len(got) != 0 || len(r.config.by) != 0 {
+		t.Errorf("audit: %q, written by %q", got, r.config.by)
 	}
 }
 

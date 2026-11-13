@@ -350,6 +350,15 @@ func TestOIDCAutoCreate(t *testing.T) {
 	if _, found, _ := r.accounts.Admin(t.Context(), "x@example.com"); !found {
 		t.Error("named by the email")
 	}
+	// ".." names no account, a segment of a path (revue R42): the sub, the
+	// email being one too.
+	login("sub-dots", jwt.MapClaims{"preferred_username": "..", "email": "."})
+	if _, found, _ := r.accounts.Admin(t.Context(), "sub-dots"); !found {
+		t.Error("named by the sub")
+	}
+	if _, found, _ := r.accounts.Admin(t.Context(), ".."); found {
+		t.Error("an account named ..")
+	}
 	if got := r.wrote(); !slices.Contains(got, "write dora admin-users dora create role,oidc_sub") {
 		t.Errorf("audit: %q", got)
 	}

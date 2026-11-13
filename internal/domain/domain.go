@@ -347,12 +347,16 @@ func (u AdminUser) CheckChanged(fail Fail, was AdminUser) {
 }
 
 // CheckUsername checks the name of an admin account: 1 to 180 characters,
-// without a control character or a space at either end. Symfony took any
-// string; its accounts are imported (P19).
+// without a control character or a space at either end, neither "." nor "..",
+// which name a segment of a path, not an account: /admin/accounts/.. is
+// /admin (revue R42). Symfony took any string; its accounts are imported
+// (P19).
 func CheckUsername(fail Fail, s string) {
 	switch {
 	case s == "":
 		fail("username", "is required")
+	case s == "." || s == "..":
+		fail("username", "%q names no account: it is a segment of a path", s)
 	case !utf8.ValidString(s):
 		fail("username", "is not UTF-8")
 	case strings.ContainsFunc(s, unicode.IsControl):

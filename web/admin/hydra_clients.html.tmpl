@@ -25,7 +25,7 @@
 {{- range .Rows}}
 <tr><td><a href="{{$.Base}}/hydra-clients/{{path .ID}}">{{.ID}}</a></td><td>{{.Name}}</td><td>{{range $i, $g := .GrantTypes}}{{if $i}}, {{end}}{{$g}}{{end}}</td><td>{{.AuthMethod}}</td>
 <td>{{if .SecretSince.IsZero}}—{{else}}{{if not .SecretExact}}at least {{end}}since {{.SecretSince.Format "2006-01-02"}}{{if .SecretOld}} <strong>to turn</strong>{{end}}{{end}}</td>
-<td>{{if .Deviations}}<strong>{{.Deviations}} deviation{{if ne .Deviations 1}}s{{end}}</strong>{{else}}kept{{end}}</td></tr>
+<td>{{if .Unreadable}}<strong>unreadable here</strong>{{else if .Deviations}}<strong>{{.Deviations}} deviation{{if ne .Deviations 1}}s{{end}}</strong>{{else}}kept{{end}}</td></tr>
 {{- end}}
 </tbody>
 </table>

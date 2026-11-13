@@ -392,6 +392,27 @@ func (ui *UI) formAgain(sc store.Scope, v string) scopeForm {
 	return f
 }
 
+// byRow numbers the violations of the claims of sc by the rows of its form f.
+// That of a standard scope shows each claim of the code, sc only those it
+// labels: claims[1] of sc may be the fourth row (revue R44). A scope of the
+// business shows the claims of sc, in their order.
+func byRow(errs fieldErrors, sc store.Scope, f scopeForm) fieldErrors {
+	if !f.Standard {
+		return errs
+	}
+	out := fieldErrors{}
+	for field, messages := range errs {
+		var k int
+		if n, _ := fmt.Sscanf(field, "claims[%d]", &k); n == 1 && k >= 0 && k < len(sc.Claims) && field == fmt.Sprintf("claims[%d]", k) {
+			if row := slices.IndexFunc(f.Claims, func(c claimRow) bool { return c.Claim == sc.Claims[k].Claim }); row >= 0 {
+				field = fmt.Sprintf("claims[%d]", row)
+			}
+		}
+		out[field] = append(out[field], messages...)
+	}
+	return out
+}
+
 func (ui *UI) createScope(w http.ResponseWriter, r *http.Request, s *current) {
 	sc := readScopeForm(r, strings.TrimSpace(r.PostFormValue("name")))
 	again := func(status int, errs fieldErrors) {
@@ -419,7 +440,8 @@ func (ui *UI) updateScope(w http.ResponseWriter, r *http.Request, s *current) {
 	sc := readScopeForm(r, name)
 	v := strings.TrimSpace(r.PostFormValue("version"))
 	again := func(status int, errs fieldErrors) {
-		ui.show(w, r, s, status, "scope", "Scope "+name, "scopes", scopePage{Form: ui.formAgain(sc, v), Errors: errs})
+		f := ui.formAgain(sc, v)
+		ui.show(w, r, s, status, "scope", "Scope "+name, "scopes", scopePage{Form: f, Errors: byRow(errs, sc, f)})
 	}
 	var fields []string
 	err := ui.o.Writer.UpdateScope(r.Context(), author(s.account.Username), name, func(old *store.Scope) error {
@@ -432,10 +454,16 @@ func (ui *UI) updateScope(w http.ResponseWriter, r *http.Request, s *current) {
 		c.add("claims", !slices.EqualFunc(old.Claims, sc.Claims, func(a, b store.ScopeClaim) bool {
 			return a.Claim == b.Claim && maps.Equal(nonNil(a.Label), nonNil(b.Label))
 		}))
-		fields = c
+		if fields = c; len(fields) == 0 {
+			return errUnchanged
+		}
 		*old = sc
 		return nil
 	})
+	if errors.Is(err, errUnchanged) {
+		http.Redirect(w, r, ui.scopePath(name)+"?done=saved", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		ui.failed(w, r, s, err, scopeFields(sc), again)
 		return

@@ -2,6 +2,7 @@ package adminui
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"slices"
@@ -25,6 +26,16 @@ func secretOf(t *testing.T, w interface{ Body() string }) string {
 	return m[1]
 }
 
+// handed follows the hand-over of a secret just made (revue R43): a 303 to
+// /admin/secret, whose page shows it once.
+func (b *browser) handed(w *httptest.ResponseRecorder) *httptest.ResponseRecorder {
+	b.r.t.Helper()
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/secret" {
+		b.r.t.Fatalf("no secret handed over: %d %q\n%s", w.Code, w.Header().Get("Location"), w.Body)
+	}
+	return b.do(http.MethodGet, "/admin/secret", nil)
+}
+
 type page struct{ body string }
 
 func (p page) Body() string { return p.body }
@@ -40,8 +51,8 @@ func TestClients(t *testing.T) {
 	if form.Code != http.StatusOK || strings.Count(form.Body.String(), `name="scope"`) != 5 {
 		t.Fatalf("form: %d\n%s", form.Code, form.Body)
 	}
-	w := b.do(http.MethodPost, "/admin/clients", url.Values{"csrf": {token(t, form)}, "id": {"ci"}, "scope": {"admin:read", "admin:apps"}})
-	if w.Code != http.StatusCreated || w.Header().Get("Cache-Control") != "no-store" {
+	w := b.handed(b.do(http.MethodPost, "/admin/clients", url.Values{"csrf": {token(t, form)}, "id": {"ci"}, "scope": {"admin:read", "admin:apps"}}))
+	if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("create: %d\n%s", w.Code, w.Body)
 	}
 	secret := secretOf(t, page{w.Body.String()})
@@ -67,7 +78,7 @@ func TestClients(t *testing.T) {
 	if confirm.Code != http.StatusOK || !strings.Contains(confirm.Body.String(), `action="/admin/clients/ci/rotate"`) {
 		t.Fatalf("rotate, its page: %d\n%s", confirm.Code, confirm.Body)
 	}
-	w = b.do(http.MethodPost, "/admin/clients/ci/rotate", url.Values{"csrf": {token(t, confirm)}})
+	w = b.handed(b.do(http.MethodPost, "/admin/clients/ci/rotate", url.Values{"csrf": {token(t, confirm)}}))
 	if w.Code != http.StatusOK {
 		t.Fatalf("rotate: %d\n%s", w.Code, w.Body)
 	}

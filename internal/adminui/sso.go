@@ -41,15 +41,27 @@ type ssoPage struct {
 
 // ssoVersion is the version of the block as the form shows it: without its
 // secret, which no form holds.
-func ssoVersion(o store.AdminOIDC) string {
+func ssoVersion(o store.AdminOIDC, sealed string) string {
 	o.ClientSecret = ""
-	return version(o)
+	return version(struct {
+		Block  store.AdminOIDC
+		Secret string
+	}{o, sealed})
 }
 
-func ssoFormOf(o store.AdminOIDC) ssoForm {
+// ssoBlock is the block admin_oidc of the moment, and the digest of its
+// secret as the table holds it, encrypted, from the same snapshot: a secret
+// written by another since the page was shown changes the version of its
+// form, the secret never in it (revue R42).
+func (ui *UI) ssoBlock() (store.AdminOIDC, string) {
+	snap := ui.o.Config.Snapshot()
+	return snap.Settings.AdminOIDC, snap.Sealed["admin_oidc.client_secret"]
+}
+
+func ssoFormOf(o store.AdminOIDC, sealed string) ssoForm {
 	return ssoForm{Enabled: o.Enabled, AutoCreate: o.AutoCreate, Issuer: o.Issuer, ClientID: o.ClientID, Scopes: strings.Join(o.Scopes, " "),
 		UsernameClaim: o.UsernameClaim, RequiredACR: strings.Join(o.RequiredACR, " "), AuthorizationEndpoint: o.AuthorizationEndpoint,
-		TokenEndpoint: o.TokenEndpoint, JWKSURI: o.JWKSURI, Version: ssoVersion(o)}
+		TokenEndpoint: o.TokenEndpoint, JWKSURI: o.JWKSURI, Version: ssoVersion(o, sealed)}
 }
 
 func readSSOForm(r *http.Request) ssoForm {
@@ -103,18 +115,18 @@ func (ui *UI) ssoPage(o store.AdminOIDC, f ssoForm, errs fieldErrors) ssoPage {
 }
 
 func (ui *UI) sso(w http.ResponseWriter, r *http.Request, s *current) {
-	o := ui.block()
-	ui.show(w, r, s, http.StatusOK, "sso", "SSO", "sso", ui.ssoPage(o, ssoFormOf(o), nil))
+	o, sealed := ui.ssoBlock()
+	ui.show(w, r, s, http.StatusOK, "sso", "SSO", "sso", ui.ssoPage(o, ssoFormOf(o, sealed), nil))
 }
 
 func (ui *UI) updateSSO(w http.ResponseWriter, r *http.Request, s *current) {
-	o := ui.block()
+	o, sealed := ui.ssoBlock()
 	f := readSSOForm(r)
 	again := func(status int, errs fieldErrors) {
 		f.Secret = "" // never shown back
 		ui.show(w, r, s, status, "sso", "SSO", "sso", ui.ssoPage(o, f, errs))
 	}
-	if now := ssoVersion(o); now != f.Version {
+	if now := ssoVersion(o, sealed); now != f.Version {
 		f.Version = now // saved again, the form writes over
 		ui.failed(w, r, s, errChanged, ssoFields, again)
 		return

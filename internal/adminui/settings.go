@@ -142,12 +142,17 @@ func (ui *UI) updateSettings(w http.ResponseWriter, r *http.Request, s *current)
 			continue
 		}
 		kind := kindOf(defaults[k.Key])
+		shownText := r.PostFormValue("shown_" + k.Key)
+		// The field as the page showed it, its spaces too: untouched, the
+		// value stays as stored (revue R41).
+		if kind != "bool" && r.PostFormValue(k.Key) == shownText {
+			continue
+		}
 		raw, ok := settingJSON(kind, strings.TrimSpace(r.PostFormValue(k.Key)), r.PostFormValue(k.Key) != "")
 		if !ok {
 			errs[k.Key] = append(errs[k.Key], "is not a whole number of seconds")
 			continue
 		}
-		shownText := r.PostFormValue("shown_" + k.Key)
 		shown, ok := settingJSON(kind, shownText, shownText == "true")
 		if (!ok || !sameJSON(raw, shown)) && !sameJSON(raw, now[k.Key]) {
 			values[k.Key] = raw

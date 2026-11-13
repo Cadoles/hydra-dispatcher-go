@@ -2,6 +2,8 @@ package store
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -295,6 +297,21 @@ func encryptedKIDs(rows map[string][]byte) map[string]string {
 		}
 	}
 	return kids
+}
+
+// sealedDigests are the digests of the encrypted settings as the table holds
+// them, by key: a secret written again, the same or not, changes its digest
+// (a nonce of its own), which tells nothing of it. A form of the secret
+// carries it in its version (revue R42).
+func sealedDigests(rows map[string][]byte) map[string]string {
+	digests := map[string]string{}
+	for _, st := range registry {
+		if raw, ok := rows[st.key]; ok && st.secret {
+			sum := sha256.Sum256(raw)
+			digests[st.key] = hex.EncodeToString(sum[:12])
+		}
+	}
+	return digests
 }
 
 // encode returns the JSON of the field of st in s.

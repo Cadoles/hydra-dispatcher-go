@@ -209,8 +209,10 @@ func (l *Log) AdminLogin(ctx context.Context, user, method, result, reason strin
 
 // AdminLogout writes a logout of the admin UI, which ends every session of
 // the account (Q120).
-func (l *Log) AdminLogout(ctx context.Context, user string) {
-	l.logger.InfoContext(ctx, "admin.logout", "user", user, "ip", clientIP(ctx))
+// AdminLogout writes a logout of the admin: ended, every session of the
+// account; local, this browser's alone, the accounts out of reach.
+func (l *Log) AdminLogout(ctx context.Context, user, result string) {
+	l.logger.InfoContext(ctx, "admin.logout", "user", user, "result", result, "ip", clientIP(ctx))
 }
 
 func (l *Log) AdminRateLimited(ctx context.Context) {

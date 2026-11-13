@@ -230,10 +230,10 @@ func newRig(t *testing.T, baseURL string) *rig {
 			defer r.mu.Unlock()
 			r.audit = append(r.audit, strings.TrimSpace(strings.Join([]string{"login", user, method, result, reason}, " ")))
 		},
-		Logout: func(_ context.Context, user string) {
+		Logout: func(_ context.Context, user, result string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
-			r.audit = append(r.audit, "logout "+user)
+			r.audit = append(r.audit, "logout "+user+" "+result)
 		},
 		Dashboard: func(context.Context) Dashboard {
 			return Dashboard{Version: "test", Instance: "i1", Dependencies: []Dependency{{Name: "database", OK: true}}, Apps: 3, Flows: 2, FlowsEnabled: 1}
@@ -610,7 +610,7 @@ func TestLogout(t *testing.T) {
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/login" || b.cookies[sessionCookie] != nil {
 		t.Fatalf("logout: %d %v", w.Code, w.Header())
 	}
-	if got := r.audited(); got[len(got)-1] != "logout alice" {
+	if got := r.audited(); got[len(got)-1] != "logout alice ended" {
 		t.Errorf("audit: %q", got)
 	}
 	// The cookie of before, kept by a thief: the sessions of the account

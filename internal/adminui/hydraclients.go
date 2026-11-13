@@ -208,6 +208,11 @@ type hydraPage struct {
 	SecretExact, SecretOld bool
 	// Others are its other metadata, shown.
 	Others string
+	// Unreadable says why the form does not read it, Secretless whether it
+	// has no secret to turn: the page offers its rotation and its deletion
+	// alone (revue R43).
+	Unreadable string
+	Secretless bool
 }
 
 func (ui *UI) registerHydraClients() {
@@ -292,6 +297,10 @@ func (ui *UI) hydraClients(w http.ResponseWriter, r *http.Request, s *current) {
 		if err != nil {
 			continue
 		}
+		if c.Unreadable != "" {
+			p.Rows = append(p.Rows, hydraRow{hydraClient: c})
+			continue
+		}
 		row := hydraRow{hydraClient: c, Deviations: len(c.deviations(ui.o.AllowHTTP))}
 		if !c.secretless() {
 			row.SecretSince, row.SecretExact = c.secretSince()
@@ -318,6 +327,9 @@ func (ui *UI) hydraClientOf(w http.ResponseWriter, r *http.Request, s *current) 
 }
 
 func (ui *UI) hydraPageOf(c hydraClient, f hydraForm, errs fieldErrors, isNew bool) hydraPage {
+	if c.Unreadable != "" {
+		return hydraPage{Form: hydraForm{hydraClient: hydraClient{ID: c.ID, Name: c.Name}}, Errors: errs, Unreadable: c.Unreadable, Secretless: c.secretless()}
+	}
 	p := hydraPage{Form: f, Errors: errs, Deviations: c.deviations(ui.o.AllowHTTP), New: isNew}
 	if !isNew && !c.secretless() {
 		p.SecretSince, p.SecretExact = c.secretSince()
@@ -424,13 +436,16 @@ func (ui *UI) createHydraClient(w http.ResponseWriter, r *http.Request, s *curre
 		http.Redirect(w, r, ui.hydraPath(created.ID)+"?done=created", http.StatusSeeOther)
 		return
 	}
-	ui.show(w, r, s, http.StatusCreated, "client_secret", "The secret of "+created.ID, "hydra",
-		secretPage{ID: created.ID, Secret: secret, Created: true, Back: ui.hydraPath(created.ID), What: "Hydra client"})
+	ui.handOver(w, r, s, "hydra", secretPage{ID: created.ID, Secret: secret, Created: true, Back: ui.hydraPath(created.ID), What: "Hydra client"})
 }
 
 func (ui *UI) updateHydraClient(w http.ResponseWriter, r *http.Request, s *current) {
 	was, ok := ui.hydraClientOf(w, r, s)
 	if !ok {
+		return
+	}
+	if was.Unreadable != "" {
+		ui.show(w, r, s, http.StatusConflict, "hydra_client", "Hydra client "+was.ID, "hydra", ui.hydraPageOf(was, hydraForm{}, nil, false))
 		return
 	}
 	now, errs := readHydraForm(r, was)
@@ -519,8 +534,7 @@ func (ui *UI) rotateHydraClient(w http.ResponseWriter, r *http.Request, s *curre
 		return
 	}
 	ui.wrote(r.Context(), s, "hydra-clients", c.ID, "update", []string{"client_secret"})
-	ui.show(w, r, s, http.StatusOK, "client_secret", "The secret of "+c.ID, "hydra",
-		secretPage{ID: c.ID, Secret: secret, Back: ui.hydraPath(c.ID), What: "Hydra client"})
+	ui.handOver(w, r, s, "hydra", secretPage{ID: c.ID, Secret: secret, Back: ui.hydraPath(c.ID), What: "Hydra client"})
 }
 
 func (ui *UI) deleteHydraClient(w http.ResponseWriter, r *http.Request, s *current) {

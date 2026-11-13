@@ -30,6 +30,8 @@ type client struct {
 	// id_token_hint; postLogout the client's post_logout_redirect_uri.
 	idToken    string
 	postLogout string
+	// accessToken is the one redeemed last, which accessClaims introspects.
+	accessToken string
 	// scope is that of the next authorization requests, "openid profile
 	// email" when empty.
 	scope string
@@ -126,12 +128,13 @@ func (c *client) redeem(ctx context.Context, cb *url.URL) (map[string]any, error
 		return nil, fmt.Errorf("token endpoint: %d %s", resp.StatusCode, data)
 	}
 	var tokens struct {
-		IDToken string `json:"id_token"`
+		IDToken     string `json:"id_token"`
+		AccessToken string `json:"access_token"`
 	}
 	if err := json.Unmarshal(data, &tokens); err != nil || tokens.IDToken == "" {
 		return nil, fmt.Errorf("token endpoint: no id_token in %s", data)
 	}
-	c.idToken = tokens.IDToken
+	c.idToken, c.accessToken = tokens.IDToken, tokens.AccessToken
 	parts := strings.Split(tokens.IDToken, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("id_token is not a JWS")
@@ -405,4 +408,34 @@ func idTokenClaims(token string) (map[string]any, error) {
 	}
 	var claims map[string]any
 	return claims, json.Unmarshal(data, &claims)
+}
+
+// accessClaims are the claims of the access token redeemed last, as Hydra's
+// admin introspects it: its ext, what the consent's session gave it.
+func (c *client) accessClaims(ctx context.Context) (map[string]any, error) {
+	if c.accessToken == "" {
+		return nil, errors.New("no access token redeemed")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.admin.JoinPath("/admin/oauth2/introspect").String(),
+		strings.NewReader(url.Values{"token": {c.accessToken}}.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var r struct {
+		Active bool           `json:"active"`
+		Ext    map[string]any `json:"ext"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&r) != nil || !r.Active {
+		return nil, fmt.Errorf("introspection of the access token: %d, active %v", resp.StatusCode, r.Active)
+	}
+	if r.Ext == nil {
+		r.Ext = map[string]any{}
+	}
+	return r.Ext, nil
 }

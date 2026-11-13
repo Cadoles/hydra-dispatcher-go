@@ -79,20 +79,8 @@ func (ui *UI) setSession(w http.ResponseWriter, s session) {
 // over (its age, its inactivity, its account gone, its sessions ended since);
 // another error when the accounts cannot be read.
 func (ui *UI) current(r *http.Request) (*current, error) {
-	c, err := r.Cookie(ui.prefix + sessionCookie)
-	if err != nil {
-		return nil, errNoSession
-	}
-	plain, ok := ui.o.Keys.Open(sessionCookie, sealVersion, c.Value)
+	s, ok := ui.sealed(r)
 	if !ok {
-		return nil, errNoSession
-	}
-	var s session
-	if json.Unmarshal(plain, &s) != nil || s.User == "" {
-		return nil, errNoSession
-	}
-	now := ui.o.Now()
-	if now.Sub(time.UnixMicro(s.Issued)) > ui.o.MaxAge || now.Sub(time.UnixMicro(s.Seen)) > ui.o.IdleTimeout {
 		return nil, errNoSession
 	}
 	ctx, cancel := ui.bounded(r.Context())
@@ -105,6 +93,28 @@ func (ui *UI) current(r *http.Request) (*current, error) {
 		return nil, errNoSession
 	}
 	return &current{session: s, account: a}, nil
+}
+
+// sealed is the session the cookie of r holds, within its bounds, before its
+// account is read: false for none.
+func (ui *UI) sealed(r *http.Request) (session, bool) {
+	c, err := r.Cookie(ui.prefix + sessionCookie)
+	if err != nil {
+		return session{}, false
+	}
+	plain, ok := ui.o.Keys.Open(sessionCookie, sealVersion, c.Value)
+	if !ok {
+		return session{}, false
+	}
+	var s session
+	if json.Unmarshal(plain, &s) != nil || s.User == "" {
+		return session{}, false
+	}
+	now := ui.o.Now()
+	if now.Sub(time.UnixMicro(s.Issued)) > ui.o.MaxAge || now.Sub(time.UnixMicro(s.Seen)) > ui.o.IdleTimeout {
+		return session{}, false
+	}
+	return s, true
 }
 
 // role is what a route asks of the account.

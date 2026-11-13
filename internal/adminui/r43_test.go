@@ -2,6 +2,8 @@ package adminui
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +46,7 @@ func TestHydraMetadataKept(t *testing.T) {
 	if w := b.do(http.MethodPost, "/admin/hydra-clients/big", hydraValues(b, "big")); w.Code != http.StatusSeeOther || len(h.patches) != 0 {
 		t.Fatalf("unchanged: %d, patches %v", w.Code, h.patches)
 	}
-	if w := b.do(http.MethodPost, "/admin/hydra-clients/big/rotate", url.Values{"csrf": {b.csrf()}}); w.Code != http.StatusOK {
+	if w := b.do(http.MethodPost, "/admin/hydra-clients/big/rotate", url.Values{"csrf": {b.csrf()}}); w.Code != http.StatusSeeOther {
 		t.Fatalf("rotation: %d", w.Code)
 	}
 	m := h.member("big", "metadata")
@@ -73,7 +75,7 @@ func TestHydraMetadataKept(t *testing.T) {
 			t.Errorf("%s, its flows: %d\n%s", id, w.Code, w.Body)
 		}
 		before := h.member(id, "metadata")
-		if w := b.do(http.MethodPost, "/admin/hydra-clients/"+id+"/rotate", url.Values{"csrf": {b.csrf()}}); w.Code != http.StatusOK || h.member(id, "metadata") != before {
+		if w := b.do(http.MethodPost, "/admin/hydra-clients/"+id+"/rotate", url.Values{"csrf": {b.csrf()}}); w.Code != http.StatusSeeOther || h.member(id, "metadata") != before {
 			t.Errorf("%s, its rotation: %d, metadata %s", id, w.Code, h.member(id, "metadata"))
 		}
 	}
@@ -175,5 +177,94 @@ func TestHydraReportsOfR43(t *testing.T) {
 	}
 	if w := b.do(http.MethodGet, "/admin/hydra-clients/web/rotate", nil); w.Code != http.StatusSeeOther || !strings.Contains(w.Header().Get("Location"), "/admin/reauth") {
 		t.Errorf("the confirmation of a rotation past the window: %d %s", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// A client Hydra holds with a member of another type than the form's stays
+// in the list, its page saying why; its secret is turned and it is deleted as
+// any other, never written by the form (revue R43).
+func TestHydraClientUnreadable(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	h := withHydra(r)
+	h.putRaw(map[string]json.RawMessage{"client_id": rawOf("odd"), "client_name": rawOf("Odd"), "token_endpoint_auth_method": rawOf("client_secret_basic"),
+		"audience": rawOf("not-a-list"), "metadata": json.RawMessage(`{"team":"odd","n":12345678901234567890}`)})
+	b := r.browser()
+	b.login("alice", password, "")
+	list := b.do(http.MethodGet, "/admin/hydra-clients", nil).Body.String()
+	if !strings.Contains(list, `<a href="/admin/hydra-clients/odd">odd</a></td><td>Odd</td>`) || !strings.Contains(list, "unreadable here") {
+		t.Fatalf("list:\n%s", list)
+	}
+	page := b.do(http.MethodGet, "/admin/hydra-clients/odd", nil)
+	if body := page.Body.String(); page.Code != http.StatusOK || !strings.Contains(body, "cannot be changed here") || !strings.Contains(body, "audience") ||
+		!strings.Contains(body, `href="/admin/hydra-clients/odd/rotate"`) || !strings.Contains(body, `href="/admin/hydra-clients/odd/delete"`) ||
+		strings.Contains(body, `name="client_name"`) {
+		t.Fatalf("page: %d\n%s", page.Code, body)
+	}
+	// Its version as a form would carry it: refused all the same.
+	raw, _ := r.ui.o.HydraClients.OAuthClient(context.Background(), "odd")
+	odd, _ := parseClient(raw)
+	if odd.Unreadable == "" {
+		t.Fatalf("read whole: %+v", odd)
+	}
+	if w := b.do(http.MethodPost, "/admin/hydra-clients/odd", url.Values{"csrf": {b.csrf()}, "version": {version(odd)}, "client_name": {"Renamed"},
+		"token_endpoint_auth_method": {"client_secret_basic"}, "grant_types": {"authorization_code"}, "response_types": {"code"},
+		"redirect_uris": {"https://odd.test/cb"}, "scope": {"openid"}}); w.Code != http.StatusConflict ||
+		h.get("odd")["client_name"] != "Odd" {
+		t.Errorf("written by the form: %d %v", w.Code, h.get("odd"))
+	}
+	confirm := b.do(http.MethodGet, "/admin/hydra-clients/odd/rotate", nil)
+	if w := b.do(http.MethodPost, "/admin/hydra-clients/odd/rotate", url.Values{"csrf": {token(t, confirm)}}); w.Code >= 400 || h.get("odd")["client_secret"] == nil {
+		t.Errorf("rotation: %d\n%s", w.Code, w.Body)
+	}
+	if got := string(h.clients["odd"]["metadata"]); !strings.Contains(got, `"n":12345678901234567890`) || !strings.Contains(got, "secret_rotated_at") {
+		t.Errorf("metadata after the rotation: %s", got)
+	}
+	confirm = b.do(http.MethodGet, "/admin/hydra-clients/odd/delete", nil)
+	if w := b.do(http.MethodPost, "/admin/hydra-clients/odd/delete", url.Values{"csrf": {token(t, confirm)}}); w.Code != http.StatusSeeOther || h.get("odd") != nil {
+		t.Errorf("deletion: %d", w.Code)
+	}
+}
+
+// A secret just made is shown by a page of its own, once: its reload, or the
+// back of the browser, shows it no more nor makes the client again; another
+// account, or a minute later, neither (revue R43). The cookie that carries it
+// holds it sealed.
+func TestSecretHandedOnce(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	h := withHydra(r)
+	b := r.browser()
+	b.login("alice", password, "")
+	values := url.Values{"csrf": {b.csrf()}, "client_name": {"Shop"}, "redirect_uris": {"https://shop.test/cb"}, "grant_types": {"authorization_code"},
+		"response_types": {"code"}, "scope": {"openid"}, "token_endpoint_auth_method": {"client_secret_basic"}}
+	w := b.do(http.MethodPost, "/admin/hydra-clients", values)
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/admin/secret" || strings.Contains(w.Body.String(), "readonly value") {
+		t.Fatalf("create: %d\n%s", w.Code, w.Body)
+	}
+	cookie := *b.cookies[secretCookie]
+	clients := len(h.order)
+	shown := b.do(http.MethodGet, "/admin/secret", nil)
+	secret := secretOf(t, page{shown.Body.String()})
+	if strings.Contains(cookie.Value, secret) || b.cookies[secretCookie] != nil {
+		t.Errorf("the cookie: %q, kept %v", cookie.Value, b.cookies[secretCookie])
+	}
+	again := b.do(http.MethodGet, "/admin/secret", nil)
+	if again.Code != http.StatusGone || strings.Contains(again.Body.String(), secret) || len(h.order) != clients {
+		t.Errorf("reloaded: %d, clients %d\n%s", again.Code, len(h.order), again.Body)
+	}
+	// The cookie of before, replayed: by another account, or past its minute.
+	v := r.browser()
+	v.login("victor", password, "")
+	v.cookies[secretCookie] = &cookie
+	if w := v.do(http.MethodGet, "/admin/secret", nil); w.Code != http.StatusGone || strings.Contains(w.Body.String(), secret) {
+		t.Errorf("another account: %d", w.Code)
+	}
+	b.cookies[secretCookie] = &cookie
+	r.advance(secretWait + time.Second)
+	if w := b.do(http.MethodGet, "/admin/secret", nil); w.Code != http.StatusGone || strings.Contains(w.Body.String(), secret) {
+		t.Errorf("a minute later: %d", w.Code)
+	}
+	// Without a cookie at all.
+	if w := b.do(http.MethodGet, "/admin/secret", nil); w.Code != http.StatusGone {
+		t.Errorf("none: %d", w.Code)
 	}
 }

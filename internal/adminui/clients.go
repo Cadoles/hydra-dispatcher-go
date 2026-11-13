@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -51,8 +52,11 @@ type clientPage struct {
 
 // secretPage shows the secret of a client, once: What it is, Back its page.
 type secretPage struct {
-	ID, Secret, What, Back string
-	Created                bool
+	ID      string `json:"id"`
+	Secret  string `json:"secret"`
+	What    string `json:"what"`
+	Back    string `json:"back"`
+	Created bool   `json:"created"`
 }
 
 // boxes are the scopes of the form: those of the dispatcher, then those the
@@ -119,9 +123,10 @@ func (ui *UI) newClient(w http.ResponseWriter, r *http.Request, s *current) {
 	ui.show(w, r, s, http.StatusOK, "client", "New API client", "clients", clientPage{Scopes: ui.boxes(nil), New: true})
 }
 
-// showSecret renders the secret of a client, the only time it is shown.
-func (ui *UI) showSecret(w http.ResponseWriter, r *http.Request, s *current, status int, id, secret string, created bool) {
-	ui.show(w, r, s, status, "client_secret", "The secret of "+id, "clients", secretPage{ID: id, Secret: secret, Created: created, What: "API client", Back: ui.clientPath(id)})
+// showSecret sends the browser to the secret of a client, the only time it
+// is shown (handOver).
+func (ui *UI) showSecret(w http.ResponseWriter, r *http.Request, s *current, id, secret string, created bool) {
+	ui.handOver(w, r, s, "clients", secretPage{ID: id, Secret: secret, Created: created, What: "API client", Back: ui.clientPath(id)})
 }
 
 func (ui *UI) createClient(w http.ResponseWriter, r *http.Request, s *current) {
@@ -140,7 +145,7 @@ func (ui *UI) createClient(w http.ResponseWriter, r *http.Request, s *current) {
 		return
 	}
 	ui.wrote(r.Context(), s, "oauth2-clients", id, "create", []string{"id", "secret", "scopes"})
-	ui.showSecret(w, r, s, http.StatusCreated, id, secret, true)
+	ui.showSecret(w, r, s, id, secret, true)
 }
 
 func (ui *UI) updateClient(w http.ResponseWriter, r *http.Request, s *current) {
@@ -154,12 +159,17 @@ func (ui *UI) updateClient(w http.ResponseWriter, r *http.Request, s *current) {
 			v = now
 			return errChanged
 		}
-		if !slices.Equal(c.Scopes, scopes) {
-			fields = []string{"scopes"}
+		if slices.Equal(c.Scopes, scopes) {
+			return errUnchanged
 		}
+		fields = []string{"scopes"}
 		c.Scopes = scopes
 		return nil
 	})
+	if errors.Is(err, errUnchanged) {
+		http.Redirect(w, r, ui.clientPath(id)+"?done=saved", http.StatusSeeOther)
+		return
+	}
 	if err != nil {
 		ui.failed(w, r, s, err, clientFields, again)
 		return
@@ -218,7 +228,7 @@ func (ui *UI) rotateClient(w http.ResponseWriter, r *http.Request, s *current) {
 		return
 	}
 	ui.wrote(r.Context(), s, "oauth2-clients", id, "update", []string{"secret"})
-	ui.showSecret(w, r, s, http.StatusOK, id, secret, false)
+	ui.showSecret(w, r, s, id, secret, false)
 }
 
 func (ui *UI) deleteClient(w http.ResponseWriter, r *http.Request, s *current) {
