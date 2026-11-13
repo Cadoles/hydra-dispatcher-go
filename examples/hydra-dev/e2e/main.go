@@ -108,6 +108,7 @@ var scenarios = []scenario{
 	{name: "back-to-choice", run: (*driver).backToChoice},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
 	{name: "consent-by-catalogue", run: (*driver).consentByCatalogue, goOnly: true},
+	{name: "admin-journey", run: (*driver).adminJourney, goOnly: true},
 	{name: "expired-on-consent", run: (*driver).expiredOnConsent, optIn: true},
 	{name: "limiter-stops-forgery", run: (*driver).limiterStopsForgery, optIn: true},
 	{name: "webhook-rewrites", run: (*driver).webhookRewrites, optIn: true},
@@ -143,6 +144,9 @@ func run() error {
 	into := flag.String("into", "", "directory receiving one <NN>-<scenario> directory of captured exchanges per scenario")
 	first := flag.Int("first", 1, "number of the first scenario directory")
 	verbose := flag.Bool("v", false, "log each request of the browser")
+	adminPassword := flag.String("admin-password-file", "../hydra-dev/files/apps/dispatcher-go/admin-password",
+		"admin-journey: the file of the password of the account admin of the screens, hydra-dev's; never given in the command line")
+	adminUser := flag.String("admin-user", "admin", "admin-journey: the account of the screens")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: e2e [flags] [scenario...]\n\nscenarios:\n")
 		for _, s := range scenarios {
@@ -190,6 +194,8 @@ func run() error {
 		pages:      goPages,
 		password:   *password,
 		wait:       *wait,
+		adminUser:  *adminUser,
+		adminFile:  *adminPassword,
 	}
 	if *symfony {
 		d.pages, d.symfony = symfonyPages, true
@@ -360,6 +366,9 @@ type driver struct {
 	mark int
 	// notes of the scenario, printed after PASS.
 	notes []string
+	// adminUser and adminFile are the account of the screens and the file of
+	// its password: admin-journey.
+	adminUser, adminFile string
 }
 
 func (d *driver) note(format string, args ...any) {

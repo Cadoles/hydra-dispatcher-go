@@ -36,6 +36,9 @@
 <li><a href="{{.Base}}/clients"{{if eq .Nav "clients"}} aria-current="page"{{end}}>API clients</a></li>
 <li><a href="{{.Base}}/sso"{{if eq .Nav "sso"}} aria-current="page"{{end}}>SSO</a></li>
 <li><a href="{{.Base}}/log-level"{{if eq .Nav "log-level"}} aria-current="page"{{end}}>Log level</a></li>
+{{- if .APIDocs}}
+<li><a href="{{.Base}}/v1/docs">API documentation</a></li>
+{{- end}}
 </ul>
 </details></li>
 <li><a href="{{.Base}}/account"{{if eq .Nav "account"}} aria-current="page"{{end}}>{{.Account.Username}}</a> <small>({{.Account.Role}})</small></li>

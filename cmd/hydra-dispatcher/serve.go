@@ -765,6 +765,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Config:    s.config,
 		Writer:    s.adminWriter,
 		Scopes:    admin.Scopes, LogLevel: cfg.Observability.LogLevel, DebugMaxDuration: cfg.Observability.DebugMaxDuration.Std(),
+		APIDocs:      s.adminKeys != nil,
 		HydraClients: hydraClients, AllowHTTP: cfg.TLS.AllowHTTP, SecretMaxAge: cfg.Admin.ClientSecretMaxAge.Std(),
 		Wrote:   s.audit.UIWrote,
 		Version: version,

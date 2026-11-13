@@ -98,6 +98,9 @@ type Options struct {
 	// Scopes are those an API client may have (admin.Scopes): the boxes of
 	// its form.
 	Scopes []string
+	// APIDocs tells whether the admin API serves its documentation,
+	// /admin/v1/docs: the menu links to it, as Symfony's did.
+	APIDocs bool
 	// LogLevel is observability.log_level, and DebugMaxDuration
 	// observability.debug_max_duration: the screen of the level (P25).
 	LogLevel         string
@@ -284,10 +287,10 @@ type view struct {
 	// Link, with LinkText, is what a status page offers to do.
 	Link, LinkText string
 	// HydraClients tells whether the screens of the clients of Hydra are
-	// served: the navigation.
-	HydraClients bool
-	Account      *store.AdminUser
-	Dashboard    *Dashboard
+	// served, APIDocs the documentation of the admin API: the navigation.
+	HydraClients, APIDocs bool
+	Account               *store.AdminUser
+	Dashboard             *Dashboard
 	// Nav is the section of the page in the navigation, Notice what the page
 	// says of the write that led to it, Data what a screen shows.
 	Nav, Notice string
@@ -300,7 +303,7 @@ type view struct {
 func (ui *UI) render(w http.ResponseWriter, status int, name string, v view) {
 	v.Base, v.Asset, v.Version = ui.base, ui.base+"/static/pico.css?v="+ui.sheet.etag, ui.o.Version
 	v.Steps, v.Styles = ui.base+"/static/steps.js?v="+ui.steps.etag, ui.base+"/static/admin.css?v="+ui.styles.etag
-	v.HydraClients = ui.o.HydraClients != nil
+	v.HydraClients, v.APIDocs = ui.o.HydraClients != nil, ui.o.APIDocs
 	var b bytes.Buffer
 	if err := ui.pages[name].ExecuteTemplate(&b, "layout", v); err != nil {
 		http.Error(w, "the page could not be rendered", http.StatusInternalServerError)
