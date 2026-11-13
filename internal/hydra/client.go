@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
 )
 
 var (
@@ -203,6 +205,10 @@ func statusClass(err error) string {
 type Client struct {
 	// Observer, nil for none, is set before the first call.
 	Observer Observer
+	// Log, nil for none, gets hydra.request at the level debug for each call
+	// (Q132): its operation, its status, its duration, the flow and the app of
+	// its request; never a challenge nor a body. Set before the first call.
+	Log *slog.Logger
 
 	oauth2   ory.OAuth2API
 	metadata ory.MetadataAPI
@@ -315,6 +321,14 @@ func call[T any](c *Client, ctx context.Context, op string, do func() (T, *http.
 	v, resp, err := do()
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()
+	}
+	if c.Log != nil && c.Log.Enabled(ctx, slog.LevelDebug) {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		c.Log.DebugContext(ctx, "hydra.request", append([]any{"operation", op, "status", status, "duration_ms", time.Since(start).Milliseconds()},
+			loglevel.ScopeAttrs(ctx)...)...)
 	}
 	if err == nil {
 		if c.Observer != nil {

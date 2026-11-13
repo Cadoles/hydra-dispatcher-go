@@ -1,10 +1,13 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -288,9 +291,62 @@ func (r *run) granted(scopes []string, o Object) Object {
 	for k, v := range o {
 		if covered[k] {
 			out[k] = v
+			continue
 		}
+		if r.dropped == nil {
+			r.dropped = map[string]bool{}
+		}
+		r.dropped[k] = true
 	}
 	return out
+}
+
+// sameJSON tells whether a and b are the same JSON, whatever their spaces.
+func sameJSON(a, b json.RawMessage) bool {
+	var x, y bytes.Buffer
+	return json.Compact(&x, a) == nil && json.Compact(&y, b) == nil && bytes.Equal(x.Bytes(), y.Bytes())
+}
+
+// names are the names of the claims of o, sorted; [] for none.
+func names(o any) []string {
+	m, _ := o.(Object)
+	return append([]string{}, slices.Sorted(maps.Keys(m))...)
+}
+
+// claimsReports are the lines of debug of the claims of a consent accepted
+// (Q132): claims.merged, of the steps of f (A2), the claims a later step gave
+// another value among them; claims.filtered, the names body sends in each
+// token and those the strict filter left out. Names, never values.
+func (r *run) claimsReports(f *Flow, body ory.AcceptOAuth2ConsentRequest) []Report {
+	var reports []Report
+	if f != nil && len(f.Steps) > 0 {
+		var idt, act []Object
+		for _, s := range f.Steps {
+			idt, act = append(idt, s.IDToken), append(act, s.AccessToken)
+		}
+		conflicts := map[string]bool{}
+		for _, parts := range [][]Object{idt, act} {
+			seen := Object{}
+			for _, p := range parts {
+				for k, v := range p {
+					if isNull(v) {
+						continue
+					}
+					if before, ok := seen[k]; ok && !sameJSON(before, v) {
+						conflicts[k] = true
+					}
+					seen[k] = v
+				}
+			}
+		}
+		reports = append(reports, Report{Event: "claims.merged", Debug: true, Names: &ClaimNames{IDToken: names(MergeClaims(idt...)),
+			AccessToken: names(MergeClaims(act...)), Conflicts: append([]string{}, slices.Sorted(maps.Keys(conflicts))...)}})
+	}
+	filtered := &ClaimNames{IDToken: []string{}, AccessToken: []string{}, Dropped: append([]string{}, slices.Sorted(maps.Keys(r.dropped))...)}
+	if s := body.Session; s != nil {
+		filtered.IDToken, filtered.AccessToken = names(s.IdToken), names(s.AccessToken)
+	}
+	return append(reports, Report{Event: "claims.filtered", Debug: true, Names: filtered})
 }
 
 // grantedSession filters the session of body by the scopes it grants, after
@@ -331,7 +387,9 @@ func (r *run) acceptConsent(f *Flow, c string, req *ory.OAuth2ConsentRequest) Ou
 	if err := d.err(); err != nil {
 		return r.hydraFailure(f, err)
 	}
-	return r.consentDone(f, d).report(Report{Event: "hydra.consent_accepted"})
+	out := r.consentDone(f, d).report(Report{Event: "hydra.consent_accepted"})
+	out.Reports = append(out.Reports, r.claimsReports(f, d.Call.AcceptConsent)...)
+	return out
 }
 
 // consentHook calls the consent webhook with body, what the request req holds of the

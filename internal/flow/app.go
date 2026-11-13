@@ -126,7 +126,7 @@ func (r *run) appCall(ev AppCall) Outcome {
 		if !current || step.LoginOK {
 			return s.redirect(s.loop) // EMU-9 (RA2, Q4)
 		}
-		return s.served(f.LoginRequestFor(r.Env, ref, k)) // EMU-8
+		return s.served(f.LoginRequestFor(r.Env, ref, k)).report(f.receivedReport(r.Env, k)...) // EMU-8
 	case AppAcceptLogin:
 		body, ctx, err := loginAcceptOf(ev.Body)
 		switch {
@@ -162,7 +162,7 @@ func (r *run) appCall(ev AppCall) Outcome {
 	}
 	switch ev.Op {
 	case AppGetConsent:
-		return s.served(f.ConsentRequestFor(r.Env, ref, k)) // EMU-18
+		return s.served(f.ConsentRequestFor(r.Env, ref, k)).report(f.receivedReport(r.Env, k)...) // EMU-18
 	case AppAcceptConsent:
 		g := f.clone()
 		g.Steps[k-1].ConsentOK = true

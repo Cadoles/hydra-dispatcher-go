@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -94,6 +95,27 @@ func ReceivedClaims(claims Object, app store.App) Object {
 		}
 	}
 	return out
+}
+
+// receivedReport is claims.filtered for the app of step k reading its request
+// (Q132): the names of the claims of the previous steps it receives, those its
+// receive_claims leaves out. None when its app is gone, which the request
+// answers.
+func (f *Flow) receivedReport(env Env, k int) []Report {
+	app, ok := env.Config.App(f.Steps[k-1].App)
+	if !ok {
+		return nil
+	}
+	previous := f.PreviousClaims(k)
+	received := ReceivedClaims(previous, app)
+	var dropped []string
+	for name := range previous {
+		if _, ok := received[name]; !ok {
+			dropped = append(dropped, name)
+		}
+	}
+	slices.Sort(dropped)
+	return []Report{{Event: "claims.filtered", Debug: true, App: app.ID, Names: &ClaimNames{Claims: names(received), Dropped: append([]string{}, dropped...)}}}
 }
 
 // accepted returns the steps whose login is accepted.

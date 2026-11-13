@@ -56,6 +56,12 @@ func TestSentinelsInTheThreeStreams(t *testing.T) {
 			}
 		}
 	}
+	// The lines of debug (Q132): the name of the claim, never its value.
+	for _, want := range []string{`"msg":"flow.transition"`, `"msg":"claims.merged"`, `"id_token":["email"]`, `"msg":"claims.filtered"`} {
+		if !strings.Contains(app.String(), want) {
+			t.Errorf("no %s in the application log:\n%s", want, app.String())
+		}
+	}
 	for _, want := range []string{`"msg":"auth.succeeded"`, `"log_type":"audit"`, `"subject":"`} {
 		if !strings.Contains(audited.String(), want) {
 			t.Errorf("no %s in the audit log:\n%s", want, audited.String())

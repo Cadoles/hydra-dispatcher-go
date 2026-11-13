@@ -67,6 +67,10 @@ func TestHandler(t *testing.T) {
 		{name: "debug-traced", ctx: traced, level: slog.LevelDebug},
 		{name: "debug-other-trace", ctx: other, level: slog.LevelDebug},
 		{name: "debug-traced-main", ctx: traced, level: slog.LevelDebug, args: []any{"flow", "main"}},
+		// The request's flow and app, unless the line names others.
+		{name: "debug-request-main", ctx: WithScope(context.Background(), "main", "sql"), level: slog.LevelDebug},
+		{name: "debug-request-other", ctx: WithScope(context.Background(), "main", "sql"), level: slog.LevelDebug, args: []any{"flow", "other"}},
+		{name: "info-request-main", ctx: WithScope(context.Background(), "main", ""), level: slog.LevelInfo},
 	}
 	for _, c := range []struct {
 		name       string
@@ -74,22 +78,23 @@ func TestHandler(t *testing.T) {
 		window     *Window
 		want       []string
 	}{
-		{name: "no window", configured: slog.LevelInfo, want: []string{"info"}},
+		{name: "no window", configured: slog.LevelInfo, want: []string{"info", "info-request-main"}},
 		{name: "every line", configured: slog.LevelInfo, window: &Window{Until: now.Add(time.Minute)},
-			want: []string{"info", "debug", "debug-main", "debug-other-flow", "debug-sql", "debug-with-main", "debug-grouped-main", "debug-grouped-attr", "debug-traced", "debug-other-trace", "debug-traced-main"}},
-		{name: "ended", configured: slog.LevelInfo, window: &Window{Until: now}, want: []string{"info"}},
+			want: []string{"info", "debug", "debug-main", "debug-other-flow", "debug-sql", "debug-with-main", "debug-grouped-main", "debug-grouped-attr", "debug-traced", "debug-other-trace", "debug-traced-main",
+				"debug-request-main", "debug-request-other", "info-request-main"}},
+		{name: "ended", configured: slog.LevelInfo, window: &Window{Until: now}, want: []string{"info", "info-request-main"}},
 		{name: "a flow", configured: slog.LevelInfo, window: &Window{Until: now.Add(time.Minute), Flow: "main"},
-			want: []string{"info", "debug-main", "debug-sql", "debug-with-main", "debug-traced-main"}},
+			want: []string{"info", "debug-main", "debug-sql", "debug-with-main", "debug-traced-main", "debug-request-main", "info-request-main"}},
 		{name: "a flow and an app", configured: slog.LevelInfo, window: &Window{Until: now.Add(time.Minute), Flow: "main", App: "sql"},
-			want: []string{"info", "debug-sql"}},
+			want: []string{"info", "debug-sql", "debug-request-main", "info-request-main"}},
 		{name: "a trace", configured: slog.LevelInfo, window: &Window{Until: now.Add(time.Minute), TraceID: trace},
-			want: []string{"info", "debug-traced", "debug-traced-main"}},
+			want: []string{"info", "debug-traced", "debug-traced-main", "info-request-main"}},
 		{name: "a trace and a flow", configured: slog.LevelInfo, window: &Window{Until: now.Add(time.Minute), TraceID: trace, Flow: "main"},
-			want: []string{"info", "debug-traced-main"}},
+			want: []string{"info", "debug-traced-main", "info-request-main"}},
 		{name: "warn, no window", configured: slog.LevelWarn, want: nil},
 		// The window lets the info lines of its scope pass too.
 		{name: "warn, a window", configured: slog.LevelWarn, window: &Window{Until: now.Add(time.Minute), Flow: "main"},
-			want: []string{"debug-main", "debug-sql", "debug-with-main", "debug-traced-main"}},
+			want: []string{"debug-main", "debug-sql", "debug-with-main", "debug-traced-main", "debug-request-main", "info-request-main"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			at := now

@@ -619,6 +619,8 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	}
 	watch := s.metrics
 	hydraClient.Observer = watch
+	// hydra.request and webhook.request, at the level debug (Q132).
+	hydraClient.Log, webhooks.Log = logger, logger
 	watch.WatchHydraInFlight(hydraClient.InFlight)
 	watch.WatchEncrypted(func() map[string]int {
 		counts := map[string]int{}

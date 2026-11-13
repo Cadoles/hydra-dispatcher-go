@@ -21,6 +21,7 @@ import (
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
@@ -185,7 +186,7 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			}
 			continue
 		case out.Call != nil:
-			reports = append(reports, o.call(ctx, *out.Call, &in.Answers)...)
+			reports = append(reports, o.call(scoped(ctx, in, nil), *out.Call, &in.Answers)...)
 			continue
 		case out.Write == nil && out.WriteLogout == nil:
 			return o.result(ctx, in, out, reports)
@@ -296,8 +297,14 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 	if _, ok := in.Event.(AppCall); ok {
 		surface = "emulated"
 	}
+	ctx = scoped(ctx, in, &out)
 	if o.Log != nil {
+		o.transition(ctx, in, out)
 		for _, r := range reports {
+			if r.Debug {
+				o.debug(ctx, r)
+				continue
+			}
 			if !o.sampled(ctx, r.Event) {
 				continue
 			}
@@ -360,6 +367,85 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 		}
 	}
 	return Result{Response: out.Response, Reports: reports, Config: in.Env.Config}
+}
+
+// scoped is ctx with the flow of in and the app of its current step, those of
+// out when it writes another (Q132): a window of debug in their scope lets the
+// lines of the request pass, and the lines of debug of its calls name them.
+func scoped(ctx context.Context, in Input, out *Outcome) context.Context {
+	f := in.Flow
+	if out != nil && out.Write != nil {
+		f = out.Write
+	}
+	if f == nil {
+		return ctx
+	}
+	app := ""
+	if f.Current >= 1 && f.Current <= len(f.Steps) {
+		app = f.Steps[f.Current-1].App
+	}
+	return loglevel.WithScope(ctx, f.FlowID, app)
+}
+
+// eventNames name the events in flow.transition.
+var eventNames = map[string]string{"flow.Entry": "entry", "flow.Choose": "choice", "flow.Loop": "loop", "flow.Consent": "consent",
+	"flow.AppCall": "app_call", "flow.Logout": "logout", "flow.LogoutNext": "logout_next"}
+
+// appOps name the endpoints of the emulated API in flow.transition.
+var appOps = map[AppOp]string{AppGetLogin: "get_login", AppAcceptLogin: "accept_login", AppRejectLogin: "reject_login",
+	AppGetConsent: "get_consent", AppAcceptConsent: "accept_consent", AppRejectConsent: "reject_consent",
+	AppGetLogout: "get_logout", AppAcceptLogout: "accept_logout", AppRejectLogout: "reject_logout"}
+
+// outcomeNames name the answers in flow.transition.
+var outcomeNames = map[ResponseKind]string{Redirect: "redirect", ChoicePage: "choice_page", ConsentPage: "consent_page", ErrorPage: "error_page",
+	AppJSON: "app_json", LogoutPage: "logout_page"}
+
+// transition writes flow.transition at the level debug (Q132): the event, the
+// step of the flow before and after it, what it answered; names and numbers,
+// never a challenge nor a claim.
+func (o *Orchestrator) transition(ctx context.Context, in Input, out Outcome) {
+	if !o.Log.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	before, after := 0, 0
+	if in.Flow != nil {
+		before, after = in.Flow.Current, in.Flow.Current
+	}
+	if out.Write != nil {
+		after = out.Write.Current
+	}
+	args := []any{"event", eventNames[fmt.Sprintf("%T", in.Event)], "step_before", before, "step_after", after, "outcome", outcomeNames[out.Response.Kind]}
+	if call, ok := in.Event.(AppCall); ok {
+		args = append(args, "operation", appOps[call.Op])
+	}
+	switch out.Response.Kind {
+	case ErrorPage:
+		args = append(args, "error_code", string(out.Response.Code))
+	case AppJSON:
+		args = append(args, "status", out.Response.Status)
+	}
+	o.Log.DebugContext(ctx, "flow.transition", append(args, loglevel.ScopeAttrs(ctx)...)...)
+}
+
+// debug writes a line of the level debug of the engine (Q132): the names of
+// claims it holds, the flow and the app of its request; that of an app reading
+// its request is its current step's.
+func (o *Orchestrator) debug(ctx context.Context, r Report) {
+	if !o.Log.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	var args []any
+	if n := r.Names; n != nil {
+		for _, f := range []struct {
+			key   string
+			names []string
+		}{{"id_token", n.IDToken}, {"access_token", n.AccessToken}, {"claims", n.Claims}, {"dropped", n.Dropped}, {"conflicts", n.Conflicts}} {
+			if f.names != nil {
+				args = append(args, f.key, f.names)
+			}
+		}
+	}
+	o.Log.DebugContext(ctx, r.Event, append(args, loglevel.ScopeAttrs(ctx)...)...)
 }
 
 // observe gives seen to w. A panic of w is caught and logged, observer.panic, which goes

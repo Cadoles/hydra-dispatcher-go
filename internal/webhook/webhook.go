@@ -16,12 +16,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -33,6 +36,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
@@ -59,6 +63,9 @@ const (
 // Client calls the webhooks, one shared transport over HTTP, at most
 // webhooks.max_processes programs at a time.
 type Client struct {
+	// Log, nil for none, gets webhook.request at the level debug for each call
+	// (Q132): set before the first call.
+	Log     *slog.Logger
 	http    *http.Client
 	key     []byte
 	timeout time.Duration
@@ -238,12 +245,15 @@ func (c *Client) Login(ctx context.Context, call flow.Call) flow.LoginHookAnswer
 		Client:      clientOf(call.Hook.Client),
 	})
 	if err != nil {
+		c.traced(ctx, "login", call.Hook.Location, start, err)
 		return flow.LoginHookAnswer{Err: err}
 	}
 	answer, err := parseLogin(data)
 	if err != nil {
-		return flow.LoginHookAnswer{Err: refused(call.Hook.Location, start, err)}
+		err = refused(call.Hook.Location, start, err)
+		answer = flow.LoginHookAnswer{Err: err}
 	}
+	c.traced(ctx, "login", call.Hook.Location, start, err)
 	return answer
 }
 
@@ -271,13 +281,44 @@ func (c *Client) Consent(ctx context.Context, call flow.Call) flow.ConsentHookAn
 	}
 	data, err := c.invoke(ctx, h.Location, payload)
 	if err != nil {
+		c.traced(ctx, "consent", h.Location, start, err)
 		return flow.ConsentHookAnswer{Err: err}
 	}
 	answer, err := parseConsent(data)
 	if err != nil {
-		return flow.ConsentHookAnswer{Err: refused(h.Location, start, err)}
+		err = refused(h.Location, start, err)
+		c.traced(ctx, "consent", h.Location, start, err)
+		return flow.ConsentHookAnswer{Err: err}
 	}
+	c.traced(ctx, "consent", h.Location, start, nil, "id_token", answer.IDToken, "access_token", answer.AccessToken)
 	return answer
+}
+
+// traced writes webhook.request at the level debug (Q132): the kind of the
+// webhook, its host, the status of its answer (that of an error; 200 for an
+// answer of a URL, 0 of a program), its duration, and the names of the claims
+// of each member it returned, never their values; the flow and the app of its
+// request.
+func (c *Client) traced(ctx context.Context, kind, location string, start time.Time, err error, members ...any) {
+	if c.Log == nil || !c.Log.Enabled(ctx, slog.LevelDebug) {
+		return
+	}
+	status := 0
+	var failed *flow.HookError
+	switch {
+	case errors.As(err, &failed):
+		status = failed.Status
+	case err == nil && strings.HasPrefix(store.WebhookScheme(location), "http"):
+		status = http.StatusOK
+	}
+	args := []any{"kind", kind, "host", target(location), "status", status, "duration_ms", time.Since(start).Milliseconds()}
+	for i := 0; i+1 < len(members); i += 2 {
+		if raw, _ := members[i+1].(json.RawMessage); raw != nil {
+			o, _ := flow.ObjectOf(raw)
+			args = append(args, members[i], append([]string{}, slices.Sorted(maps.Keys(o))...))
+		}
+	}
+	c.Log.DebugContext(ctx, "webhook.request", append(args, loglevel.ScopeAttrs(ctx)...)...)
 }
 
 func orEmpty(list []string) []string {

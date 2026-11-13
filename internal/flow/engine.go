@@ -142,8 +142,8 @@ type Outcome struct {
 	Reports  []Report
 }
 
-func (o Outcome) report(r Report) Outcome {
-	o.Reports = append(o.Reports, r)
+func (o Outcome) report(r ...Report) Outcome {
+	o.Reports = append(o.Reports, r...)
 	return o
 }
 
@@ -290,6 +290,18 @@ type Report struct {
 	Elapsed   time.Duration
 	Sentry    bool
 	Audit     bool
+	// Debug marks a line of the level debug (Q132): claims.merged,
+	// claims.filtered, the names of claims it tells of in Names. A pointer:
+	// a Report stays comparable.
+	Debug bool
+	Names *ClaimNames
+}
+
+// ClaimNames are names of claims, never values (Q132): those of each token,
+// those an app receives, those the strict filter or receive_claims dropped,
+// those a later step gave another value. A list nil is not told.
+type ClaimNames struct {
+	IDToken, AccessToken, Claims, Dropped, Conflicts []string
 }
 
 // Op is a call a transition asks for.
@@ -578,6 +590,9 @@ func classify(err error) failure {
 type run struct {
 	Input
 	used map[Op]bool
+	// dropped are the claims the strict filter left out (Q129), for
+	// claims.filtered: the same at each replay of the transition.
+	dropped map[string]bool
 }
 
 func (r *run) use(op Op) {

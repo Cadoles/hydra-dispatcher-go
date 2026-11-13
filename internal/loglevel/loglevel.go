@@ -113,6 +113,38 @@ func same(a, b *Window) bool {
 	return a.Until.Equal(b.Until) && a.Flow == b.Flow && a.App == b.App && a.TraceID == b.TraceID
 }
 
+// scopeKey carries the flow and the app of a request in its context.
+type scopeKey struct{}
+
+type scope struct{ flow, app string }
+
+// WithScope returns ctx carrying the flow and the app its request is about:
+// a window in their scope lets its lines pass, and the lines of debug of the
+// calls it makes name them (Q132).
+func WithScope(ctx context.Context, flow, app string) context.Context {
+	return context.WithValue(ctx, scopeKey{}, scope{flow, app})
+}
+
+// Scope gives the flow and the app ctx carries, "" for none.
+func Scope(ctx context.Context) (flow, app string) {
+	s, _ := ctx.Value(scopeKey{}).(scope)
+	return s.flow, s.app
+}
+
+// ScopeAttrs are the flow and the app ctx carries, as the attributes of a
+// line: those it has.
+func ScopeAttrs(ctx context.Context) []any {
+	flow, app := Scope(ctx)
+	var attrs []any
+	if flow != "" {
+		attrs = append(attrs, "flow", flow)
+	}
+	if app != "" {
+		attrs = append(attrs, "app", app)
+	}
+	return attrs
+}
+
 // Handler is h, which takes every level, filtered: a line at the configured
 // level or above passes; one below it only while a window is open, and in
 // its scope.
@@ -150,7 +182,8 @@ func (h handler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // within tells whether the line r is in the scope of w: each field of the
-// scope held by the line, its attributes or its request's.
+// scope held by the line, its attributes (those of the logger, then its own)
+// or its request's.
 func (h handler) within(ctx context.Context, r slog.Record, w *Window) bool {
 	if w.TraceID != "" && httpx.TraceID(ctx) != w.TraceID {
 		return false
@@ -158,7 +191,13 @@ func (h handler) within(ctx context.Context, r slog.Record, w *Window) bool {
 	if w.Flow == "" && w.App == "" {
 		return true
 	}
-	flow, app := h.flow, h.app
+	flow, app := Scope(ctx)
+	if h.flow != "" {
+		flow = h.flow
+	}
+	if h.app != "" {
+		app = h.app
+	}
 	if !h.grouped {
 		r.Attrs(func(a slog.Attr) bool {
 			switch a.Key {

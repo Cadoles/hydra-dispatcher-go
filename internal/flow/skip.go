@@ -245,7 +245,7 @@ func (r *run) withoutFlow(ev Consent, req *ory.OAuth2ConsentRequest) Outcome {
 	out := s.redirect(d.RedirectTo).
 		report(Report{Event: "hydra.consent_accepted", Flow: c.Flow}).
 		report(Report{Event: "skip.accepted", Kind: "consent", Flow: c.Flow})
-	out.Reports = append(reports, out.Reports...)
+	out.Reports = append(append(reports, out.Reports...), r.claimsReports(nil, d.Call.AcceptConsent)...)
 	return out
 }
 

@@ -414,6 +414,12 @@ func TestSentinelsOnTheWholeHandler(t *testing.T) {
 		{"the application log", appLog.String(), `"msg":"http.panic"`},
 		{"the application log", appLog.String(), `"msg":"skip.accepted"`},
 		{"the application log", appLog.String(), `"msg":"logout.started"`},
+		// The lines of debug (Q132), the sentinels not among them.
+		{"the application log", appLog.String(), `"log_type":"app","event":"choice","step_before":0,"step_after":1,"outcome":"redirect","flow":"a","app":"sql"`},
+		{"the application log", appLog.String(), `"log_type":"app","operation":"accept_login","status":200,`},
+		{"the application log", appLog.String(), `"log_type":"app","kind":"consent","host":"127.0.0.1:`},
+		{"the application log", appLog.String(), `"log_type":"app","id_token":["email"],"access_token":[],"conflicts":[],"flow":"a"`},
+		{"the application log", appLog.String(), `"log_type":"app","id_token":["email"],"access_token":[],"dropped":[],"flow":"a"`},
 		{"the audit log", auditLog.String(), `"msg":"auth.succeeded"`},
 		{"Sentry", sentryBodies, "E1004"},
 		{"Sentry", sentryBodies, "E1006"},
