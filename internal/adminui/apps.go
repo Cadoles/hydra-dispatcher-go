@@ -181,12 +181,14 @@ func (ui *UI) updateApp(w http.ResponseWriter, r *http.Request, s *current) {
 			f.Version = v // saved again, the form writes over
 			return errChanged
 		}
-		a.LoginURL, a.ConsentURL, a.LogoutURL = kept(old.LoginURL, a.LoginURL), kept(old.ConsentURL, a.ConsentURL), kept(old.LogoutURL, a.LogoutURL)
-		a.Method = kept(old.Method, a.Method)
+		a.LoginURL, a.ConsentURL, a.LogoutURL = keptLine(old.LoginURL, a.LoginURL), keptLine(old.ConsentURL, a.ConsentURL), keptLine(old.LogoutURL, a.LogoutURL)
+		a.Method = keptLine(old.Method, a.Method)
 		if domain.NormalizeFingerprint(old.ClientCertFingerprint) == a.ClientCertFingerprint {
 			a.ClientCertFingerprint = old.ClientCertFingerprint
 		}
-		a.ReceiveClaims = keptList(old.ReceiveClaims, a.ReceiveClaims)
+		if !f.AllClaims && sentBack(old.ReceiveClaims, f.Claims) {
+			a.ReceiveClaims = old.ReceiveClaims
+		}
 		if fields = appChanges(*old, a); len(fields) == 0 {
 			return errUnchanged
 		}

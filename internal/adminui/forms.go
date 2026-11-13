@@ -133,55 +133,94 @@ var errChanged = errors.New("adminui: changed since the form was shown")
 // saved, which it is.
 var errUnchanged = errors.New("adminui: nothing changed")
 
-// nl writes the line ends of s as LF: a <textarea> sends CRLF.
-func nl(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
+// What the browser sends back of a field is not always what the page holds:
+// an <input> drops the CR and LF of its value, a <textarea> sends its line
+// ends as CRLF, a CR alone included, and the form trims what it reads. A
+// value the browser sent back so is the stored one, kept as stored: a save
+// that changes nothing writes nothing (revues R41, R45, R46); any other change
+// is written as typed.
 
-// kept is typed, a value of a form read trimmed, or stored when typed is
-// stored but for the spaces at its ends and the line ends a <textarea> sends:
-// a value no one touched stays as it is, and a save that changes nothing
-// writes nothing (revues R41, R45).
-func kept(stored, typed string) string {
-	if strings.TrimSpace(nl(stored)) == strings.TrimSpace(nl(typed)) {
+// lf writes the line ends of s as LF, as a <textarea> sends them: CRLF, or a
+// CR alone made CRLF. A text typed anew is written so.
+func lf(s string) string { return strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(s) }
+
+// asLine is s as an <input> sends it back, trimmed.
+func asLine(s string) string {
+	return strings.TrimSpace(strings.NewReplacer("\r", "", "\n", "").Replace(s))
+}
+
+// asText is s as a <textarea> sends it back, trimmed.
+func asText(s string) string { return strings.TrimSpace(lf(s)) }
+
+// keptLine is typed, read from an <input>, or stored when the browser sent
+// stored back.
+func keptLine(stored, typed string) string {
+	if asLine(stored) == asLine(typed) {
 		return stored
 	}
 	return typed
 }
 
-// keptList is typed, a list of a form, or stored when each of its items is
-// kept.
+// keptText is typed, read from a <textarea>, or stored when the browser sent
+// stored back.
+func keptText(stored, typed string) string {
+	if asText(stored) == asText(typed) {
+		return stored
+	}
+	return typed
+}
+
+// keptList is typed, the words of an <input>, or stored when each of its
+// items is kept.
 func keptList(stored, typed []string) []string {
 	if (stored == nil) != (typed == nil) || len(stored) != len(typed) {
 		return typed
 	}
 	for i := range stored {
-		if kept(stored[i], typed[i]) != stored[i] {
+		if keptLine(stored[i], typed[i]) != stored[i] {
 			return typed
 		}
 	}
 	return stored
 }
 
-// keptWords is typed, words separated by spaces, or stored when it holds the
-// same words, in the same order.
-func keptWords(stored, typed string) string {
-	if strings.Join(strings.Fields(stored), " ") == strings.Join(strings.Fields(typed), " ") {
+// sentBack tells whether raw, a <textarea> of one item per line as the
+// browser sent it, is the list stored, joined, sent back: an item may hold
+// spaces at its ends, or a line break.
+func sentBack(stored []string, raw string) bool {
+	return stored != nil && asText(strings.Join(stored, "\n")) == asText(raw)
+}
+
+// keptLines is the list of the <textarea> raw: stored when it was sent back,
+// its lines otherwise.
+func keptLines(stored []string, raw string) []string {
+	if sentBack(stored, raw) {
 		return stored
 	}
-	return typed
+	return lines(raw)
 }
 
 // untouched is typed, a map of locale to text read trimmed, each text kept as
-// stored when it is.
-func untouched(stored, typed map[string]string) map[string]string {
-	if typed == nil {
-		return nil
+// stored by keep (keptLine for an <input>, keptText for a <textarea>); a
+// stored text of spaces alone, which the form reads as none, kept too.
+func untouched(stored, typed map[string]string, keep func(stored, typed string) string) map[string]string {
+	var out map[string]string
+	if typed != nil {
+		out = make(map[string]string, len(typed))
 	}
-	out := make(map[string]string, len(typed))
 	for l, t := range typed {
 		if old, ok := stored[l]; ok {
-			t = kept(old, t)
+			t = keep(old, t)
 		}
 		out[l] = t
+	}
+	for l, old := range stored {
+		if _, ok := typed[l]; !ok && asText(old) == "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[l] = old
+		}
 	}
 	return out
 }

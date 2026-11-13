@@ -86,15 +86,15 @@ func (f ssoForm) changes(o store.AdminOIDC) map[string]json.RawMessage {
 	list := func(l []string) []string { return append([]string{}, l...) }
 	// What only lost its spaces stays as stored (revue R45).
 	set("admin_oidc.enabled", o.Enabled, f.Enabled)
-	set("admin_oidc.issuer", o.Issuer, kept(o.Issuer, f.Issuer))
-	set("admin_oidc.client_id", o.ClientID, kept(o.ClientID, f.ClientID))
+	set("admin_oidc.issuer", o.Issuer, keptLine(o.Issuer, f.Issuer))
+	set("admin_oidc.client_id", o.ClientID, keptLine(o.ClientID, f.ClientID))
 	set("admin_oidc.scopes", list(o.Scopes), list(keptList(o.Scopes, words(f.Scopes))))
-	set("admin_oidc.username_claim", o.UsernameClaim, kept(o.UsernameClaim, f.UsernameClaim))
+	set("admin_oidc.username_claim", o.UsernameClaim, keptLine(o.UsernameClaim, f.UsernameClaim))
 	set("admin_oidc.required_acr", list(o.RequiredACR), list(keptList(o.RequiredACR, words(f.RequiredACR))))
 	set("admin_oidc.auto_create", o.AutoCreate, f.AutoCreate)
-	set("admin_oidc.authorization_endpoint", o.AuthorizationEndpoint, kept(o.AuthorizationEndpoint, f.AuthorizationEndpoint))
-	set("admin_oidc.token_endpoint", o.TokenEndpoint, kept(o.TokenEndpoint, f.TokenEndpoint))
-	set("admin_oidc.jwks_uri", o.JWKSURI, kept(o.JWKSURI, f.JWKSURI))
+	set("admin_oidc.authorization_endpoint", o.AuthorizationEndpoint, keptLine(o.AuthorizationEndpoint, f.AuthorizationEndpoint))
+	set("admin_oidc.token_endpoint", o.TokenEndpoint, keptLine(o.TokenEndpoint, f.TokenEndpoint))
+	set("admin_oidc.jwks_uri", o.JWKSURI, keptLine(o.JWKSURI, f.JWKSURI))
 	switch {
 	case f.ForgetSecret && o.ClientSecret != "":
 		values["admin_oidc.client_secret"] = json.RawMessage(`""`)

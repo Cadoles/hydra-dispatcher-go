@@ -95,10 +95,10 @@ func readHydraForm(r *http.Request, c hydraClient) (hydraClient, fieldErrors) {
 	v := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
 	heldMethod := c.AuthMethod
 	// What only lost its spaces stays as Hydra holds it (revue R45).
-	c.Name, c.Scope, c.AuthMethod = kept(c.Name, v("client_name")), keptWords(c.Scope, v("scope")), kept(c.AuthMethod, v("token_endpoint_auth_method"))
-	c.JWKSURI, c.LogoURI = kept(c.JWKSURI, v("jwks_uri")), kept(c.LogoURI, v("logo_uri"))
-	c.RedirectURIs, c.PostLogoutURIs = keptList(c.RedirectURIs, lines(r.PostFormValue("redirect_uris"))), keptList(c.PostLogoutURIs, lines(r.PostFormValue("post_logout_redirect_uris")))
-	c.Audience, c.CORS = keptList(c.Audience, lines(r.PostFormValue("audience"))), keptList(c.CORS, lines(r.PostFormValue("allowed_cors_origins")))
+	c.Name, c.Scope, c.AuthMethod = keptLine(c.Name, v("client_name")), keptLine(c.Scope, v("scope")), keptLine(c.AuthMethod, v("token_endpoint_auth_method"))
+	c.JWKSURI, c.LogoURI = keptLine(c.JWKSURI, v("jwks_uri")), keptLine(c.LogoURI, v("logo_uri"))
+	c.RedirectURIs, c.PostLogoutURIs = keptLines(c.RedirectURIs, r.PostFormValue("redirect_uris")), keptLines(c.PostLogoutURIs, r.PostFormValue("post_logout_redirect_uris"))
+	c.Audience, c.CORS = keptLines(c.Audience, r.PostFormValue("audience")), keptLines(c.CORS, r.PostFormValue("allowed_cors_origins"))
 	c.GrantTypes, c.ResponseTypes, c.Flows = r.PostForm["grant_types"], r.PostForm["response_types"], r.PostForm["flows"]
 	c.SkipConsent = r.PostFormValue("skip_consent") != ""
 	errs := fieldErrors{}

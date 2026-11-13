@@ -447,12 +447,33 @@ func (ui *UI) updateScope(w http.ResponseWriter, r *http.Request, s *current) {
 			v = now
 			return errChanged
 		}
-		// What only lost its spaces stays as stored (revue R45).
-		sc.Label = untouched(old.Label, sc.Label)
+		// What the browser sent back as stored stays as stored (revues R45,
+		// R46): labels, claims, their order.
+		sc.Label = untouched(old.Label, sc.Label, keptLine)
 		for i, c := range sc.Claims {
-			if j := slices.IndexFunc(old.Claims, func(o store.ScopeClaim) bool { return strings.TrimSpace(o.Claim) == c.Claim }); j >= 0 {
-				sc.Claims[i].Claim, sc.Claims[i].Label = old.Claims[j].Claim, untouched(old.Claims[j].Label, c.Label)
+			if j := slices.IndexFunc(old.Claims, func(o store.ScopeClaim) bool { return asLine(o.Claim) == c.Claim }); j >= 0 {
+				sc.Claims[i].Claim, sc.Claims[i].Label = old.Claims[j].Claim, untouched(old.Claims[j].Label, c.Label, keptLine)
 			}
+		}
+		if _, standard := domain.Standard(name); standard {
+			// The form lists every claim of the code, those it labels kept:
+			// a claim the row holds with labels of spaces alone stays.
+			for _, o := range old.Claims {
+				if !slices.ContainsFunc(sc.Claims, func(c store.ScopeClaim) bool { return c.Claim == o.Claim }) &&
+					!slices.ContainsFunc(slices.Collect(maps.Values(o.Label)), func(t string) bool { return asText(t) != "" }) {
+					sc.Claims = append(sc.Claims, o)
+				}
+			}
+			// The order of the row, the form's being the code's: the same
+			// claims in another order change nothing. A scope of the business
+			// shows its claims in the row's order.
+			at := func(claim string) int {
+				if j := slices.IndexFunc(old.Claims, func(o store.ScopeClaim) bool { return o.Claim == claim }); j >= 0 {
+					return j
+				}
+				return len(old.Claims)
+			}
+			slices.SortStableFunc(sc.Claims, func(a, b store.ScopeClaim) int { return at(a.Claim) - at(b.Claim) })
 		}
 		var c changes
 		c.add("label", !maps.Equal(nonNil(old.Label), sc.Label))

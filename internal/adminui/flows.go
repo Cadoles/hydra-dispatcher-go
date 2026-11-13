@@ -66,22 +66,22 @@ func flowFormOf(f store.Flow, supported []string) flowForm {
 	return form
 }
 
-// sameCheck tells whether the subject_check typed is the one stored but for
-// the spaces around its claim, which the form trims (revue R45).
+// sameCheck tells whether the subject_check typed is the one stored as the
+// <input> of its claim sends it back (revues R45, R46).
 func sameCheck(stored, typed string) bool {
 	s, sok := strings.CutPrefix(strings.TrimSpace(stored), "claim:")
 	t, tok := strings.CutPrefix(typed, "claim:")
 	if sok && tok {
-		return strings.TrimSpace(s) == strings.TrimSpace(t)
+		return asLine(s) == asLine(t)
 	}
-	return strings.TrimSpace(stored) == typed
+	return asLine(stored) == typed
 }
 
 func readFlowForm(r *http.Request) flowForm {
 	v := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
 	at := func(name string, i int) string {
 		if l := r.PostForm[name]; i < len(l) {
-			return strings.TrimSpace(nl(l[i]))
+			return strings.TrimSpace(lf(l[i]))
 		}
 		return ""
 	}
@@ -306,7 +306,8 @@ func (ui *UI) updateFlow(w http.ResponseWriter, r *http.Request, s *current) {
 			f.Version = v
 			return errChanged
 		}
-		fl.Title, fl.Description, fl.IconURL = untouched(old.Title, fl.Title), untouched(old.Description, fl.Description), untouched(old.IconURL, fl.IconURL)
+		fl.Title, fl.IconURL = untouched(old.Title, fl.Title, keptLine), untouched(old.IconURL, fl.IconURL, keptLine)
+		fl.Description = untouched(old.Description, fl.Description, keptText)
 		for i, step := range fl.Steps {
 			j := slices.IndexFunc(old.Steps, func(o store.Step) bool { return o.AppID == step.AppID && o.Position == step.Position })
 			if j >= 0 && sameCheck(old.Steps[j].SubjectCheck, step.SubjectCheck) {
