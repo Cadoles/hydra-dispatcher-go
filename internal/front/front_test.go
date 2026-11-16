@@ -1686,3 +1686,36 @@ func printIn(t *testing.T, page string) string {
 	}
 	return m[1]
 }
+
+// The language chosen on these pages, by the dispatcher_locale cookie or
+// _locale, reaches the apps first in the ui_locales of their requests
+// (Q138); a language the pages do not speak is none.
+func TestChosenLocaleToTheApps(t *testing.T) {
+	served := func(w *world, cookie string) []string {
+		t.Helper()
+		if cookie != "" {
+			w.cookies["dispatcher_locale"] = cookie
+		}
+		login := w.choose("hydra-sql")
+		r := w.o.Handle(context.Background(), flow.AppCall{Op: flow.AppGetLogin, Challenge: login.Query().Get("login_challenge"), Caller: func(store.App) bool { return true }}).Response
+		var body struct {
+			OidcContext struct {
+				UILocales []string `json:"ui_locales"`
+			} `json:"oidc_context"`
+		}
+		raw, _ := json.Marshal(r.Body)
+		if r.Status != http.StatusOK || json.Unmarshal(raw, &body) != nil {
+			t.Fatalf("login request: %+v", r)
+		}
+		return body.OidcContext.UILocales
+	}
+	if got := served(newWorld(t), "en"); len(got) == 0 || got[0] != "en" {
+		t.Errorf("chosen in English: %q", got)
+	}
+	if got := served(newWorld(t), "xx"); slices.Contains(got, "xx") {
+		t.Errorf("a language the pages do not speak: %q", got)
+	}
+	if got := served(newWorld(t), ""); slices.Contains(got, "en") {
+		t.Errorf("no choice: %q", got)
+	}
+}

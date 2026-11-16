@@ -19,6 +19,10 @@ type Entry struct {
 	Ref            string
 	Cookie         string
 	Memory         Memory
+	// Locale is the language the browser chose on the dispatcher's pages
+	// (_locale, else the dispatcher_locale cookie), "" for none: kept with
+	// the flow it writes (Q138).
+	Locale string
 }
 
 // Choose is POST / (POS): the form of the choice page, the browser's cookie,
@@ -30,6 +34,7 @@ type Choose struct {
 	Token          string
 	Cookie         string
 	SameOrigin     bool
+	Locale         string // as on Entry
 }
 
 // Loop is GET /oauth2/auth (BCL), where the step accepts send the browser
@@ -38,6 +43,7 @@ type Loop struct {
 	Ref            string
 	LoginChallenge string
 	Cookie         string
+	Locale         string // as on Entry
 }
 
 // Consent is GET or POST /consent (CST): Hydra's consent challenge, the

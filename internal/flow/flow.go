@@ -57,6 +57,10 @@ type Flow struct {
 	Gen  int64 `json:"g"`
 	// CSRF is the copy of the browser's dispatcher_flow_csrf cookie.
 	CSRF string `json:"c"`
+	// Locale is the language the user last chose on the dispatcher's pages,
+	// as the browser's requests that wrote the flow carried it: the emulated
+	// API serves it first in ui_locales (Q138). "" for none.
+	Locale string `json:"lc,omitempty"`
 	// Subject is the first step's, the one later steps are checked against.
 	Subject string `json:"sub,omitempty"`
 	// Current is the position of the current step, from 1; 0 before the

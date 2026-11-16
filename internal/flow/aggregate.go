@@ -213,7 +213,7 @@ func (f *Flow) LoginRequestFor(env Env, ref string, k int) (ory.OAuth2LoginReque
 	if err != nil {
 		return r, err
 	}
-	ext := hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values()}
+	ext := hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values(), Locale: f.Locale}
 	if !f.Imposed {
 		ext.RestartURL = RestartURL(env.BaseURL, ref)
 	}
@@ -253,5 +253,5 @@ func (f *Flow) ConsentRequestFor(env Env, ref string, k int) (ory.OAuth2ConsentR
 		Challenge:      env.Keys.Challenge(ref, f.Gen, step.App, KindConsent),
 		LoginChallenge: env.Keys.Challenge(ref, f.Gen, step.App, KindLogin),
 		Subject:        f.Subject,
-	}, hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values()})
+	}, hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values(), Locale: f.Locale})
 }

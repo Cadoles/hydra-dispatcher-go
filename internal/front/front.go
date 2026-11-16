@@ -158,7 +158,21 @@ func (h *Handler) entry(w http.ResponseWriter, r *http.Request) {
 		Ref:            q.Get("ref"),
 		Cookie:         h.cookie(r, csrfCookie),
 		Memory:         h.memory(r),
+		Locale:         h.chosenLocale(r),
 	}))
+}
+
+// chosenLocale is the language the browser chose on these pages: _locale,
+// else the dispatcher_locale cookie, of the locales the pages speak; "" when
+// it chose none, ui_locales then deciding (Q138).
+func (h *Handler) chosenLocale(r *http.Request) string {
+	supported := supportedLocales(h.themeOf(r), h.o.Config.Snapshot())
+	for _, l := range []string{r.URL.Query().Get("_locale"), h.cookie(r, localeCookie)} {
+		if l != "" && slices.Contains(supported, l) {
+			return l
+		}
+	}
+	return ""
 }
 
 // choose is POST / (POS), the choice form.
@@ -172,6 +186,7 @@ func (h *Handler) choose(w http.ResponseWriter, r *http.Request) {
 		Token:          r.PostForm.Get("csrf_token"),
 		Cookie:         h.cookie(r, csrfCookie),
 		SameOrigin:     h.sameOrigin(r),
+		Locale:         h.chosenLocale(r),
 	})
 	if h.o.RememberLastFlow && slices.ContainsFunc(res.Reports, func(rep flow.Report) bool { return rep.Event == "flow.started" && rep.Detail == "choice" }) {
 		h.setCookie(w, lastFlowCookie, r.PostForm.Get("flow"), lastFlowLifetime, true)
@@ -187,6 +202,7 @@ func (h *Handler) loop(w http.ResponseWriter, r *http.Request) {
 		Ref:            q.Get("ref"),
 		LoginChallenge: q.Get("login_challenge"),
 		Cookie:         h.cookie(r, csrfCookie),
+		Locale:         h.chosenLocale(r),
 	}))
 }
 

@@ -192,6 +192,10 @@ func (o *Orchestrator) Handle(ctx context.Context, ev Event) Result {
 			return o.result(ctx, in, out, reports)
 		}
 
+		// The language the browser chose goes with the flow it writes.
+		if l := chosenLocale(ev); l != "" && out.Write != nil {
+			out.Write.Locale = l
+		}
 		data, ttlAt, err := out.written()
 		if err != nil {
 			return fail(err)
@@ -616,4 +620,18 @@ func (o *Orchestrator) env() Env {
 		Now:                    o.now(),
 		Draw:                   Draw{Gen0: int64(binary.BigEndian.Uint32(b[:4])), CSRF: hex.EncodeToString(b[4:])},
 	}
+}
+
+// chosenLocale is the language a browser's request carried, chosen on the
+// dispatcher's pages: "" for an event of an app or of a logout.
+func chosenLocale(ev Event) string {
+	switch e := ev.(type) {
+	case Entry:
+		return e.Locale
+	case Choose:
+		return e.Locale
+	case Loop:
+		return e.Locale
+	}
+	return ""
 }

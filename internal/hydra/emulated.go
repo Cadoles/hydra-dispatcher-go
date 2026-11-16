@@ -34,6 +34,26 @@ type Extensions struct {
 	// RestartURL is the flow choice page of this authentication
 	// (x_dispatcher_restart_url), omitted when empty.
 	RestartURL string
+	// Locale is the language the user chose on the dispatcher's pages, served
+	// first in oidc_context.ui_locales (Q138): the apps that follow ui_locales
+	// follow the choice. "" leaves ui_locales as Hydra gave them.
+	Locale string
+}
+
+// withLocale returns o with locale first in its ui_locales, once, on a copy:
+// o is the login request's, shared with the flow.
+func withLocale(o *ory.OAuth2ConsentRequestOpenIDConnectContext, locale string) *ory.OAuth2ConsentRequestOpenIDConnectContext {
+	if locale == "" {
+		return o
+	}
+	c := *o
+	c.UiLocales = []string{locale}
+	for _, l := range o.UiLocales {
+		if !strings.EqualFold(l, locale) {
+			c.UiLocales = append(c.UiLocales, l)
+		}
+	}
+	return &c
 }
 
 // LoginRequestForApp returns a copy of r for the emulated API: the step's
@@ -46,7 +66,7 @@ func LoginRequestForApp(r ory.OAuth2LoginRequest, step Step, ext Extensions) ory
 	r.Challenge = step.Challenge
 	r.Subject = step.Subject
 	r.Skip = false
-	r.OidcContext = nonNilOIDCContext(r.OidcContext)
+	r.OidcContext = withLocale(nonNilOIDCContext(r.OidcContext), ext.Locale)
 	r.RequestedScope = nonNil(r.RequestedScope)
 	r.RequestedAccessTokenAudience = nonNil(r.RequestedAccessTokenAudience)
 	r.AdditionalProperties = withExtensions(r.AdditionalProperties, ext)
@@ -68,7 +88,7 @@ func ConsentRequestForApp(r ory.OAuth2ConsentRequest, step Step, ext Extensions)
 	r.LoginChallenge = ory.PtrString(step.LoginChallenge)
 	r.Subject = ory.PtrString(step.Subject)
 	r.Skip = ory.PtrBool(false)
-	r.OidcContext = nonNilOIDCContext(r.OidcContext)
+	r.OidcContext = withLocale(nonNilOIDCContext(r.OidcContext), ext.Locale)
 	r.RequestedScope = nonNil(r.RequestedScope)
 	r.RequestedAccessTokenAudience = nonNil(r.RequestedAccessTokenAudience)
 	r.Acr = ory.PtrString(r.GetAcr())
