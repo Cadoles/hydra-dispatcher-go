@@ -213,7 +213,7 @@ func (f *Flow) LoginRequestFor(env Env, ref string, k int) (ory.OAuth2LoginReque
 	if err != nil {
 		return r, err
 	}
-	ext := hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values(), Locale: f.Locale}
+	ext := hydra.Extensions{Claims: ReceivedClaims(f.PreviousClaims(k), app).values(), Locale: f.Locale, Device: step.Device}
 	if !f.Imposed {
 		ext.RestartURL = RestartURL(env.BaseURL, ref)
 	}

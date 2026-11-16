@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
 
@@ -200,7 +201,31 @@ func (r *run) loginAccepted(ref string, f *Flow, k int, body ory.AcceptOAuth2Log
 	if k == 1 {
 		g.Subject = body.Subject
 	}
-	return s.redirect(s.loop).writing(g).report(Report{Event: "step.login_accepted", Detail: step.App})
+	out := s.redirect(s.loop).writing(g).report(Report{Event: "step.login_accepted", Detail: step.App})
+	if rep, ok := rememberedDevice(step.App, ctx); ok {
+		out = out.report(rep)
+	}
+	return out
+}
+
+// rememberedDevice tells that the app trusts the browser's device until a
+// date, which its login accept declares in context.x_dispatcher_remember_until
+// (phase 4, the enrollment): to the log, the list of the trusted devices
+// being the app's. A date that is no RFC 3339 is told as ignored, unquoted.
+func rememberedDevice(app string, ctx Object) (Report, bool) {
+	raw, ok := ctx["x_dispatcher_remember_until"]
+	if !ok {
+		return Report{}, false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return Report{Event: "device.remember_ignored", App: app}, true
+	}
+	until, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return Report{Event: "device.remember_ignored", App: app}, true
+	}
+	return Report{Event: "device.remembered", App: app, Detail: until.UTC().Format(time.RFC3339)}, true
 }
 
 // subjectMismatch rejects L when an accept's subject fails the step's rule,

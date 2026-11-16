@@ -75,3 +75,52 @@ func TestChosenLocale(t *testing.T) {
 		t.Errorf("without a choice: %q", got)
 	}
 }
+
+// The device of the browser at the start of the flow (phase 4): each step
+// keeps the value of its app, served to it as x_dispatcher_device on its
+// login request alone; another app another value; without a device, none.
+func TestDeviceToTheApps(t *testing.T) {
+	dev := Device{ID: []byte("0123456789abcdef0123456789abcdef"), Created: 1_794_000_000}
+	if v := DeviceValue(dev.ID, "sql"); v == DeviceValue(dev.ID, "2fa") || v != DeviceValue(append([]byte{}, dev.ID...), "sql") {
+		t.Fatal("DeviceValue")
+	}
+	w := newWorld(t)
+	sql := func(a store.App) bool { return a.ID == "sql" }
+	w.handle(Entry{LoginChallenge: hydraL})
+	step := w.handle(Choose{FlowID: "hydra-sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true, Device: dev})
+	f := w.stored()
+	if f.DeviceAt != dev.Created || f.Steps[0].Device != DeviceValue(dev.ID, "sql") || f.Steps[1].Device != DeviceValue(dev.ID, "2fa") {
+		t.Fatalf("flow: %+v", f)
+	}
+	raw := w.handle(AppCall{Op: AppGetLogin, Challenge: param(t, step, "login_challenge"), Caller: sql}).Response.Body
+	var body map[string]any
+	if err := json.Unmarshal([]byte(rawJSON(raw)), &body); err != nil || body["x_dispatcher_device"] != DeviceValue(dev.ID, "sql") {
+		t.Errorf("login request: %v %v", body["x_dispatcher_device"], err)
+	}
+
+	w = newWorld(t)
+	w.handle(Entry{LoginChallenge: hydraL})
+	step = w.handle(Choose{FlowID: "hydra-sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+	raw = w.handle(AppCall{Op: AppGetLogin, Challenge: param(t, step, "login_challenge"), Caller: sql}).Response.Body
+	body = nil
+	if _ = json.Unmarshal([]byte(rawJSON(raw)), &body); body["x_dispatcher_device"] != nil || w.stored().DeviceAt != 0 {
+		t.Errorf("without a device: %v", body["x_dispatcher_device"])
+	}
+}
+
+// The enrollment (phase 4): x_dispatcher_remember_until of a login accept is
+// told, a date of another form told as ignored, unquoted.
+func TestRememberedDevice(t *testing.T) {
+	for raw, want := range map[string]Report{
+		`"2027-05-16T10:00:00+02:00"`: {Event: "device.remembered", App: "2fa", Detail: "2027-05-16T08:00:00Z"},
+		`"next year"`:                 {Event: "device.remember_ignored", App: "2fa"},
+		`12`:                          {Event: "device.remember_ignored", App: "2fa"},
+	} {
+		if got, ok := rememberedDevice("2fa", Object{"x_dispatcher_remember_until": json.RawMessage(raw)}); !ok || got != want {
+			t.Errorf("%s: %+v %v", raw, got, ok)
+		}
+	}
+	if _, ok := rememberedDevice("2fa", Object{"email": json.RawMessage(`"a@b"`)}); ok {
+		t.Error("without the member")
+	}
+}

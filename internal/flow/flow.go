@@ -57,6 +57,10 @@ type Flow struct {
 	Gen  int64 `json:"g"`
 	// CSRF is the copy of the browser's dispatcher_flow_csrf cookie.
 	CSRF string `json:"c"`
+	// DeviceAt is the Unix time the browser's device cookie was drawn, copied
+	// at the start of the flow with the values of its steps; 0 for none
+	// (phase 4).
+	DeviceAt int64 `json:"dat,omitempty"`
 	// Locale is the language the user last chose on the dispatcher's pages,
 	// as the browser's requests that wrote the flow carried it: the emulated
 	// API serves it first in ui_locales (Q138). "" for none.
@@ -157,6 +161,10 @@ type Step struct {
 	AccessToken    Object `json:"act,omitempty"`
 	Remember       *bool  `json:"rem,omitempty"`
 	RememberFor    *int64 `json:"remf,omitempty"`
+	// Device is the value of the browser's device for the step's app
+	// (DeviceValue), served to it as x_dispatcher_device: never the device
+	// itself. "" for none (phase 4).
+	Device string `json:"dev,omitempty"`
 }
 
 // State is derived from the flow read: it is not stored.

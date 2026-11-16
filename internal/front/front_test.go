@@ -27,6 +27,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/device"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
@@ -1717,5 +1718,49 @@ func TestChosenLocaleToTheApps(t *testing.T) {
 	}
 	if got := served(newWorld(t), ""); slices.Contains(got, "en") {
 		t.Errorf("no choice: %q", got)
+	}
+}
+
+// The device cookie (phase 4): drawn and set at GET / only while a step of
+// the configuration asks for the pre-check, HttpOnly, under the cookie path,
+// for 400 days; kept then; one that does not open is drawn again.
+func TestDeviceCookie(t *testing.T) {
+	codec, err := device.New([]byte("fedcba9876543210fedcba9876543210"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := testSnapshot()
+	w := newWorld(t, worldOptions{base: base, snapshot: snap})
+	w.front.o.Devices, w.front.o.DrawDevice = codec, device.Draw
+	resp := w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+	if _, ok := w.cookies[device.Cookie]; ok {
+		t.Fatalf("no step asks for the pre-check, a cookie: %v", resp.Cookies())
+	}
+	for i := range snap.Flows {
+		for j := range snap.Flows[i].Steps {
+			if j > 0 {
+				snap.Flows[i].Steps[j].SkipCheck = true
+			}
+		}
+	}
+	resp = w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+	var set *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == device.Cookie {
+			set = c
+		}
+	}
+	if set == nil || !set.HttpOnly || set.MaxAge != int(device.Lifetime/time.Second) || set.Path != "/" || set.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("cookie: %+v", set)
+	}
+	first, _ := codec.Open(set.Value)
+	w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+	if again, ok := codec.Open(w.cookies[device.Cookie]); !ok || !bytes.Equal(again.ID, first.ID) {
+		t.Error("the device drawn again")
+	}
+	w.cookies[device.Cookie] = "not-a-device"
+	w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+	if d, ok := codec.Open(w.cookies[device.Cookie]); !ok || bytes.Equal(d.ID, first.ID) {
+		t.Error("a cookie that does not open, kept")
 	}
 }

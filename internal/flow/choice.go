@@ -189,10 +189,18 @@ func (r *run) start(ref string, f *Flow, id string, imposed bool, trigger string
 		g.StartedAt = r.now()
 	}
 	g.Steps = make([]Step, len(fl.Steps))
+	dev := r.device()
+	g.DeviceAt = 0
+	if !dev.None() {
+		g.DeviceAt = dev.Created
+	}
 	for i, s := range fl.Steps {
 		g.Steps[i] = Step{App: s.AppID, Check: s.SubjectCheck}
 		if s.SubjectCheck == "none" {
 			g.Steps[i].Check = ""
+		}
+		if !dev.None() {
+			g.Steps[i].Device = DeviceValue(dev.ID, s.AppID)
 		}
 	}
 	if imposed && trigger == "auto_select" {

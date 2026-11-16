@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/device"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -32,6 +33,13 @@ type Memories interface {
 	Open(value string) flow.Memory
 }
 
+// Devices seals and opens the device cookie of the pre-check of a step
+// (internal/device).
+type Devices interface {
+	Seal(d flow.Device) string
+	Open(value string) (flow.Device, bool)
+}
+
 // Snapshots gives the configuration of the moment, as store.Live does, for
 // the pages the engine does not answer.
 type Snapshots interface {
@@ -44,6 +52,10 @@ type Options struct {
 	Config Snapshots
 	// Remember seals the memory of the skip, by secrets.cookie_key.
 	Remember Memories
+	// Devices, nil for none, seals the device cookie (phase 4), by
+	// secrets.cookie_key; DrawDevice draws a new one at a time.
+	Devices    Devices
+	DrawDevice func(time.Time) flow.Device
 	// BaseURL and CookiePath are server.base_url and server.cookie_path.
 	BaseURL    string
 	CookiePath string
@@ -159,7 +171,35 @@ func (h *Handler) entry(w http.ResponseWriter, r *http.Request) {
 		Cookie:         h.cookie(r, csrfCookie),
 		Memory:         h.memory(r),
 		Locale:         h.chosenLocale(r),
+		Device:         h.device(w, r),
 	}))
+}
+
+// device is the browser's device cookie, opened: drawn and set when it has
+// none, or one that does not open, but only while a step of the
+// configuration asks for the pre-check (phase 4): the extension off, no
+// browser gets an identifier of 400 days. The zero Device for none.
+func (h *Handler) device(w http.ResponseWriter, r *http.Request) flow.Device {
+	if h.o.Devices == nil {
+		return flow.Device{}
+	}
+	if d, ok := h.o.Devices.Open(h.cookie(r, device.Cookie)); ok {
+		return d
+	}
+	if h.o.DrawDevice == nil || !skipChecked(h.o.Config.Snapshot()) {
+		return flow.Device{}
+	}
+	d := h.o.DrawDevice(time.Now())
+	h.setCookie(w, device.Cookie, h.o.Devices.Seal(d), device.Lifetime, true)
+	return d
+}
+
+// skipChecked tells whether a step of the configuration asks for the
+// pre-check.
+func skipChecked(cfg *store.Snapshot) bool {
+	return slices.ContainsFunc(cfg.Flows, func(f store.Flow) bool {
+		return slices.ContainsFunc(f.Steps, func(s store.Step) bool { return s.SkipCheck })
+	})
 }
 
 // chosenLocale is the language the browser chose on these pages: _locale,
@@ -187,6 +227,7 @@ func (h *Handler) choose(w http.ResponseWriter, r *http.Request) {
 		Cookie:         h.cookie(r, csrfCookie),
 		SameOrigin:     h.sameOrigin(r),
 		Locale:         h.chosenLocale(r),
+		Device:         h.device(w, r),
 	})
 	if h.o.RememberLastFlow && slices.ContainsFunc(res.Reports, func(rep flow.Report) bool { return rep.Event == "flow.started" && rep.Detail == "choice" }) {
 		h.setCookie(w, lastFlowCookie, r.PostForm.Get("flow"), lastFlowLifetime, true)

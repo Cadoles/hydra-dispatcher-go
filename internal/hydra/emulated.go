@@ -38,6 +38,10 @@ type Extensions struct {
 	// first in oidc_context.ui_locales (Q138): the apps that follow ui_locales
 	// follow the choice. "" leaves ui_locales as Hydra gave them.
 	Locale string
+	// Device is the value of the browser's device for the app
+	// (x_dispatcher_device, phase 4), on the login request; omitted when
+	// empty.
+	Device string
 }
 
 // withLocale returns o with locale first in its ui_locales, once, on a copy:
@@ -192,6 +196,9 @@ func withExtensions(props map[string]any, ext Extensions) map[string]any {
 		claims = map[string]any{}
 	}
 	out["x_dispatcher_claims"] = claims
+	if ext.Device != "" {
+		out["x_dispatcher_device"] = ext.Device
+	}
 	if ext.RestartURL != "" {
 		out["x_dispatcher_restart_url"] = ext.RestartURL
 	}

@@ -25,6 +25,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/adminui"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/device"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
@@ -615,6 +616,10 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	if err != nil {
 		return nil, err
 	}
+	devices, err := device.New(cfg.Secrets.CookieKey, previous...)
+	if err != nil {
+		return nil, err
+	}
 	cookieKeys, err := seal.New(cfg.Secrets.CookieKey, previous...)
 	if err != nil {
 		return nil, err
@@ -672,6 +677,8 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Engine:     engine,
 		Config:     s.config,
 		Remember:   memories,
+		Devices:    devices,
+		DrawDevice: device.Draw,
 		BaseURL:    cfg.Server.BaseURL,
 		CookiePath: cfg.Server.CookiePath,
 		ShowValues: cfg.Consent.ShowValues,

@@ -23,6 +23,9 @@ type Entry struct {
 	// (_locale, else the dispatcher_locale cookie), "" for none: kept with
 	// the flow it writes (Q138).
 	Locale string
+	// Device is the browser's device cookie, opened (phase 4): the zero
+	// Device for none.
+	Device Device
 }
 
 // Choose is POST / (POS): the form of the choice page, the browser's cookie,
@@ -35,6 +38,7 @@ type Choose struct {
 	Cookie         string
 	SameOrigin     bool
 	Locale         string // as on Entry
+	Device         Device // as on Entry
 }
 
 // Loop is GET /oauth2/auth (BCL), where the step accepts send the browser
