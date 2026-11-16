@@ -322,10 +322,10 @@ cosign verify --key cosign.pub --insecure-ignore-tlog=true reg.cadoles.com/cadol
 cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true --type cyclonedx reg.cadoles.com/cadoles/hydra-dispatcher-go@sha256:<digest>
 ```
 
-Not ready yet: the owner creates the secrets of the repository, `REGISTRY_USERNAME` and
+The workflow reads the secrets of the repository: `REGISTRY_USERNAME` and
 `REGISTRY_PASSWORD` (a robot account of the project cadoles), `COSIGN_PRIVATE_KEY` and
-`COSIGN_PASSWORD` (the pair of `cosign generate-key-pair`), `RELEASE_TOKEN`, and commits
-`cosign.pub`; without it, the workflow stops before building.
+`COSIGN_PASSWORD` (the pair of `cosign generate-key-pair`, whose public key is
+`cosign.pub`), `RELEASE_TOKEN`. Without `cosign.pub`, it stops before building.
 
 Dependencies follow `renovate.json`: minor and patch updates grouped each week and
 merged once the CI passes, a pull request of its own for a major, `ory/hydra-client-go`

@@ -7,6 +7,9 @@
 .env
 .env.local
 
+# The private key of the cosign pair: a secret of the repository, never a file of it
+cosign.key
+
 # Editor / OS
 .DS_Store
 .idea/
