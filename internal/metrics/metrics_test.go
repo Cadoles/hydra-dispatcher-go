@@ -65,6 +65,7 @@ func TestCatalogue(t *testing.T) {
 		"hydra_errors_total":                    {"counter", []string{"flow", "operation"}},
 		"flow_starts_total":                     {"counter", []string{"flow", "trigger"}},
 		"step_requests_total":                   {"counter", []string{"app", "kind", "outcome"}},
+		"step_skips_total":                      {"counter", []string{"app", "result"}},
 		"skip_total":                            {"counter", []string{"kind", "result"}},
 		"consent_resubmits_total":               {"counter", []string{"result"}},
 		"auth_duration_seconds":                 {"histogram", []string{"outcome"}},
@@ -167,6 +168,8 @@ func exercise(m *Metrics, flows, apps []string) {
 			{Event: "step.login_accepted", Detail: id}, {Event: "step.consent_accepted", Detail: id},
 			{Event: "logout.propagated", App: id, Result: "accepted"}, {Event: "logout.propagated", App: id, Result: "rejected"},
 			{Event: "logout.propagated", App: id, Result: "skipped"}, {Event: "logout.propagated", App: id, Result: "error"},
+			{Event: flow.EventSkipCheck, App: id, Result: flow.SkipSkipped}, {Event: flow.EventSkipCheck, App: id, Result: flow.SkipDeclined},
+			{Event: flow.EventSkipCheck, App: id, Result: flow.SkipRefused}, {Event: flow.EventSkipCheck, App: id, Result: flow.SkipFailed},
 		}})
 		for _, op := range []flow.AppOp{flow.AppAcceptLogin, flow.AppRejectConsent} {
 			for _, detail := range []string{"app", "expired"} {
@@ -270,8 +273,9 @@ func (failingHooks) Consent(context.Context, flow.Call) flow.ConsentHookAnswer {
 	return flow.ConsentHookAnswer{Err: errors.New("down")}
 }
 
-// budget is the doc's: series = 1 000 + 23 F + 10 A.
-func budget(flows, apps int) int { return 1000 + 23*flows + 10*apps }
+// budget is the doc's: series = 1 000 + 23 F + 14 A (step_skips_total, four
+// results by app, since phase 4).
+func budget(flows, apps int) int { return 1000 + 23*flows + 14*apps }
 
 // The budget of series, with 50 flows and 50 apps, every label at every value it can take
 // (Cardinalité): over the formula plus 10 %, the catalogue has drifted.
@@ -361,6 +365,11 @@ func TestObserve(t *testing.T) {
 			map[string]string{`login_requests_total{flow="f",outcome="session_missing"}`: "1"}},
 		"the final accept, its duration": {flow.Observation{Event: flow.Loop{}, Before: running, After: &accepted, Reports: []flow.Report{{Event: "hydra.login_accepted"}}},
 			map[string]string{`login_requests_total{flow="f",outcome="accepted"}`: "1", `auth_duration_seconds_sum{outcome="accepted"}`: "42", `auth_duration_seconds_count{outcome="accepted"}`: "1"}},
+		"pre-checks, an app unknown, a result unknown": {flow.Observation{Event: flow.Loop{}, Before: running, Config: snap, Reports: []flow.Report{
+			{Event: flow.EventSkipCheck, App: "sql", Result: flow.SkipSkipped}, {Event: flow.EventSkipCheck, App: "sql", Result: flow.SkipFailed},
+			{Event: flow.EventSkipCheck, App: "gone", Result: flow.SkipDeclined}, {Event: flow.EventSkipCheck, App: "sql", Result: "maybe"}}},
+			map[string]string{`step_skips_total{app="sql",result="skipped"}`: "1", `step_skips_total{app="sql",result="failed"}`: "1",
+				`step_skips_total{app="other",result="declined"}`: "1", `step_skips_total{app="sql",result="other"}`: "1"}},
 		"the consent screen": {flow.Observation{Event: flow.Consent{}, Before: &accepted, Response: flow.Response{Kind: flow.ConsentPage}},
 			map[string]string{`consent_requests_total{flow="f",outcome="displayed"}`: "1"}},
 		"a consent posted": {flow.Observation{Event: flow.Consent{Post: true}, Before: &accepted, Reports: []flow.Report{{Event: "hydra.consent_accepted"}}},

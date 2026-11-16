@@ -56,6 +56,7 @@ type Metrics struct {
 
 	logins, consents, hydraErrors *prometheus.CounterVec
 	flowStarts, stepRequests      *prometheus.CounterVec
+	stepSkips                     *prometheus.CounterVec
 	skips, resubmits              *prometheus.CounterVec
 	authDuration                  *prometheus.HistogramVec
 	hydraRequests                 *prometheus.CounterVec
@@ -119,6 +120,7 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 		hydraErrors:         counter("hydra_errors_total", "Calls to Hydra that failed a page, by operation and flow.", "operation", "flow"),
 		flowStarts:          counter("flow_starts_total", "Flows started, by flow and trigger.", "flow", "trigger"),
 		stepRequests:        counter("step_requests_total", "Traffic of the login apps.", "app", "kind", "outcome"),
+		stepSkips:           counter("step_skips_total", "Pre-checks of the steps, by app and result.", "app", "result"),
 		skips:               counter("skip_total", "Skips honoured or not.", "kind", "result"),
 		resubmits:           counter("consent_resubmits_total", "Returns on /consent of a flow its consent finished.", "result"),
 		authDuration:        histogram("auth_duration_seconds", "From the start of a flow to the login accept at Hydra.", durationBuckets, "outcome"),
@@ -596,6 +598,8 @@ func (m *Metrics) Observe(ctx context.Context, o flow.Observation) {
 			m.stepRequests.WithLabelValues(m.appLabel(o, r.Detail), "login", "accepted").Inc()
 		case "step.consent_accepted":
 			m.stepRequests.WithLabelValues(m.appLabel(o, r.Detail), "consent", "accepted").Inc()
+		case flow.EventSkipCheck:
+			m.stepSkips.WithLabelValues(m.appLabel(o, r.App), skipResult(r.Result)).Inc()
 		case "skip.accepted":
 			m.skips.WithLabelValues(r.Kind, "accepted").Inc()
 		case "skip.ignored":
@@ -652,4 +656,13 @@ func (m *Metrics) authEnded(ctx context.Context, o flow.Observation, outcome str
 		return
 	}
 	observe(ctx, m.authDuration.WithLabelValues(outcome), o.Now.Sub(time.UnixMilli(f.StartedAt)).Seconds())
+}
+
+// skipResult is the result of a pre-check as a label: one of four.
+func skipResult(r string) string {
+	switch r {
+	case flow.SkipSkipped, flow.SkipDeclined, flow.SkipRefused, flow.SkipFailed:
+		return r
+	}
+	return LabelOther
 }

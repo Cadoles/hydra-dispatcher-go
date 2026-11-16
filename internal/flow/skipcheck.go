@@ -45,6 +45,11 @@ const (
 	SkipFailed   = "failed"
 
 	eventSkipCheck = "step.skip_check"
+	// EventStepSkipped is a step a pre-check skipped: the audit's, at info.
+	EventStepSkipped = "step.skipped"
+	// EventSkipCheck is each pre-check, its result: a line of the level
+	// debug, step.skip_check_failed at warn when it failed.
+	EventSkipCheck = eventSkipCheck
 
 	// maxSkipChecks bounds the pre-checks of one request: 1.2 s at most,
 	// within the rounds of the orchestrator (maxRounds); the step after them
@@ -110,7 +115,7 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 	if app.Method != "" {
 		st.AMR = []string{app.Method} // under aggregate_amr_from_login_request too
 	}
-	return true, nil, []Report{rep, {Event: "step.skipped", App: step.App, Audit: true}}
+	return true, nil, []Report{rep, {Event: EventStepSkipped, App: step.App, Result: SkipSkipped}}
 }
 
 // fresh names the freshness the client asks that a skipped step would not

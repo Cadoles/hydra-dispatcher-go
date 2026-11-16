@@ -85,6 +85,8 @@ func TestEvents(t *testing.T) {
 			map[string]any{"flow": "f", "app": "2fa", "rule": "equal", "level": "WARN"}},
 		"EMU-14, a second accept": {flow.Observation{Before: func() *flow.Flow { g := flowOfTwoSteps(); g.Current = 1; return g }(), Reports: []flow.Report{{Event: "step.subject_mismatch", Audit: true}}}, "step.subject_mismatch",
 			map[string]any{"app": "sql", "rule": "same_accept"}},
+		"a step skipped (phase 4)": {flow.Observation{Before: f, After: f, Reports: []flow.Report{{Event: flow.EventStepSkipped, App: "2fa", Result: flow.SkipSkipped}}}, "step.skipped",
+			map[string]any{"flow": "f", "app": "2fa", "client_id": "c1", "level": "INFO"}},
 		"a logout": {flow.Observation{Answers: flow.Answers{Logout: logoutRead}, Reports: []flow.Report{{Event: "logout.started", Audit: true, RP: &rp, Apps: 3}}}, "logout.started",
 			map[string]any{"client_id": "c2", "rp_initiated": true, "apps": float64(3), "again": false}},
 		"a session deleted": {flow.Observation{Answers: flow.Answers{Login: &flow.LoginRead{Request: &ory.OAuth2LoginRequest{Subject: sentinel}}}, Reports: []flow.Report{{Event: "logout.session_revoked", Audit: true}}}, "logout.session_revoked", nil},

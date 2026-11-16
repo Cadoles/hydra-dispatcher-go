@@ -144,6 +144,11 @@ func (l *Log) Observe(ctx context.Context, o flow.Observation) {
 		case "skip.ignored":
 			id, _ := flowOf(o)
 			l.logger.InfoContext(ctx, "skip.ignored", "kind", r.Kind, "reason", r.Reason, "flow", id, "client_id", clientOf(o), "ip", clientIP(ctx))
+		case flow.EventStepSkipped:
+			// A step remembered for the device (phase 4): its app said so.
+			id, _ := flowOf(o)
+			l.logger.InfoContext(ctx, "step.skipped", "flow", id, "app", r.App, "client_id", clientOf(o), "ip", clientIP(ctx),
+				"subject", l.subject(subjectOf(o)))
 		case "step.subject_mismatch":
 			id, _ := flowOf(o)
 			app, rule := "", ""

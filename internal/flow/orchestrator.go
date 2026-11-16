@@ -321,8 +321,13 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			if !o.sampled(ctx, r.Event) {
 				continue
 			}
-			level := slog.LevelInfo
+			level, event := slog.LevelInfo, r.Event
 			switch {
+			case r.Event == eventSkipCheck && r.Result == SkipFailed:
+				// The app's pre-check failing, the step ran: warn, by its own name.
+				level, event = slog.LevelWarn, "step.skip_check_failed"
+			case r.Event == eventSkipCheck:
+				level = slog.LevelDebug
 			case r.Event == "logout.started", r.Event == "logout.session_revoked":
 				// Info, as the catalogue has them, in the audit log too.
 			case r.Sentry, r.Event == "hydra.request_failed", r.Event == "webhook.failed":
@@ -365,7 +370,10 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			if r.Event == "consent.resubmitted" {
 				args = append(args, "result", r.Result)
 			}
-			o.Log.Log(ctx, level, r.Event, args...)
+			if r.Event == eventSkipCheck && r.Result != SkipRefused {
+				args = append(args, "duration_ms", r.Elapsed.Milliseconds())
+			}
+			o.Log.Log(ctx, level, event, args...)
 		}
 	}
 	if len(o.Observers) > 0 {

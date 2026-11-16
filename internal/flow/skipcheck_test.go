@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
 
@@ -114,7 +115,7 @@ func TestSkipCheckSkips(t *testing.T) {
 	if reps := reportsOf(final, eventSkipCheck); len(reps) != 1 || reps[0].Result != SkipSkipped || reps[0].App != "2fa" {
 		t.Errorf("reports: %+v", final.Reports)
 	}
-	if reps := reportsOf(final, "step.skipped"); len(reps) != 1 || !reps[0].Audit {
+	if reps := reportsOf(final, EventStepSkipped); len(reps) != 1 || reps[0].App != "2fa" {
 		t.Errorf("audit: %+v", final.Reports)
 	}
 }
@@ -250,4 +251,37 @@ func TestSkipCheckAggregateAMR(t *testing.T) {
 	if final := w.handle(Loop{Ref: lref, Cookie: w.cookie}); final.Response.URL != verifierURL || !slices.Contains(w.hydra.accepted.Amr, "otp") {
 		t.Errorf("%+v, amr %q", final.Response, w.hydra.accepted.Amr)
 	}
+}
+
+// The lines of the log (P27c): a pre-check failing, step.skip_check_failed
+// at warn with its cause and duration; one that skips, a line of the level
+// debug alone, and step.skipped at info.
+func TestSkipCheckLogs(t *testing.T) {
+	w, _ := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Result: SkipFailed, Cause: "timeout", Elapsed: 301 * time.Millisecond}})
+	throughSQL(t, w, "sql-2fa", testDevice)
+	line := logLine(t, w, "step.skip_check_failed")
+	if line["level"] != "WARN" || line["app"] != "2fa" || line["reason"] != "timeout" || line["duration_ms"] != float64(301) {
+		t.Errorf("failed: %v", line)
+	}
+	w, _ = skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+	throughSQL(t, w, "sql-2fa", testDevice)
+	if strings.Contains(w.logs.String(), `"msg":"step.skip_check"`) {
+		t.Errorf("a pre-check at info: %s", w.logs.String())
+	}
+	if line := logLine(t, w, EventStepSkipped); line["level"] != "INFO" || line["app"] != "2fa" {
+		t.Errorf("skipped: %v", line)
+	}
+}
+
+// logLine is the line of the log of w named msg, decoded.
+func logLine(t *testing.T, w *world, msg string) map[string]any {
+	t.Helper()
+	for l := range strings.SplitSeq(w.logs.String(), "\n") {
+		var line map[string]any
+		if json.Unmarshal([]byte(l), &line) == nil && line["msg"] == msg {
+			return line
+		}
+	}
+	t.Fatalf("no %s in %s", msg, w.logs.String())
+	return nil
 }
