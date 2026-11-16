@@ -143,7 +143,7 @@ environment are used.
 - `store.dsn` loses the parameters of a Doctrine `DATABASE_URL`
   (`serverVersion`, `charset`…), which Postgres refuses, with a warning.
 
-Until 1.0, the variables of the Symfony dispatcher are read in fallback, each
+Until 2.0, the variables of the Symfony dispatcher are read in fallback, each
 with a `config.warning` naming the key to set instead: a key takes one only
 when neither the file nor a `DISPATCHER_*` variable sets it (defaults < Symfony
 variables < file < `DISPATCHER_*`), and one a set key leaves aside is warned of

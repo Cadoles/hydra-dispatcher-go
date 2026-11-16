@@ -70,9 +70,9 @@ func TestSymfonyEnv(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"BASE_PATH and SERVER_NAME (Symfony) are read as server.base_url until 1.0: set server.base_url, or DISPATCHER_SERVER_BASE_URL, instead; the value of BASE_PATH, an absolute URL; SERVER_NAME unused",
-		"TRUSTED_PROXIES (Symfony) is read as server.trusted_proxies until 1.0: set server.trusted_proxies, or DISPATCHER_SERVER_TRUSTED_PROXIES, instead; REMOTE_ADDR, every caller a trusted proxy, has no equivalent and is dropped",
-		"HYDRA_ADMIN_AUTHORIZED_HOSTS (Symfony) is read as security.admin_authorized_hosts until 1.0: set security.admin_authorized_hosts, or DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS, instead; security.emulated_api_authorized_hosts does not inherit it",
+		"BASE_PATH and SERVER_NAME (Symfony) are read as server.base_url until 2.0: set server.base_url, or DISPATCHER_SERVER_BASE_URL, instead; the value of BASE_PATH, an absolute URL; SERVER_NAME unused",
+		"TRUSTED_PROXIES (Symfony) is read as server.trusted_proxies until 2.0: set server.trusted_proxies, or DISPATCHER_SERVER_TRUSTED_PROXIES, instead; REMOTE_ADDR, every caller a trusted proxy, has no equivalent and is dropped",
+		"HYDRA_ADMIN_AUTHORIZED_HOSTS (Symfony) is read as security.admin_authorized_hosts until 2.0: set security.admin_authorized_hosts, or DISPATCHER_SECURITY_ADMIN_AUTHORIZED_HOSTS, instead; security.emulated_api_authorized_hosts does not inherit it",
 		"DATABASE_URL (Symfony) is read as store.dsn",
 		"store.dsn: charset, serverVersion dropped, parameters of Doctrine that Postgres refuses",
 		"OAUTH2_ADMIN_CLIENT_ID and OAUTH2_ADMIN_CLIENT_SECRET (Symfony) are not read: there is no implicit client of the admin API any more",
@@ -123,7 +123,7 @@ func TestLegacyOrder(t *testing.T) {
 		warning string // "" for none naming HYDRA_ADMIN_BASE_URL
 	}{
 		{"the variable alone", "", map[string]string{"HYDRA_ADMIN_BASE_URL": admin}, admin,
-			"HYDRA_ADMIN_BASE_URL (Symfony) is read as hydra.admin_url until 1.0: set hydra.admin_url, or DISPATCHER_HYDRA_ADMIN_URL, instead"},
+			"HYDRA_ADMIN_BASE_URL (Symfony) is read as hydra.admin_url until 2.0: set hydra.admin_url, or DISPATCHER_HYDRA_ADMIN_URL, instead"},
 		{"the file wins", "hydra: {admin_url: http://file:4445}\n", map[string]string{"HYDRA_ADMIN_BASE_URL": admin}, "http://file:4445",
 			"HYDRA_ADMIN_BASE_URL (Symfony) is ignored: hydra.admin_url is set, by the file or DISPATCHER_HYDRA_ADMIN_URL; remove it, the two may differ"},
 		{"DISPATCHER_* wins", "", map[string]string{"HYDRA_ADMIN_BASE_URL": admin, "DISPATCHER_HYDRA_ADMIN_URL": "http://env:4445"}, "http://env:4445",

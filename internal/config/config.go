@@ -199,7 +199,7 @@ type UI struct {
 
 type EmulatedAPI struct {
 	// LegacyV1Paths serves the v1 paths of the Symfony dispatcher
-	// (/oauth2/auth/requests/...) as deprecated aliases, until 1.0.
+	// (/oauth2/auth/requests/...) as deprecated aliases, until 2.0.
 	LegacyV1Paths bool `yaml:"legacy_v1_paths"`
 }
 

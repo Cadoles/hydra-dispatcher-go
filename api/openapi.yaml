@@ -47,7 +47,7 @@ tags:
   - name: Emulated API
     description: Hydra's admin API, as the login apps call it.
   - name: Emulated API v1
-    description: The paths of the Symfony dispatcher, deprecated aliases of the emulated API; removed in 1.0.
+    description: The paths of the Symfony dispatcher, deprecated aliases of the emulated API; removed in 2.0.
 
 # The responses several operations share, as YAML anchors: OpenAPI does not
 # reference a whole responses object. /docs.json, the YAML read as JSON,

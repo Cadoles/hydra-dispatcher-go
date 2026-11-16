@@ -55,7 +55,7 @@ const maxBody = 1 << 20
 
 // deprecation is the Deprecation header of the v1 paths (RFC 9745): the date
 // the Go dispatcher deprecated them, 2026-11-02. Sunset waits for the date
-// of the 1.0, which removes them.
+// of the 2.0, which removes them (Q135).
 const deprecation = "@1793577600"
 
 // maxLegacyCallers bounds the addresses remembered for the warning of a
@@ -280,7 +280,7 @@ func overlap(ps, qs []netip.Prefix) (netip.Prefix, netip.Prefix, bool) {
 }
 
 // warnLegacy logs the first v1 call of an address, so that the apps still
-// on the aliases show before 1.0 removes them.
+// on the aliases show before 2.0 removes them.
 func (h *handler) warnLegacy(r *http.Request, path string, ip netip.Addr) {
 	h.mu.Lock()
 	first := !h.legacyCallers[ip] && len(h.legacyCallers) < maxLegacyCallers

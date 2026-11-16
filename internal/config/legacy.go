@@ -11,7 +11,7 @@ import (
 )
 
 // The variables of the Symfony dispatcher are read in fallback during the
-// cohabitation, until 1.0 (Configuration et déploiement): a key takes the
+// cohabitation, until 2.0 (Configuration et déploiement, Q135): a key takes the
 // value of its variable only when neither the file nor a DISPATCHER_*
 // variable sets it, so the sources rank defaults < Symfony variables < file <
 // DISPATCHER_*. Each one read gives a warning naming the key to use instead,
@@ -119,7 +119,7 @@ func applyLegacy(c *Config, environ []string, lookupEnv func(string) (string, bo
 			continue
 		}
 		set[l.path] = true
-		w := fmt.Sprintf("%s read as %s until 1.0: set %s, or %s, instead", symfony(vars), l.path, l.path, k.name)
+		w := fmt.Sprintf("%s read as %s until 2.0: set %s, or %s, instead", symfony(vars), l.path, l.path, k.name)
 		if note != "" {
 			w += "; " + note
 		}
