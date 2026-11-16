@@ -45,6 +45,11 @@ const (
 	SkipFailed   = "failed"
 
 	eventSkipCheck = "step.skip_check"
+
+	// maxSkipChecks bounds the pre-checks of one request: 1.2 s at most,
+	// within the rounds of the orchestrator (maxRounds); the step after them
+	// runs.
+	maxSkipChecks = 4
 )
 
 // preCheck runs the pre-check of the current step of g (BCL-8): false and no
@@ -77,6 +82,9 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 		return refused(reason)
 	}
 	a := r.Answers.SkipChecks[k]
+	if a == nil && len(r.Answers.SkipChecks) >= maxSkipChecks {
+		return refused("chain")
+	}
 	if a == nil {
 		return false, &Outcome{Call: &Call{Op: SkipCheck, Gen: g.Gen, SkipCheck: &SkipCheckCall{
 			K: k, App: step.App, Subject: g.Subject, Device: step.Device, ClientID: req.Client.GetClientId(), Flow: g.FlowID,
@@ -99,6 +107,9 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 	st.LoginOK, st.ConsentOK, st.Subject, st.Skipped = true, true, subject, true
 	st.LoginContext, st.ConsentContext = a.Context, a.Context
 	st.IDToken, st.AccessToken = a.IDToken, a.AccessToken
+	if app.Method != "" {
+		st.AMR = []string{app.Method} // under aggregate_amr_from_login_request too
+	}
 	return true, nil, []Report{rep, {Event: "step.skipped", App: step.App, Audit: true}}
 }
 

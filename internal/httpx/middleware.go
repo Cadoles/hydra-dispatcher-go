@@ -37,7 +37,15 @@ func Chain(h http.Handler, middlewares ...Middleware) http.Handler {
 func RealIP(trusted []netip.Prefix) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			inf := &requestInfo{clientIP: clientIP(r, trusted), userAgent: r.UserAgent()}
+			inf := &requestInfo{clientIP: clientIP(r, trusted), userAgent: r.UserAgent(), acceptLanguage: r.Header.Get("Accept-Language")}
+			for _, h := range clientHintHeaders {
+				if v := r.Header.Get(h); v != "" {
+					if inf.clientHints == nil {
+						inf.clientHints = map[string]string{}
+					}
+					inf.clientHints[h] = v
+				}
+			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), infoKey{}, inf)))
 		})
 	}

@@ -18,7 +18,11 @@ type requestInfo struct {
 	traceID   string
 	clientIP  netip.Addr
 	userAgent string
-	route     string
+	// acceptLanguage and clientHints are signals of the browser a pre-check
+	// of a step may send (phase 4).
+	acceptLanguage string
+	clientHints    map[string]string
+	route          string
 	// trustedTrace tells that the client may give the trace: a parent's traceparent.
 	trustedTrace bool
 }
@@ -74,4 +78,26 @@ func UserAgent(ctx context.Context) string {
 		return inf.userAgent
 	}
 	return ""
+}
+
+// clientHintHeaders are the client hints a pre-check may send: the brands,
+// the platform, mobile or not.
+var clientHintHeaders = []string{"Sec-CH-UA", "Sec-CH-UA-Platform", "Sec-CH-UA-Mobile"}
+
+// AcceptLanguage returns the Accept-Language of the request ctx belongs to,
+// or "".
+func AcceptLanguage(ctx context.Context) string {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.acceptLanguage
+	}
+	return ""
+}
+
+// ClientHints returns the client hints of the request ctx belongs to, by
+// header, nil for none.
+func ClientHints(ctx context.Context) map[string]string {
+	if inf := infoFrom(ctx); inf != nil {
+		return inf.clientHints
+	}
+	return nil
 }

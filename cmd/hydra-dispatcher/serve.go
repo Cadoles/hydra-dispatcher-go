@@ -38,6 +38,7 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/skipcheck"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/tracing"
@@ -628,6 +629,13 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 	if err != nil {
 		return nil, err
 	}
+	// The pre-checks of the steps (phase 4), under the TLS of the webhooks:
+	// apps of the same deployment, their CA that of webhooks.ca_file.
+	skipTLS, err := httpx.ClientTLS(cfg.TLS.MinVersion, cfg.Webhooks.CAFile)
+	if err != nil {
+		return nil, fmt.Errorf("webhooks.ca_file: %w", err)
+	}
+	skipChecks := skipcheck.New(s.config, skipTLS)
 	watch := s.metrics
 	hydraClient.Observer = watch
 	// hydra.request and webhook.request, at the level debug (Q132).
@@ -664,6 +672,7 @@ func newHandler(cfg *config.Config, logger, accessLogger *slog.Logger, s service
 		Source:                 source,
 		Hydra:                  hydraClient,
 		Webhooks:               watch.Webhooks(webhooks),
+		SkipCheck:              skipChecks,
 		Observers:              observers,
 		BaseURL:                cfg.Server.BaseURL,
 		LoginConsentTTL:        cfg.Hydra.LoginConsentTTL.Std(),

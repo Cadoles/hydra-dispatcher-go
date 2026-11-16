@@ -211,3 +211,43 @@ func claimsJSON(claims map[string]any) string {
 	b, _ := json.Marshal(claims)
 	return string(b)
 }
+
+// Five steps skipped in a row: four pre-checks, the fifth step runs, its
+// pre-check refused (maxSkipChecks).
+func TestSkipCheckChainBound(t *testing.T) {
+	w, c := skipWorld(t, nil)
+	snap := w.o.Config.Snapshot()
+	apps, steps := slices.Clone(snap.Apps), []store.Step{{AppID: "sql", Position: 1, SubjectCheck: "none"}}
+	c.says = map[string]SkipCheckAnswer{}
+	for i := 2; i <= 6; i++ {
+		id := "f" + string(rune('0'+i))
+		apps = append(apps, store.App{ID: id, LoginURL: "http://" + id + ".hydra.test/login", ConsentURL: "http://" + id + ".hydra.test/consent",
+			Method: id, SkipCheckURL: "https://" + id + ".hydra.test/skip", SkipCheckKey: strings.Repeat("ab", 32)})
+		steps = append(steps, store.Step{AppID: id, Position: i, SubjectCheck: "equal", SkipCheck: true})
+		c.says[id] = SkipCheckAnswer{Skip: true, Result: SkipSkipped}
+	}
+	w.o.Config = snapshots{store.NewSnapshot(apps, append(snap.Flows, store.Flow{ID: "long", Enabled: true, Steps: steps}), store.DefaultSettings())}
+	r := throughSQL(t, w, "long", testDevice)
+	if !strings.HasPrefix(r.Response.URL, "http://f6.hydra.test/login?") || len(c.calls) != maxSkipChecks {
+		t.Fatalf("%+v, calls %q", r.Response, c.apps())
+	}
+	if reps := reportsOf(r, eventSkipCheck); len(reps) != 5 || reps[4].Reason != "chain" {
+		t.Errorf("reports: %+v", reps)
+	}
+}
+
+// Under aggregate_amr_from_login_request, a step skipped gives its app's
+// method, as it would without (the amr of the answer is not taken).
+func TestSkipCheckAggregateAMR(t *testing.T) {
+	w, _ := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+	snap := w.o.Config.Snapshot()
+	settings := store.DefaultSettings()
+	settings.AggregateAMRFromLoginRequest = true
+	w.o.Config = snapshots{store.NewSnapshot(snap.Apps, snap.Flows, settings)}
+	w.handle(Entry{LoginChallenge: hydraL, Device: testDevice})
+	step := w.handle(Choose{FlowID: "sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true, Device: testDevice})
+	w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+	if final := w.handle(Loop{Ref: lref, Cookie: w.cookie}); final.Response.URL != verifierURL || !slices.Contains(w.hydra.accepted.Amr, "otp") {
+		t.Errorf("%+v, amr %q", final.Response, w.hydra.accepted.Amr)
+	}
+}
