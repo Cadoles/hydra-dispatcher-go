@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -141,5 +142,34 @@ func TestAppVersionWithoutKey(t *testing.T) {
 	c.SkipCheckKey = ""
 	if appVersion(a) != appVersion(b) || appVersion(a) == appVersion(c) {
 		t.Errorf("versions: %s %s %s", appVersion(a), appVersion(b), appVersion(c))
+	}
+}
+
+// A key of the pre-check, typed or made, asks a fresh authentication past
+// admin.session.reauth_window, as a client's secret; the other writes of the
+// app do not.
+func TestAppSkipCheckKeyFresh(t *testing.T) {
+	r := newRig(t, "http://dispatcher.test")
+	b := r.browser()
+	b.login("alice", password, "")
+	r.advance(6 * time.Minute)
+	page := b.do(http.MethodGet, "/admin/apps/spare", nil).Body.String()
+	for name, set := range map[string]map[string]string{
+		"made":  {"skip_check_url": "https://spare.test/c", "skip_check_key_generate": "1"},
+		"typed": {"skip_check_url": "https://spare.test/c", "skip_check_key": strings.Repeat("ab", 32)},
+	} {
+		form := browserForm(t, page, "/admin/apps/spare")
+		for k, v := range set {
+			form.Set(k, v)
+		}
+		w := b.do(http.MethodPost, "/admin/apps/spare", form)
+		if a, _ := r.config.app("spare"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Confirm it is you") || a.SkipCheckKey != "" {
+			t.Errorf("%s: %d, app %+v", name, w.Code, a)
+		}
+	}
+	form := browserForm(t, page, "/admin/apps/spare")
+	form.Set("method", "totp")
+	if w := b.do(http.MethodPost, "/admin/apps/spare", form); w.Code != http.StatusSeeOther {
+		t.Errorf("another field: %d", w.Code)
 	}
 }

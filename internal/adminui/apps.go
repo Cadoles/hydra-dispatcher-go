@@ -186,10 +186,25 @@ func (ui *UI) registerApps() {
 	}
 	// _new is no id: an id starts with a letter or a digit.
 	ui.mux.Handle("GET /admin/apps/_new", ui.authed(adminRole, ui.newApp))
-	ui.mux.Handle("POST /admin/apps", ui.authed(adminRole, ui.createApp))
-	ui.mux.Handle("POST /admin/apps/{id}", ui.authed(adminRole, ui.updateApp))
+	ui.mux.Handle("POST /admin/apps", ui.authed(adminRole, ui.keyFresh(ui.createApp)))
+	ui.mux.Handle("POST /admin/apps/{id}", ui.authed(adminRole, ui.keyFresh(ui.updateApp)))
 	ui.mux.Handle("GET /admin/apps/{id}/delete", ui.authed(adminRole, ui.deleteAppForm))
 	ui.mux.Handle("POST /admin/apps/{id}/delete", ui.authed(adminRole, ui.deleteApp))
+}
+
+// keyFresh asks a write that gives an app a key of the pre-check, typed or
+// made, to confirm it is the account's, within admin.session.reauth_window,
+// as the secret of a client does: whoever holds the key signs for the app.
+// The other writes of an app ask nothing more.
+func (ui *UI) keyFresh(h func(http.ResponseWriter, *http.Request, *current)) func(http.ResponseWriter, *http.Request, *current) {
+	fresh := ui.fresh(h)
+	return func(w http.ResponseWriter, r *http.Request, s *current) {
+		if strings.TrimSpace(r.PostFormValue("skip_check_key")) != "" || r.PostFormValue("skip_check_key_generate") != "" {
+			fresh(w, r, s)
+			return
+		}
+		h(w, r, s)
+	}
 }
 
 func (ui *UI) appPath(id string) string { return ui.base + "/apps/" + url.PathEscape(id) }
