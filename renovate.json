@@ -57,6 +57,12 @@
       "matchDepNames": ["@picocss/pico"],
       "groupName": null,
       "automerge": false
+    },
+    {
+      "description": "cosign of the release workflow: its two checksums come by hand from the release's cosign_checksums.txt; the workflow stops on a wrong one, before signing: reviewed.",
+      "matchDepNames": ["sigstore/cosign"],
+      "groupName": null,
+      "automerge": false
     }
   ],
   "customManagers": [
@@ -84,6 +90,12 @@
       "description": "Pico CSS of web/pico/fetch.sh, a version a comment names.",
       "managerFilePatterns": ["/(^|/)web/pico/fetch\\.sh$/"],
       "matchStrings": ["PICO_VERSION=(?<currentValue>[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
+    },
+    {
+      "customType": "regex",
+      "description": "cosign of the release workflow, a version a comment names.",
+      "managerFilePatterns": ["/(^|/)\\.gitea/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["COSIGN_VERSION: (?<currentValue>v[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
     }
   ]
 }

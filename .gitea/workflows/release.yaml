@@ -40,6 +40,39 @@ jobs:
         run: |
           test -s cosign.pub || { echo "cosign.pub is missing: commit the public key of the pair before releasing"; exit 1; }
 
+      # The tools of the steps below, before anything is pushed: a tool the
+      # runner lacks stops the release here, not after the build.
+      - name: Tools
+        run: |
+          for tool in curl jq git sha256sum; do
+            command -v "$tool" >/dev/null || { echo "$tool is missing on the runner"; exit 1; }
+          done
+
+      # cosign itself, pinned by its checksums as the Dockerfile pins tini, and
+      # before the build: the action sigstore/cosign-installer calls envsubst,
+      # which the runner of the forge lacks (exit 127), and failed after the
+      # image was pushed. The sums are those of cosign_checksums.txt of the
+      # release; a new version brings them by hand (renovate.json), a wrong one
+      # stops here.
+      - name: Install cosign
+        env:
+          COSIGN_VERSION: v3.1.4 # renovate: datasource=github-releases depName=sigstore/cosign
+        run: |
+          case "$(uname -m)" in
+            x86_64) arch=amd64 sum=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa ;;
+            aarch64) arch=arm64 sum=ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2 ;;
+            *) echo "no cosign pinned for $(uname -m)"; exit 1 ;;
+          esac
+          dir="${RUNNER_TEMP:-/tmp}/cosign-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 6 --retry-delay 5 --retry-all-errors --retry-max-time 120 \
+            -o "$dir/cosign" \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${arch}"
+          echo "${sum}  $dir/cosign" | sha256sum -c -
+          chmod +x "$dir/cosign"
+          echo "$dir" >> "$GITHUB_PATH"
+          "$dir/cosign" version
+
       # Pinned: the BuildKit the runner picks by default fails to mask
       # /proc/acpi ("runc run failed ... invalid argument"), so every RUN dies
       # at container init. The same pin as the other projects built on that runner.
@@ -88,10 +121,6 @@ jobs:
           output-file: ${{ env.SBOM }}
           upload-artifact: false
           upload-release-assets: false
-
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
-        with:
-          cosign-release: v3.1.4
 
       # Signed by the key pair alone: .gitea/cosign-signing-config.json names no
       # transparency log nor timestamp authority, so nothing goes to the public
