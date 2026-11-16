@@ -185,6 +185,7 @@ func (r *run) start(ref string, f *Flow, id string, imposed bool, trigger string
 	}
 	g := f.clone()
 	g.FlowID, g.Imposed, g.ACR, g.Current = id, imposed, fl.ACR, 1
+	g.SkipCheckACR = fl.SkipCheckAllowedACR
 	if g.StartedAt == 0 {
 		g.StartedAt = r.now()
 	}
@@ -195,7 +196,7 @@ func (r *run) start(ref string, f *Flow, id string, imposed bool, trigger string
 		g.DeviceAt = dev.Created
 	}
 	for i, s := range fl.Steps {
-		g.Steps[i] = Step{App: s.AppID, Check: s.SubjectCheck}
+		g.Steps[i] = Step{App: s.AppID, Check: s.SubjectCheck, SkipCheck: s.SkipCheck}
 		if s.SubjectCheck == "none" {
 			g.Steps[i].Check = ""
 		}

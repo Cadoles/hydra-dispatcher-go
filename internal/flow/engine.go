@@ -320,6 +320,8 @@ const (
 	AcceptLogout
 	RejectLogout
 	RevokeSession
+	// SkipCheck is the pre-check of a step, to its app (phase 4).
+	SkipCheck
 )
 
 // Reason is why a login or a consent is rejected.
@@ -419,6 +421,8 @@ type Call struct {
 	AcceptLogin   ory.AcceptOAuth2LoginRequest
 	AcceptConsent ory.AcceptOAuth2ConsentRequest
 	Reject        ory.RejectOAuth2Request
+	// SkipCheck is what the pre-check of a step asks its app.
+	SkipCheck *SkipCheckCall
 }
 
 // Answers are the calls made during the request, with their answers.
@@ -435,6 +439,8 @@ type Answers struct {
 	LogoutAccept  *Done
 	LogoutReject  *Done
 	Revoke        *Done
+	// SkipChecks are the pre-checks made, by the position of their step.
+	SkipChecks map[int]*SkipCheckAnswer
 }
 
 // LoginRead is the answer to GetLogin, from the Source (P3d, P7):

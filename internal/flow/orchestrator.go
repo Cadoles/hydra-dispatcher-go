@@ -45,6 +45,12 @@ type Webhooks interface {
 	Consent(ctx context.Context, call Call) ConsentHookAnswer
 }
 
+// SkipChecker makes the pre-check of a step (phase 4, internal/skipcheck):
+// ctx is the browser's request, whose signals it may send.
+type SkipChecker interface {
+	Check(ctx context.Context, call SkipCheckCall) SkipCheckAnswer
+}
+
 // StubWebhooks change nothing, for a test without webhooks to call.
 type StubWebhooks struct{}
 
@@ -66,6 +72,9 @@ type Orchestrator struct {
 	Source   Source
 	Hydra    Hydra
 	Webhooks Webhooks
+	// SkipCheck makes the pre-checks of the steps (phase 4); nil fails them,
+	// each step then running.
+	SkipCheck SkipChecker
 	// BaseURL, LoginConsentTTL and Keys are server.base_url,
 	// hydra.login_consent_ttl and the challenge keys.
 	BaseURL         string
@@ -583,6 +592,19 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 		a.LogoutReject = done("", o.Hydra.RejectLogout(ctx, c.Challenge))
 	case RevokeSession:
 		a.Revoke = done("", o.Hydra.RevokeLoginSession(ctx, c.Challenge))
+	case SkipCheck:
+		answer := SkipCheckAnswer{Result: SkipFailed, Cause: "no_client"}
+		if o.SkipCheck != nil {
+			answer = o.SkipCheck.Check(ctx, *c.SkipCheck)
+		}
+		if a.SkipChecks == nil {
+			a.SkipChecks = map[int]*SkipCheckAnswer{}
+		}
+		a.SkipChecks[c.SkipCheck.K] = &answer
+		span.SetAttributes(attribute.String("dispatcher.skip_check.result", answer.Result))
+		if answer.Result == SkipFailed {
+			span.SetStatus(codes.Error, "")
+		}
 	}
 	return nil
 }
@@ -596,6 +618,7 @@ var callNames = map[Op]string{
 	GetConsent: "hydra.consent_request", AcceptConsent: "hydra.accept_consent", RejectConsent: "hydra.reject_consent",
 	LoginHook: "webhook.call", ConsentHook: "webhook.call",
 	GetLogout: "hydra.logout_request", AcceptLogout: "hydra.accept_logout", RejectLogout: "hydra.reject_logout", RevokeSession: "hydra.revoke_session",
+	SkipCheck: "skip_check.call",
 }
 
 func (o *Orchestrator) now() time.Time {

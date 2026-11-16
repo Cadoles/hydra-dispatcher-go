@@ -110,7 +110,7 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 	}
 	// Without the x_dispatcher_* members an app wrote, as at a skip: the webhook
 	// receives what Hydra will (R28).
-	ctx, stop := r.loginHook(f, &body, withoutDispatcher(f.ContextOf()))
+	ctx, stop := r.loginHook(f, &body, withSkipped(withoutDispatcher(f.ContextOf()), f))
 	if stop != nil {
 		return *stop // FIN-4: flow unchanged, a reload replays the webhook
 	}
@@ -118,7 +118,7 @@ func (r *run) finalAccept(ref string, f *Flow) Outcome {
 		return r.rejectLogin(f, ReasonSkipSubject, rejection(ReasonSkipSubject, "The subject authenticated is not the one of the Hydra session."),
 			func(string) Outcome { return otherSubject(s, f) })
 	}
-	ctx = withoutDispatcher(ctx)
+	ctx = withSkipped(withoutDispatcher(ctx), f)
 	ctx[memberRef], _ = json.Marshal(ref) // a string always marshals
 	body.Context = ctx
 
@@ -573,4 +573,14 @@ func (o Outcome) audited(d *Done) Outcome {
 		return o.report(Report{Event: "flow.rejected", Detail: d.Call.detail(), Audit: true})
 	}
 	return o
+}
+
+// withSkipped gives ctx the apps of the steps a pre-check skipped, for the
+// client and the webhook to tell a factor remembered from a factor typed
+// (x_dispatcher_skipped_steps, phase 4); ctx as it is when none was.
+func withSkipped(ctx Object, f *Flow) Object {
+	if apps := f.SkippedApps(); len(apps) > 0 {
+		ctx["x_dispatcher_skipped_steps"], _ = json.Marshal(apps) // strings always marshal
+	}
+	return ctx
 }

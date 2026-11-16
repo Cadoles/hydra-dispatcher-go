@@ -57,6 +57,9 @@ type Flow struct {
 	Gen  int64 `json:"g"`
 	// CSRF is the copy of the browser's dispatcher_flow_csrf cookie.
 	CSRF string `json:"c"`
+	// SkipCheckACR are the acr_values under which the flow's steps may be
+	// skipped, copied with the steps (phase 4).
+	SkipCheckACR []string `json:"sacr,omitempty"`
 	// DeviceAt is the Unix time the browser's device cookie was drawn, copied
 	// at the start of the flow with the values of its steps; 0 for none
 	// (phase 4).
@@ -161,6 +164,10 @@ type Step struct {
 	AccessToken    Object `json:"act,omitempty"`
 	Remember       *bool  `json:"rem,omitempty"`
 	RememberFor    *int64 `json:"remf,omitempty"`
+	// SkipCheck is the step's ask for the pre-check, copied with the step;
+	// Skipped tells that the pre-check skipped it (phase 4).
+	SkipCheck bool `json:"skc,omitempty"`
+	Skipped   bool `json:"skp,omitempty"`
 	// Device is the value of the browser's device for the step's app
 	// (DeviceValue), served to it as x_dispatcher_device: never the device
 	// itself. "" for none (phase 4).

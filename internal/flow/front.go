@@ -409,9 +409,23 @@ func (r *run) advance(ref string, f *Flow) Outcome {
 	default:
 		return s.fail(E1007)
 	}
+	// The next steps, as long as their pre-check skips them (phase 4): the
+	// first one left, or the final accept once none is.
 	g := f.clone()
-	g.Current++
-	return r.toStep(ref, g, g.Current, KindLogin).writing(g)
+	var reports []Report
+	for {
+		g.Current++
+		skipped, call, reps := r.preCheck(g)
+		reports = append(reports, reps...)
+		switch {
+		case call != nil:
+			return *call
+		case !skipped:
+			return r.toStep(ref, g, g.Current, KindLogin).writing(g).report(reports...)
+		case g.Current == len(g.Steps):
+			return r.finalAccept(ref, g).report(reports...)
+		}
+	}
 }
 
 // consent is GET or POST /consent (M7, CST): the consent request is read
