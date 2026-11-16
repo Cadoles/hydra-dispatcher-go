@@ -1334,6 +1334,7 @@ components:
         oidc_context: { type: object }
         x_dispatcher_claims: { type: object, description: 'The claims of the steps before, filtered by receive_claims.' }
         x_dispatcher_restart_url: { type: string, description: 'The choice page of the flow.' }
+        x_dispatcher_device: { type: string, description: 'The browser''s device for this app (HMAC-SHA256 of the device by the app''s id, base64url), when a step of the configuration asks for the pre-check (phase 4). An accept login may declare the device remembered until a date, context.x_dispatcher_remember_until (RFC 3339).' }
       additionalProperties: true
     ConsentRequest:
       type: object
