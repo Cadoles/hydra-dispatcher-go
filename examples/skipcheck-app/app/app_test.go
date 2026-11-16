@@ -177,3 +177,18 @@ func TestRevokeNeedsTheToken(t *testing.T) {
 		t.Errorf("revoke without the token: %d", w.Code)
 	}
 }
+
+// The page's policy leaves the form's target free: Chromium applies
+// form-action to the redirection after the POST, which goes to the
+// dispatcher, another origin (R51, Q141).
+func TestPagePolicy(t *testing.T) {
+	var accepted map[string]any
+	api := emulated(t, "dev-of-alice", &accepted)
+	defer api.Close()
+	h, _ := New(Options{AdminURL: api.URL, Key: testKey, Code: "123456"})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/login?login_challenge=c", nil))
+	if csp := w.Header().Get("Content-Security-Policy"); w.Code != http.StatusOK || strings.Contains(csp, "form-action") || !strings.Contains(csp, "default-src 'none'") {
+		t.Errorf("%d, policy %q", w.Code, csp)
+	}
+}

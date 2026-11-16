@@ -163,7 +163,10 @@ func random() string {
 func (a *app) render(w http.ResponseWriter, status int, v view) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'")
+	// No form-action: Chromium applies it to the redirection after the POST
+	// too, which goes to the dispatcher, another origin whose public address
+	// the app does not know (R51, Q141).
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	w.WriteHeader(status)
 	_ = page.Execute(w, v)
 }
