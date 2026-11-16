@@ -333,3 +333,28 @@ func TestSkipCheckStaleAnswer(t *testing.T) {
 		}
 	}
 }
+
+// R50 H1, Q140: the memory of the skip keeps the apps skipped, beside the amr
+// they describe; a second login in the same Hydra session, Hydra's skip
+// honoured from it, carries them again in its accept's context.
+func TestSkipCheckRemembered(t *testing.T) {
+	w, _ := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+	w.hydra.consentSkip = true
+	if final := throughSQL(t, w, "sql-2fa", testDevice); final.Response.URL != verifierURL {
+		t.Fatalf("final accept: %+v", final.Response)
+	}
+	c := w.handle(Consent{Challenge: hydraC, Cookie: w.cookie})
+	if c.Response.Remember == nil || !slices.Equal(c.Response.Remember.SK, []string{"2fa"}) {
+		t.Fatalf("memory: %+v", c.Response.Remember)
+	}
+	w.hydra.login.Skip, w.hydra.login.Subject = true, "alice"
+	if r := w.handle(Entry{LoginChallenge: hydraL2, Memory: Memory{Content: c.Response.Remember}}); r.Response.URL != verifierURL {
+		t.Fatalf("SKP-1: %+v", r.Response)
+	}
+	var skipped []string
+	ctx := w.hydra.accepted.Context.(Object)
+	if err := json.Unmarshal(ctx["x_dispatcher_skipped_steps"], &skipped); err != nil || !slices.Equal(skipped, []string{"2fa"}) ||
+		!slices.Equal(w.hydra.accepted.Amr, []string{"pwd", "otp"}) {
+		t.Errorf("the skip's accept: %v, amr %q", ctx, w.hydra.accepted.Amr)
+	}
+}

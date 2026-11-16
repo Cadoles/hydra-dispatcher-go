@@ -105,7 +105,7 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 		Remember:    ory.PtrBool(settings.Remember),
 		RememberFor: ory.PtrInt64(int64(settings.LoginRememberFor / time.Second)),
 	}
-	ctx, stop := r.loginHook(f, &body, withoutDispatcher(c.Ctx))
+	ctx, stop := r.loginHook(f, &body, withSkipped(withoutDispatcher(c.Ctx), c.SK))
 	if stop != nil {
 		// SKP-9: nothing written, a reload replays the webhook. The page gives Hydra's
 		// logout, as E1003 does (Q88): a webhook that refuses the subject it rewrote
@@ -130,7 +130,7 @@ func (r *run) skipLogin(f *Flow, c *Remembered) Outcome {
 		}
 		return out
 	}
-	ctx = withoutDispatcher(ctx)
+	ctx = withSkipped(withoutDispatcher(ctx), c.SK) // Q140
 	marker := r.Env.Keys.SkipMarker(f.HydraSessionID, body.Subject, body.GetAcr(), body.Amr, f.Hydra.RequestURL)
 	ctx[memberSkip], _ = json.Marshal(marker) // a string always marshals
 	body.Context = ctx
@@ -312,6 +312,7 @@ func (r *run) remembered(f *Flow, body ory.AcceptOAuth2ConsentRequest) *Remember
 		ACR:  f.Sent.ACR,
 		AMR:  nonNil(f.Sent.AMR),
 		Ctx:  withoutDispatcher(f.Sent.Context),
+		SK:   f.SkippedApps(),
 		Scp:  nonNil(body.GrantScope),
 		Aud:  nonNil(body.GrantAccessTokenAudience),
 		IAT:  now,

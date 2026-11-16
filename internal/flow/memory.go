@@ -37,6 +37,10 @@ type Remembered struct {
 	ACR string   `json:"acr,omitempty"`
 	AMR []string `json:"amr,omitempty"`
 	Ctx Object   `json:"ctx,omitempty"`
+	// SK are the apps of the steps a pre-check skipped in the flow that
+	// wrote it: the accept of a skip carries them again, beside the amr they
+	// describe (x_dispatcher_skipped_steps, Q140).
+	SK []string `json:"sk,omitempty"`
 	// Scp and Aud are the scopes and audiences the consent granted (MEM-8,
 	// MEM-10); IDT and ACT its claims, after the webhook.
 	Scp []string `json:"scp,omitempty"`
