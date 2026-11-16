@@ -92,6 +92,38 @@ jobs:
         with:
           context: .
           push: false
+          provenance: false
+          outputs: type=docker,dest=/tmp/dispatcher-image.tar
+
+      # The image scanned by Trivy, the scanner of Harbor: govulncheck reads the
+      # database of Go alone, which may lag behind the advisories of GitHub
+      # (go-jose, at the release 1.0.0). Fails on a vulnerability with a fix,
+      # MEDIUM and above, of a Go module or a package of distroless. The
+      # entries of the database of Go have no severity in Trivy (UNKNOWN):
+      # govulncheck keeps them, knowing whether the code calls them
+      # (GO-2026-5932, x/crypto's openpgp, not imported).
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: v0.76.2 # renovate: datasource=github-releases depName=aquasecurity/trivy
+        run: |
+          case "$(uname -m)" in
+            x86_64) arch=64bit sum=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf ;;
+            aarch64) arch=ARM64 sum=ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3 ;;
+            *) echo "no Trivy pinned for $(uname -m)"; exit 1 ;;
+          esac
+          dir="${RUNNER_TEMP:-/tmp}/trivy-bin"
+          mkdir -p "$dir"
+          curl -fsSL --retry 6 --retry-delay 5 --retry-all-errors --retry-max-time 120 \
+            -o "$dir/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}/trivy_${TRIVY_VERSION#v}_Linux-${arch}.tar.gz"
+          echo "${sum}  $dir/trivy.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/trivy.tar.gz" -C "$dir" trivy
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Scan the image
+        run: |
+          trivy image --input /tmp/dispatcher-image.tar --scanners vuln \
+            --ignore-unfixed --severity MEDIUM,HIGH,CRITICAL --exit-code 1 --no-progress
 
   # examples/theme-demo (Q91): the check of serve on it, and its theme.css built
   # again by the pinned Tailwind CLI, the committed one the same.

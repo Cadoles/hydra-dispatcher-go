@@ -332,7 +332,14 @@ The workflow reads the secrets of the repository: `REGISTRY_USERNAME` and
 Dependencies follow `renovate.json`: minor and patch updates grouped each week and
 merged once the CI passes, a pull request of its own for a major, `ory/hydra-client-go`
 and BuildKit; actions and images pinned by digest. The scheduled run is the platform's.
-`tini` (Dockerfile) is updated by hand, its checksums with it.
+`tini` (Dockerfile) is updated by hand, its checksums with it; so are cosign and Trivy
+of the workflows, which Renovate names in a pull request of their own.
+
+Besides govulncheck, which reads the database of Go and knows whether the code calls a
+vulnerability, the CI scans the image built with Trivy, the scanner of Harbor: a
+vulnerability with a fix, MEDIUM and above, of a Go module or a package of distroless,
+fails it. The advisories of GitHub may reach Trivy before the database of Go (the CVEs
+of go-jose at 1.0.0).
 
 ## End-to-end run
 

@@ -59,8 +59,8 @@
       "automerge": false
     },
     {
-      "description": "cosign of the release workflow: its two checksums come by hand from the release's cosign_checksums.txt; the workflow stops on a wrong one, before signing: reviewed.",
-      "matchDepNames": ["sigstore/cosign"],
+      "description": "cosign of the release workflow and Trivy of the test workflow: their two checksums come by hand from the release's checksums file (Trivy's verified by its Sigstore bundle); the workflow stops on a wrong one: reviewed.",
+      "matchDepNames": ["sigstore/cosign", "aquasecurity/trivy"],
       "groupName": null,
       "automerge": false
     }
@@ -93,9 +93,9 @@
     },
     {
       "customType": "regex",
-      "description": "cosign of the release workflow, a version a comment names.",
+      "description": "cosign and Trivy of the workflows, a version a comment names.",
       "managerFilePatterns": ["/(^|/)\\.gitea/workflows/[^/]+\\.ya?ml$/"],
-      "matchStrings": ["COSIGN_VERSION: (?<currentValue>v[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
+      "matchStrings": ["[A-Z]+_VERSION: (?<currentValue>v[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
     }
   ]
 }
