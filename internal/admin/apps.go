@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
@@ -22,11 +23,23 @@ type appJSON struct {
 	ClientCertFingerprint *string  `json:"clientCertFingerprint"`
 	// ReceiveClaims is null for every claim, [] for none.
 	ReceiveClaims []string `json:"receiveClaims"`
+	// SkipCheckURL is null without the pre-check of a step (phase 4).
+	SkipCheckURL *string `json:"skipCheckUrl"`
+	// SkipCheckKeySet tells whether the app holds its key, which a read never
+	// shows: a write gives it by skipCheckKey. A body may carry it back, read
+	// only, ignored.
+	SkipCheckKeySet  bool     `json:"skipCheckKeySet"`
+	SkipCheckSignals []string `json:"skipCheckSignals"`
 }
 
 func appOf(a store.App) appJSON {
 	j := appJSON{ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
-		AuthMode: a.AuthMode, AllowedSources: []string{}, ReceiveClaims: a.ReceiveClaims}
+		AuthMode: a.AuthMode, AllowedSources: []string{}, ReceiveClaims: a.ReceiveClaims,
+		SkipCheckKeySet: a.SkipCheckKey != "", SkipCheckSignals: []string{}}
+	if a.SkipCheckURL != "" {
+		j.SkipCheckURL = &a.SkipCheckURL
+	}
+	j.SkipCheckSignals = append(j.SkipCheckSignals, a.SkipCheckSignals...)
 	for _, p := range a.AllowedSources {
 		j.AllowedSources = append(j.AllowedSources, p.String())
 	}
@@ -40,8 +53,9 @@ func appOf(a store.App) appJSON {
 // Go adds, which a PUT without them keeps (Q107).
 var (
 	appSymfonyFields = []string{"loginUrl", "consentUrl", "logoutUrl", "method"}
-	appGoFields      = []string{"authMode", "allowedSources", "clientCertFingerprint", "receiveClaims"}
-	appFields        = append(append([]string{"id"}, appSymfonyFields...), appGoFields...)
+	appGoFields      = []string{"authMode", "allowedSources", "clientCertFingerprint", "receiveClaims",
+		"skipCheckUrl", "skipCheckKey", "skipCheckSignals"}
+	appFields = append(append([]string{"id"}, appSymfonyFields...), appGoFields...)
 )
 
 // writeMode is what a write does with the fields absent from its body.
@@ -56,7 +70,7 @@ const (
 // applyApp writes the fields of b into a, as mode says; a null field takes its
 // default.
 func applyApp(b body, a *store.App, mode writeMode) error {
-	if err := b.unknown(appFields); err != nil {
+	if err := b.unknown(appFields, "skipCheckKeySet"); err != nil {
 		return err
 	}
 	if mode == replace {
@@ -111,6 +125,42 @@ func applyApp(b body, a *store.App, mode writeMode) error {
 			return err
 		}
 		a.ReceiveClaims = claims // nil, every claim
+	}
+	// The pre-check of a step (phase 4). The key is written, never read: a
+	// write without it keeps the key held; "" or null removes it.
+	if b.has("skipCheckUrl") {
+		u, err := b.str("skipCheckUrl")
+		if err != nil {
+			return err
+		}
+		a.SkipCheckURL = u
+	}
+	if b.has("skipCheckKey") {
+		k, err := b.str("skipCheckKey")
+		if err != nil {
+			return err
+		}
+		a.SkipCheckKey = strings.TrimSpace(k)
+	}
+	if b.has("skipCheckSignals") {
+		signals, err := b.strs("skipCheckSignals")
+		if err != nil {
+			return err
+		}
+		a.SkipCheckSignals = nil
+		if len(signals) > 0 {
+			a.SkipCheckSignals = signals
+		}
+	}
+	// Without its URL, an app has neither key nor signals: those the body does
+	// not give go with it, those it gives are refused.
+	if a.SkipCheckURL == "" {
+		if !b.has("skipCheckKey") {
+			a.SkipCheckKey = ""
+		}
+		if !b.has("skipCheckSignals") {
+			a.SkipCheckSignals = nil
+		}
 	}
 	return nil
 }

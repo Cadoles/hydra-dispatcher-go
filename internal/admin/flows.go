@@ -18,6 +18,8 @@ type stepJSON struct {
 	AppID        string `json:"appId"`
 	StepOrder    int    `json:"stepOrder"`
 	SubjectCheck string `json:"subjectCheck"`
+	// SkipCheck asks the app of the step whether it may be skipped (phase 4).
+	SkipCheck bool `json:"skipCheck"`
 }
 
 // flowJSON is the representation of a flow: its steps by stepOrder, without
@@ -30,11 +32,15 @@ type flowJSON struct {
 	IconURL map[string]string `json:"iconUrl"`
 	Enabled bool              `json:"enabled"`
 	ACR     *string           `json:"acr"`
-	Steps   []stepJSON        `json:"steps"`
+	// SkipCheckAllowedACR are the acr_values under which a step may be
+	// skipped by its pre-check, [] for none.
+	SkipCheckAllowedACR []string   `json:"skipCheckAllowedAcr"`
+	Steps               []stepJSON `json:"steps"`
 }
 
 func flowOf(f store.Flow) flowJSON {
-	j := flowJSON{ID: f.ID, Title: orEmpty(f.Title), Description: orEmpty(f.Description), IconURL: f.IconURL, Enabled: f.Enabled, Steps: []stepJSON{}}
+	j := flowJSON{ID: f.ID, Title: orEmpty(f.Title), Description: orEmpty(f.Description), IconURL: f.IconURL, Enabled: f.Enabled,
+		SkipCheckAllowedACR: append([]string{}, f.SkipCheckAllowedACR...), Steps: []stepJSON{}}
 	if len(j.IconURL) == 0 {
 		j.IconURL = nil
 	}
@@ -43,7 +49,7 @@ func flowOf(f store.Flow) flowJSON {
 	}
 	steps := slices.SortedFunc(slices.Values(f.Steps), func(a, b store.Step) int { return cmp.Compare(a.Position, b.Position) })
 	for _, s := range steps {
-		j.Steps = append(j.Steps, stepJSON{AppID: s.AppID, StepOrder: s.Position, SubjectCheck: s.SubjectCheck})
+		j.Steps = append(j.Steps, stepJSON{AppID: s.AppID, StepOrder: s.Position, SubjectCheck: s.SubjectCheck, SkipCheck: s.SkipCheck})
 	}
 	return j
 }
@@ -56,11 +62,11 @@ func orEmpty(m map[string]string) map[string]string {
 }
 
 // The fields of a flow: those of Symfony, which a PUT replaces, steps apart,
-// which a PUT without them keeps as Symfony does; acr, which the Go adds, kept
-// too (Q107).
+// which a PUT without them keeps as Symfony does; acr and
+// skipCheckAllowedAcr, which the Go adds, kept too (Q107).
 var (
-	flowFields = []string{"id", "title", "description", "iconUrl", "enabled", "acr", "steps"}
-	stepKeys   = []string{"appId", "id", "stepOrder", "order", "subjectCheck"}
+	flowFields = []string{"id", "title", "description", "iconUrl", "enabled", "acr", "skipCheckAllowedAcr", "steps"}
+	stepKeys   = []string{"appId", "id", "stepOrder", "order", "subjectCheck", "skipCheck"}
 )
 
 // applyFlow writes the fields of b into f, as mode says.
@@ -100,6 +106,16 @@ func applyFlow(b body, f *store.Flow, mode writeMode) error {
 		}
 		f.ACR = acr
 	}
+	if b.has("skipCheckAllowedAcr") {
+		acr, err := b.strs("skipCheckAllowedAcr")
+		if err != nil {
+			return err
+		}
+		f.SkipCheckAllowedACR = nil
+		if len(acr) > 0 {
+			f.SkipCheckAllowedACR = acr
+		}
+	}
 	if b.has("steps") {
 		steps, err := readSteps(b["steps"], f.Steps)
 		if err != nil {
@@ -114,7 +130,7 @@ func applyFlow(b body, f *store.Flow, mode writeMode) error {
 // appId or id, appId winning as with Symfony, whose reads gave id the internal
 // id of the step; the position by stepOrder or order, an integer or a numeric
 // string. subjectCheck absent keeps the one the app had in the flow, none for a
-// new app (Q107). null is no step.
+// new app (Q107); skipCheck likewise, false for a new app. null is no step.
 func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error) {
 	if kind(raw) == "null" {
 		return nil, nil
@@ -123,9 +139,9 @@ func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error)
 	if err := json.Unmarshal(raw, &entries); err != nil || entries == nil {
 		return nil, typeError("steps", "array", raw)
 	}
-	had := map[string]string{}
+	had, skipped := map[string]string{}, map[string]bool{}
 	for _, s := range previous {
-		had[s.AppID] = s.SubjectCheck
+		had[s.AppID], skipped[s.AppID] = s.SubjectCheck, s.SkipCheck
 	}
 	var steps []store.Step
 	var v requestViolations
@@ -179,6 +195,14 @@ func readSteps(raw json.RawMessage, previous []store.Step) ([]store.Step, error)
 				return nil, typeError(path+".subjectCheck", "string", e["subjectCheck"])
 			}
 			step.SubjectCheck = check
+		}
+		step.SkipCheck = skipped[step.AppID]
+		if e.has("skipCheck") {
+			skip, err := e.boolean("skipCheck", false)
+			if err != nil {
+				return nil, typeError(path+".skipCheck", "boolean", e["skipCheck"])
+			}
+			step.SkipCheck = skip
 		}
 		steps = append(steps, step)
 	}

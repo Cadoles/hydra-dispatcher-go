@@ -437,7 +437,7 @@ func TestApps(t *testing.T) {
 		t.Fatalf("POST: %d %v %s", w.Code, w.Header(), w.Body)
 	}
 	// Every field present, null for what is absent (Q108).
-	want := `{"id":"sql","loginUrl":"http://sql/login","consentUrl":"http://sql/consent","logoutUrl":"","method":"pwd","authMode":"network","allowedSources":[],"clientCertFingerprint":null,"receiveClaims":null}`
+	want := `{"id":"sql","loginUrl":"http://sql/login","consentUrl":"http://sql/consent","logoutUrl":"","method":"pwd","authMode":"network","allowedSources":[],"clientCertFingerprint":null,"receiveClaims":null,"skipCheckUrl":null,"skipCheckKeySet":false,"skipCheckSignals":[]}`
 	if got := strings.TrimSpace(w.Body.String()); got != want {
 		t.Errorf("POST body:\n%s\nwant\n%s", got, want)
 	}
@@ -607,7 +607,7 @@ func TestFlows(t *testing.T) {
 	r.withApps("a", "b", "c")
 	const flow = `{"id": "f", "title": {"fr": "F", "en": ""}, "description": {"fr": "D"}, "steps": [{"appId": "a", "stepOrder": 0}]}`
 	w := r.do(r.all, http.MethodPost, "/admin/v1/flows", "", flow)
-	want := `{"id":"f","title":{"fr":"F"},"description":{"fr":"D"},"iconUrl":null,"enabled":true,"acr":null,"steps":[{"appId":"a","stepOrder":0,"subjectCheck":"none"}]}`
+	want := `{"id":"f","title":{"fr":"F"},"description":{"fr":"D"},"iconUrl":null,"enabled":true,"acr":null,"skipCheckAllowedAcr":[],"steps":[{"appId":"a","stepOrder":0,"subjectCheck":"none","skipCheck":false}]}`
 	if got := strings.TrimSpace(w.Body.String()); w.Code != http.StatusCreated || got != want || w.Header().Get("Location") != "/admin/v1/flows/f" {
 		t.Fatalf("POST: %d %s", w.Code, got)
 	}

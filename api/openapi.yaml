@@ -233,8 +233,9 @@ paths:
       summary: Replace an app
       description: |
         Replaces loginUrl, consentUrl, logoutUrl and method; authMode,
-        allowedSources, clientCertFingerprint and receiveClaims, absent, keep
-        their value (Q107). The id of the body, when given, is the path's.
+        allowedSources, clientCertFingerprint, receiveClaims and the fields of
+        the pre-check, absent, keep their value (Q107). The id of the body,
+        when given, is the path's.
       security: [{ bearer: [admin:apps] }]
       requestBody: { $ref: "#/components/requestBodies/App" }
       responses:
@@ -1074,7 +1075,8 @@ components:
 
     App:
       type: object
-      required: [id, loginUrl, consentUrl, logoutUrl, method, authMode, allowedSources, clientCertFingerprint, receiveClaims]
+      required: [id, loginUrl, consentUrl, logoutUrl, method, authMode, allowedSources, clientCertFingerprint, receiveClaims,
+        skipCheckUrl, skipCheckKeySet, skipCheckSignals]
       properties:
         id: { type: string }
         loginUrl: { type: string, format: uri }
@@ -1088,6 +1090,17 @@ components:
           type: [array, "null"]
           items: { type: string }
           description: The claims of the steps before the app receives; null every claim, [] none.
+        skipCheckUrl:
+          type: [string, "null"]
+          format: uri
+          description: Where the dispatcher asks the app, server to server, whether a step of it may be skipped on this device (the pre-check of a step); null without it.
+        skipCheckKeySet:
+          type: boolean
+          description: Whether the app holds the key that signs those requests, which a read never shows.
+        skipCheckSignals:
+          type: array
+          items: { type: string, enum: [ip, full_ip, user_agent, client_hints, accept_language, device_age] }
+          description: The signals of the browser the app receives with them; ip is the address truncated, full_ip the whole of it.
     AppWrite:
       type: object
       additionalProperties: false
@@ -1101,10 +1114,17 @@ components:
         allowedSources: { type: [array, "null"], items: { type: string }, description: 'Networks or addresses.' }
         clientCertFingerprint: { type: [string, "null"], description: 'SHA-256, hex, with or without colons.' }
         receiveClaims: { type: [array, "null"], items: { type: string } }
+        skipCheckUrl: { type: [string, "null"], description: '"" or null leaves the app out of the pre-check, with its key and signals unless given.' }
+        skipCheckKey:
+          type: [string, "null"]
+          writeOnly: true
+          description: The key of the pre-check, 32 bytes in 64 hex characters or base64; absent keeps the key held, "" or null removes it.
+        skipCheckKeySet: { type: boolean, description: 'Read only: ignored.' }
+        skipCheckSignals: { type: [array, "null"], items: { type: string } }
 
     Flow:
       type: object
-      required: [id, title, description, iconUrl, enabled, acr, steps]
+      required: [id, title, description, iconUrl, enabled, acr, skipCheckAllowedAcr, steps]
       properties:
         id: { type: string }
         title: { $ref: "#/components/schemas/Texts" }
@@ -1115,14 +1135,19 @@ components:
             - { type: "null" }
         enabled: { type: boolean }
         acr: { type: [string, "null"] }
+        skipCheckAllowedAcr:
+          type: array
+          items: { type: string }
+          description: The acr_values under which a step may be skipped by its pre-check; [] for none.
         steps: { type: array, items: { $ref: "#/components/schemas/Step" } }
     Step:
       type: object
-      required: [appId, stepOrder, subjectCheck]
+      required: [appId, stepOrder, subjectCheck, skipCheck]
       properties:
         appId: { type: string }
         stepOrder: { type: integer }
         subjectCheck: { type: string, description: "none, equal or claim:<name>." }
+        skipCheck: { type: boolean, description: "Asks the app of the step whether it may be skipped; never on the first step." }
     FlowWrite:
       type: object
       additionalProperties: false
@@ -1133,19 +1158,21 @@ components:
         iconUrl: { $ref: "#/components/schemas/TextsWrite" }
         enabled: { type: [boolean, "null"] }
         acr: { type: [string, "null"] }
+        skipCheckAllowedAcr: { type: [array, "null"], items: { type: string } }
         steps:
           type: [array, "null"]
           items: { $ref: "#/components/schemas/StepWrite" }
     StepWrite:
       type: object
       additionalProperties: false
-      description: The app by appId or id, appId winning; the position by stepOrder or order. subjectCheck absent keeps the app's.
+      description: The app by appId or id, appId winning; the position by stepOrder or order. subjectCheck and skipCheck absent keep the app's.
       properties:
         appId: { type: string }
         id: { description: 'The app, when appId is absent; the internal id of a step of Symfony otherwise, ignored.' }
         stepOrder: { type: [integer, string] }
         order: { type: [integer, string] }
         subjectCheck: { type: [string, "null"] }
+        skipCheck: { type: [boolean, "null"] }
     Texts:
       type: object
       description: Locale to text.
