@@ -122,11 +122,14 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
-      # Signed by the key pair alone: .gitea/cosign-signing-config.json names no
-      # transparency log nor timestamp authority, so nothing goes to the public
-      # services of Sigstore, and a verification ignores the log
-      # (--insecure-ignore-tlog), the key being what proves. Cosign 3 refuses
-      # --tlog-upload=false beside its default signing config. The digest is
+      # Signed by the key pair alone, in the format of cosign 2: the signature and
+      # the attestation under the tags sha256-<digest>.sig and .att of the
+      # repository. The bundle of cosign 3, its default, goes by the referrers
+      # API of OCI 1.1, which Harbor of reg.cadoles.com refuses
+      # ("UNAUTHORIZED: un-recognized request"), without the fallback a 404 would
+      # give. Without a signing config nor a transparency log, nothing goes to
+      # the public services of Sigstore, and a verification ignores the log
+      # (--insecure-ignore-tlog), the key being what proves. The digest is
       # signed, never a tag.
       - name: Sign the image, attest its SBOM
         env:
@@ -134,11 +137,10 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           REF: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
         run: |
-          cosign sign --yes --key env://COSIGN_PRIVATE_KEY \
-            --signing-config .gitea/cosign-signing-config.json "$REF"
-          cosign attest --yes --key env://COSIGN_PRIVATE_KEY \
-            --signing-config .gitea/cosign-signing-config.json \
-            --type cyclonedx --predicate "$SBOM" "$REF"
+          set -- --yes --key env://COSIGN_PRIVATE_KEY \
+            --new-bundle-format=false --use-signing-config=false --tlog-upload=false
+          cosign sign "$@" "$REF"
+          cosign attest "$@" --type cyclonedx --predicate "$SBOM" "$REF"
 
       - name: Verify the signature and the attestation
         env:

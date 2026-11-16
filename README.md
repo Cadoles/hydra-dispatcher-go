@@ -313,9 +313,11 @@ A tag `v*` runs `.gitea/workflows/release.yaml`: the image is pushed by its dige
 signed with cosign by the key pair of the dispatcher and verified; only then does the
 digest get its tags, the version, `major.minor` and `latest`, so that a failed signature
 leaves no tag on an unsigned image. The release of the forge gets the changelog and the
-SBOM. Nothing goes to the public services of Sigstore
-(`.gitea/cosign-signing-config.json` names none): a deployment checks the digest with
-the public key alone, `cosign.pub` at the root of this repository:
+SBOM. The signature and the attestation are in the format of cosign 2, under the tags
+`sha256-<digest>.sig` and `.att`: the Harbor of reg.cadoles.com refuses the referrers
+API of OCI 1.1 that the bundle of cosign 3 needs. Nothing goes to the public services
+of Sigstore, no transparency log: a deployment checks the digest with the public key
+alone, `cosign.pub` at the root of this repository:
 
 ```sh
 cosign verify --key cosign.pub --insecure-ignore-tlog=true reg.cadoles.com/cadoles/hydra-dispatcher-go@sha256:<digest>
