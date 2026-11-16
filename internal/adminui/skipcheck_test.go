@@ -1,6 +1,7 @@
 package adminui
 
 import (
+	"html"
 	"net/http"
 	"slices"
 	"strings"
@@ -33,16 +34,19 @@ func TestAppSkipCheckScreen(t *testing.T) {
 	if _, err := domain.ParseKey(key); err != nil || key == "" || !slices.Equal(a.SkipCheckSignals, []string{"device_age", "ip"}) {
 		t.Fatalf("app: %+v, key %v", a, err)
 	}
+	// The pages compared as the browser reads them: html/template writes the
+	// + of a key in base64 as &#43;, which a check of the raw page would miss.
+	text := func(s string) string { return html.UnescapeString(s) }
 	shown := b.do(http.MethodGet, "/admin/secret", nil)
-	if shown.Code != http.StatusOK || !strings.Contains(shown.Body.String(), `value="`+key+`"`) || !strings.Contains(shown.Body.String(), "The key of spare") ||
+	if shown.Code != http.StatusOK || !strings.Contains(text(shown.Body.String()), `value="`+key+`"`) || !strings.Contains(shown.Body.String(), "The key of spare") ||
 		!strings.Contains(shown.Body.String(), "kept encrypted") {
 		t.Fatalf("key shown: %d\n%s", shown.Code, shown.Body)
 	}
-	if again := b.do(http.MethodGet, "/admin/secret", nil); again.Code != http.StatusGone || strings.Contains(again.Body.String(), key) {
+	if again := b.do(http.MethodGet, "/admin/secret", nil); again.Code != http.StatusGone || strings.Contains(text(again.Body.String()), key) {
 		t.Errorf("key shown twice: %d", again.Code)
 	}
 	page := b.do(http.MethodGet, "/admin/apps/spare", nil).Body.String()
-	if strings.Contains(page, key) || !strings.Contains(page, "A key is held: empty keeps it.") {
+	if strings.Contains(text(page), key) || !strings.Contains(page, "A key is held: empty keeps it.") {
 		t.Fatalf("app page:\n%s", page)
 	}
 
@@ -64,7 +68,7 @@ func TestAppSkipCheckScreen(t *testing.T) {
 			form.Set(k, v)
 		}
 		w := b.do(http.MethodPost, "/admin/apps/spare", form)
-		if w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), strings.Repeat("ab", 32)) || strings.Contains(w.Body.String(), key) {
+		if w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), strings.Repeat("ab", 32)) || strings.Contains(text(w.Body.String()), key) {
 			t.Errorf("%s: %d\n%s", name, w.Code, w.Body)
 		}
 	}
