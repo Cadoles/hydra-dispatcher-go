@@ -647,3 +647,19 @@ func matchesSymfony(t *testing.T, symfony map[string]any, served any) {
 		t.Errorf("served differs from Symfony: %v", d)
 	}
 }
+
+// withLocale puts the language first, once, whatever its case, and leaves
+// the context it is given as it was: it is the flow's snapshot (Q138, R49).
+func TestWithLocale(t *testing.T) {
+	o := &ory.OAuth2ConsentRequestOpenIDConnectContext{UiLocales: []string{"fr-FR", "EN"}, Display: ory.PtrString("page")}
+	got := withLocale(o, "en")
+	if !slices.Equal(got.UiLocales, []string{"en", "fr-FR"}) || got.GetDisplay() != "page" {
+		t.Errorf("served: %+v", got)
+	}
+	if !slices.Equal(o.UiLocales, []string{"fr-FR", "EN"}) || got == o {
+		t.Errorf("the context given changed: %q", o.UiLocales)
+	}
+	if withLocale(o, "") != o {
+		t.Error("no language: the context as it is")
+	}
+}

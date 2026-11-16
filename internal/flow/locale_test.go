@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	ory "github.com/ory/hydra-client-go/v26"
@@ -50,8 +51,10 @@ func TestChosenLocale(t *testing.T) {
 	if got := uiLocalesServed(t, w.handle(AppCall{Op: AppGetLogin, Challenge: c, Caller: sql})); !slices.Equal(got, []string{"en", "fr-FR"}) {
 		t.Errorf("login request: %q", got)
 	}
-	if got := w.hydra.login.OidcContext.UiLocales; !slices.Equal(got, []string{"fr-FR", "EN"}) {
-		t.Errorf("Hydra's request changed: %q", got)
+	// The flow keeps Hydra's request as Hydra gave it: the language goes to
+	// the apps, never into the snapshot (R49).
+	if got := string(w.stored().Hydra.OIDCContext); !strings.Contains(got, `"ui_locales":["fr-FR","EN"]`) {
+		t.Errorf("Hydra's request changed: %s", got)
 	}
 	if r := w.handle(AppCall{Op: AppAcceptLogin, Challenge: c, Caller: sql, Body: json.RawMessage(`{"subject":"alice"}`)}); r.Response.Status != http.StatusOK {
 		t.Fatalf("accept: %d", r.Response.Status)
@@ -122,5 +125,39 @@ func TestRememberedDevice(t *testing.T) {
 	}
 	if _, ok := rememberedDevice("2fa", Object{"email": json.RawMessage(`"a@b"`)}); ok {
 		t.Error("without the member")
+	}
+}
+
+// Each event of the pages carries the language (R49): an entry writes it on
+// the flow it creates, a way back that writes (BCL-8) on the flow it
+// advances; back at the choice (ENT-3), the flow keeps it; a flow without
+// one writes no lc.
+func TestChosenLocaleEvents(t *testing.T) {
+	w := newWorld(t)
+	w.handle(Entry{LoginChallenge: hydraL, Locale: "en"})
+	if f := w.stored(); f.Locale != "en" {
+		t.Fatalf("entry: %q", f.Locale)
+	}
+	w.handle(Choose{FlowID: "hydra-sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+	gen := w.stored().Gen
+	w.handle(Entry{LoginChallenge: hydraL, Cookie: w.cookie})
+	if f := w.stored(); f.Gen == gen || f.Current != 0 || f.Locale != "en" {
+		t.Errorf("back at the choice: gen %d to %d, current %d, %q", gen, f.Gen, f.Current, f.Locale)
+	}
+
+	w = newWorld(t)
+	w.handle(Entry{LoginChallenge: hydraL})
+	step := w.handle(Choose{FlowID: "hydra-sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true})
+	w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+	if r := w.handle(Loop{Ref: lref, Cookie: w.cookie, Locale: "de"}); r.Response.Kind != Redirect {
+		t.Fatalf("loop: %+v", r.Response)
+	}
+	if f := w.stored(); f.Current != 2 || f.Locale != "de" {
+		t.Errorf("loop: current %d, %q", f.Current, f.Locale)
+	}
+
+	data, err := json.Marshal(Flow{FlowID: "f"})
+	if err != nil || strings.Contains(string(data), `"lc"`) {
+		t.Errorf("a flow without a language: %s %v", data, err)
 	}
 }

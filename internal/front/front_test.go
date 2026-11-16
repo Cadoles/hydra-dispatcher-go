@@ -1719,6 +1719,41 @@ func TestChosenLocaleToTheApps(t *testing.T) {
 	if got := served(newWorld(t), ""); slices.Contains(got, "en") {
 		t.Errorf("no choice: %q", got)
 	}
+
+	// R49: _locale before the cookie, on each page that writes the flow.
+	firstServed := func(w *world, login *url.URL) string {
+		t.Helper()
+		r := w.o.Handle(context.Background(), flow.AppCall{Op: flow.AppGetLogin, Challenge: login.Query().Get("login_challenge"), Caller: func(store.App) bool { return true }}).Response
+		raw, _ := json.Marshal(r.Body)
+		var body struct {
+			OidcContext struct {
+				UILocales []string `json:"ui_locales"`
+			} `json:"oidc_context"`
+		}
+		if r.Status != http.StatusOK || json.Unmarshal(raw, &body) != nil || len(body.OidcContext.UILocales) == 0 {
+			t.Fatalf("login request: %+v", r)
+		}
+		return body.OidcContext.UILocales[0]
+	}
+	w := newWorld(t)
+	w.cookies["dispatcher_locale"] = "fr"
+	w.do(http.MethodGet, "/?login_challenge="+hydraL, nil)
+	login := location(t, w.do(http.MethodPost, "/?_locale=en", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, sameOrigin...), http.StatusSeeOther)
+	if got := firstServed(w, login); got != "en" {
+		t.Errorf("POST / with _locale over the cookie: %q", got)
+	}
+	w = newWorld(t)
+	w.do(http.MethodGet, "/?login_challenge="+hydraL+"&_locale=en", nil)
+	login = location(t, w.do(http.MethodPost, "/", url.Values{"flow": {"hydra-sql"}, "login_challenge": {hydraL}, "csrf_token": {w.csrf()}}, sameOrigin...), http.StatusSeeOther)
+	if got := firstServed(w, login); got != "en" {
+		t.Errorf("GET / with _locale: %q", got)
+	}
+	w = newWorld(t)
+	w.app(w.choose("hydra-sql-2fa"), "alice", `{"email":"alice@example.org"}`)
+	next := location(t, w.do(http.MethodGet, "/oauth2/auth?ref="+flow.Ref(hydraL)+"&_locale=en", nil), http.StatusSeeOther)
+	if got := firstServed(w, next); got != "en" {
+		t.Errorf("the way back with _locale: %q", got)
+	}
 }
 
 // The device cookie (phase 4): drawn and set at GET / only while a step of
