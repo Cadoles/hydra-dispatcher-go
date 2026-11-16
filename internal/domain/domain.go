@@ -202,8 +202,12 @@ func (a App) checkSkipCheck(fail Fail) {
 		}
 		return
 	}
-	if _, err := AbsoluteURL(a.SkipCheckURL); err != nil {
+	if u, err := AbsoluteURL(a.SkipCheckURL); err != nil {
 		fail("skip_check_url", "%v", err)
+	} else if u.User != nil {
+		// It would be read in the dump, the API and the page; the key
+		// authenticates the dispatcher (R48).
+		fail("skip_check_url", "carries no user nor password: the key authenticates the dispatcher")
 	}
 	if a.SkipCheckKey == "" {
 		fail("skip_check_key", "is required with a skip_check_url")

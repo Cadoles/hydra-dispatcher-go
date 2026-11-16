@@ -84,6 +84,7 @@ func TestApp(t *testing.T) {
 		"pre-check, short key": {func(a *App) { skipCheck()(a); a.SkipCheckKey = strings.Repeat("ab", 16) },
 			[]string{"skip_check_key: key must be 32 bytes"}},
 		"pre-check, relative URL": {func(a *App) { skipCheck()(a); a.SkipCheckURL = "/check" }, []string{"skip_check_url: is not an absolute"}},
+		"pre-check, a user":       {func(a *App) { skipCheck()(a); a.SkipCheckURL = "https://u:secret-pw@a/check" }, []string{"skip_check_url: carries no user nor password"}},
 		"key without URL":         {func(a *App) { a.SkipCheckKey = key32 }, []string{"skip_check_key: only applies with a skip_check_url"}},
 		"signals without URL": {func(a *App) { a.SkipCheckSignals = []string{"ip"} },
 			[]string{"skip_check_signals: only apply with a skip_check_url"}},

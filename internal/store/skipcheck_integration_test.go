@@ -243,3 +243,33 @@ dispatcher:
 		t.Errorf("flow: %+v", f)
 	}
 }
+
+// R48, B1: a seed that names the URL without the key, on a database that
+// holds none, is refused, by the dry run too, and writes nothing; an empty
+// ${K} does the same.
+func TestBootstrapSkipCheckWithoutKey(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	p.SetSecrets(keyring(t, encKeyA))
+	for _, key := range []string{"", "skip_check_key: '',"} {
+		seed := loadSeed(t, `
+dispatcher:
+  apps:
+    - { id: pwd, login_url: https://pwd/login, consent_url: https://pwd/consent, method: pwd }
+    - { id: otp, login_url: https://otp/login, consent_url: https://otp/consent, method: otp,
+        skip_check_url: https://otp/skip-check, `+key+` }
+  flows:
+    - { id: f, title: F, description: D, steps: [{ id: pwd, order: 0 }, { id: otp, order: 1, skip_check: true }] }
+`)
+		for _, write := range []bool{false, true} {
+			_, err := p.Bootstrap(ctx, seed, Force, write)
+			var refused *RefusedError
+			if !errors.As(err, &refused) || !strings.Contains(err.Error(), "app otp: skip_check_key: is required") {
+				t.Errorf("%q, write %v: %v", key, write, err)
+			}
+		}
+		if snap, err := p.Snapshot(ctx); err != nil || len(snap.Apps) != 0 || len(snap.Flows) != 0 {
+			t.Errorf("%q: written: %+v %v", key, snap, err)
+		}
+	}
+}

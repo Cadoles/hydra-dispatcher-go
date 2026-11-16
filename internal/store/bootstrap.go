@@ -368,6 +368,11 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		if a.SkipCheckURL != "" && a.SkipCheckKey == "" {
 			a.SkipCheckKey = old.SkipCheckKey
 		}
+		// The seed's validation lent such an app a key, the database's: one
+		// that holds none is refused, as /admin/v1 refuses it (R48, B1).
+		if a.SkipCheckURL != "" && a.SkipCheckKey == "" {
+			return &RefusedError{Err: fmt.Errorf("app %s: skip_check_key: is required with a skip_check_url, and the database holds none", a.ID)}
+		}
 		if !b.decide("app", a.ID, i >= 0, authors[a.ID], []field{
 			{name: "login_url", old: old.LoginURL, new: a.LoginURL},
 			{name: "consent_url", old: old.ConsentURL, new: a.ConsentURL},
