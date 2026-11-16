@@ -363,6 +363,11 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		if sa.ReceiveClaims == nil && !sa.NullReceiveClaims {
 			a.ReceiveClaims = old.ReceiveClaims
 		}
+		// Nor does the pre-check of an app the seed is silent on, a key lost
+		// being lost for good: ~ or "" removes it (R48, Q139).
+		if !sa.SkipCheckSet && a.SkipCheckURL == "" {
+			a.SkipCheckURL, a.SkipCheckKey, a.SkipCheckSignals = old.SkipCheckURL, old.SkipCheckKey, old.SkipCheckSignals
+		}
 		// Neither does the key of the pre-check, which config dump leaves out:
 		// a seed that names the URL without it keeps the key held.
 		if a.SkipCheckURL != "" && a.SkipCheckKey == "" {

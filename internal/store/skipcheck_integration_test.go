@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
 	"slices"
 	"strings"
 	"testing"
@@ -270,6 +271,51 @@ dispatcher:
 		}
 		if snap, err := p.Snapshot(ctx); err != nil || len(snap.Apps) != 0 || len(snap.Flows) != 0 {
 			t.Errorf("%q: written: %+v %v", key, snap, err)
+		}
+	}
+}
+
+// R48 hors liste, Q139: under -force, a seed silent on skip_check_url keeps
+// the URL, the key and the signals the database holds, the steps following
+// the seed; ~ or "" removes them.
+func TestBootstrapSkipCheckSilentSeed(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	p.SetSecrets(keyring(t, encKeyA))
+	seed := func(otp string) config.Seed {
+		return loadSeed(t, `
+dispatcher:
+  apps:
+    - { id: pwd, login_url: https://pwd/login, consent_url: https://pwd/consent, method: pwd }
+    - { id: otp, login_url: https://otp/login, consent_url: https://otp/consent, method: otp`+otp+` }
+  flows:
+    - { id: f, title: F, description: D, steps: [{ id: pwd, order: 0 }, { id: otp, order: 1 }] }
+`)
+	}
+	if _, err := p.Bootstrap(ctx, seed(", skip_check_url: https://otp/skip-check, skip_check_key: "+keyA+", skip_check_signals: [ip]"), Force, true); err != nil {
+		t.Fatal(err)
+	}
+	raw := rawAppKey(t, p, "otp")
+	changes, err := p.Bootstrap(ctx, seed(""), Force, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := p.Snapshot(ctx)
+	a, _ := snap.App("otp")
+	if !slices.Contains(actions(changes), "same app otp") || a.SkipCheckURL != "https://otp/skip-check" || !slices.Equal(a.SkipCheckSignals, []string{"ip"}) ||
+		rawAppKey(t, p, "otp") != raw {
+		t.Errorf("a silent seed: %q, %+v", actions(changes), a)
+	}
+	for _, removal := range []string{", skip_check_url: ~", `, skip_check_url: ""`} {
+		if _, err := p.Bootstrap(ctx, seed(", skip_check_url: https://otp/skip-check, skip_check_key: "+keyA), Force, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Bootstrap(ctx, seed(removal), Force, true); err != nil {
+			t.Fatalf("%q: %v", removal, err)
+		}
+		snap, _ := p.Snapshot(ctx)
+		if a, _ := snap.App("otp"); a.SkipCheckURL != "" || a.SkipCheckKey != "" || len(a.SkipCheckSignals) != 0 {
+			t.Errorf("%q: %+v", removal, a)
 		}
 	}
 }

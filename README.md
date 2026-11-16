@@ -51,6 +51,12 @@ An app's `receive_claims` names the claims of the previous steps it receives,
 an existing one as it is; `~` gives every claim, to an app that has a list
 too, with the warning `bootstrap.claims_widened`.
 
+The pre-check of an app (phase 4: `skip_check_url`, `skip_check_key`,
+`skip_check_signals`) follows the same rule: without `skip_check_url`, `-force`
+leaves what the database holds, a key set by the screen or the API included,
+which nothing could give back; `~` or `""` removes the three. A seed that names
+the URL without the key keeps the key held, and is refused when there is none.
+
 `migrate down` rolls back one migration, with the version that applied it,
 before going back to the previous image; in a terminal it names the migration
 and asks, unless `-yes`.

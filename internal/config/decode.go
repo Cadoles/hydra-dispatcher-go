@@ -81,6 +81,7 @@ func decodeFile(data []byte, c *Config, lookupEnv func(string) (string, bool)) (
 	// as in Symfony.
 	nullEntries(&doc, "oauth2_clients", "scopes", len(c.Seed.OAuth2Clients), func(i int) { c.Seed.OAuth2Clients[i].Scopes = &List{} })
 	nullEntries(&doc, "apps", "receive_claims", len(c.Seed.Apps), func(i int) { c.Seed.Apps[i].NullReceiveClaims = true })
+	eachEntry(&doc, "apps", "skip_check_url", len(c.Seed.Apps), func(i int, _ *yaml.Node) { c.Seed.Apps[i].SkipCheckSet = true })
 	for _, k := range envKeys(c) {
 		n := &doc
 		for part := range strings.SplitSeq(k.path, ".") {
@@ -328,6 +329,17 @@ func nullSettings(doc *yaml.Node) []string {
 // a list of the seed whose key is null, which the decoder does not tell from
 // an absent key.
 func nullEntries(doc *yaml.Node, list, key string, count int, set func(i int)) {
+	eachEntry(doc, list, key, count, func(i int, v *yaml.Node) {
+		if v.ShortTag() == nullTag {
+			set(i)
+		}
+	})
+}
+
+// eachEntry calls set with the index of each entry of dispatcher.<list> that
+// names key, merged keys included, and its value: the index of the decoded
+// list, which drops a null entry.
+func eachEntry(doc *yaml.Node, list, key string, count int, set func(i int, v *yaml.Node)) {
 	seq := mappingValue(mappingValue(doc, "dispatcher"), list)
 	if seq == nil || seq.Kind != yaml.SequenceNode {
 		return
@@ -337,8 +349,8 @@ func nullEntries(doc *yaml.Node, list, key string, count int, set func(i int)) {
 		if deref(item).ShortTag() == nullTag || i == count {
 			continue // the decoder drops a null entry
 		}
-		if v := mappingValue(item, key); v != nil && v.ShortTag() == nullTag {
-			set(i)
+		if v := mappingValue(item, key); v != nil {
+			set(i, v)
 		}
 		i++
 	}

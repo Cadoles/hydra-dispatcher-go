@@ -1440,6 +1440,29 @@ func TestReceiveClaims(t *testing.T) {
 	}
 }
 
+// The seed names skip_check_url or not (R48, Q139): any value, ~ and empty
+// included, through a merge too; absent, bootstrap keeps the pre-check held.
+func TestSeedSkipCheckSet(t *testing.T) {
+	const app = "dispatcher:\n  apps:\n    - ~\n    - { id: a, login_url: http://a, consent_url: http://a, method: m%s }\n"
+	for extra, set := range map[string]bool{
+		"":                            false,
+		", logout_url: http://a":      false,
+		", skip_check_url: ~":         true,
+		`, skip_check_url: ""`:        true,
+		`, skip_check_url: "${U}"`:    true,
+		", <<: { skip_check_url: ~ }": true,
+	} {
+		c, _, err := load(t, fmt.Sprintf(app, extra), map[string]string{"U": ""})
+		if err != nil {
+			t.Errorf("%q: %v", extra, err)
+			continue
+		}
+		if got := c.Seed.Apps[0].SkipCheckSet; got != set {
+			t.Errorf("%q: SkipCheckSet = %v, want %v", extra, got, set)
+		}
+	}
+}
+
 // The options of an app, which Symfony never read, are dropped unread, in every
 // form its variableNode takes: their values may hold what the expansion
 // refuses.

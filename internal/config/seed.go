@@ -125,6 +125,11 @@ type SeedApp struct {
 	SkipCheckKeyFile string `yaml:"skip_check_key_file"`
 	// SkipCheckSignals are the signals of the browser the app receives.
 	SkipCheckSignals List `yaml:"skip_check_signals"`
+	// SkipCheckSet records that the seed names skip_check_url, ~ or empty
+	// included: without the key, bootstrap leaves the pre-check of an
+	// existing app as the database holds it, URL, key and signals, as
+	// receive_claims; a key lost is lost for good (R48, Q139).
+	SkipCheckSet bool `yaml:"-"`
 }
 
 // appKeys are the app fields of the Go model: in options, where the design

@@ -177,7 +177,7 @@ func runMigrations(ctx context.Context, db configStore, logger *slog.Logger) err
 func bootstrap(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 	configPath := fs.String("config", os.Getenv(configEnv), configHelp)
-	force := fs.Bool("force", false, "rewrite too what the database holds of the seed, and reset the settings and receive_claims it sets to ~")
+	force := fs.Bool("force", false, "rewrite too what the database holds of the seed, and reset the settings and receive_claims it sets to ~ (receive_claims and skip_check_url absent keep what is held)")
 	dryRun := fs.Bool("dry-run", false, "print the changes and write nothing")
 	yes := fs.Bool("yes", false, "with -force in a terminal, write without asking")
 	createAdmin := fs.String("create-admin", "", "after the seed, create the admin account of this name, unless it exists; its password from the terminal, -password-stdin or -password-file")
