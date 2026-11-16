@@ -124,7 +124,21 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 	if app.Method != "" {
 		st.AMR = []string{app.Method} // under aggregate_amr_from_login_request too
 	}
-	return true, nil, []Report{rep, {Event: EventStepSkipped, App: step.App, Result: SkipSkipped}}
+	return true, nil, []Report{rep}
+}
+
+// tookEffect gives out the audit of the steps skipped, apps, when the skip
+// takes effect: the flow written, alive, a step to run or accepted on Hydra.
+// An accept that fails or waits (a webhook down, Hydra unavailable, a flow
+// ended) skips nothing: the reload calls again, and audits once (R50).
+func tookEffect(out Outcome, apps []string) Outcome {
+	if out.Write == nil || out.Write.Done {
+		return out
+	}
+	for _, app := range apps {
+		out = out.report(Report{Event: EventStepSkipped, App: app, Result: SkipSkipped})
+	}
+	return out
 }
 
 // fresh names the freshness the client asks that a skipped step would not

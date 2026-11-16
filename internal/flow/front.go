@@ -109,9 +109,10 @@ func (r *run) entry(ev Entry) Outcome {
 	case !sameCSRF(ev.Cookie, f.CSRF) && byRef:
 		return s.fail(E1008) // ENT-18: the apps know the ref
 	case !sameCSRF(ev.Cookie, f.CSRF):
-		// ENT-5: replaced under the same ref, the browser's cookie taken.
+		// ENT-5: replaced under the same ref, the browser's cookie taken;
+		// its language, not the first browser's (R49).
 		g := f.restart()
-		g.CSRF = csrfValue(ev.Cookie, r.Env.Draw)
+		g.CSRF, g.Locale = csrfValue(ev.Cookie, r.Env.Draw), ""
 		out := r.choice(ref, g)
 		out.Response.SetCSRF = g.CSRF
 		return out
@@ -311,9 +312,10 @@ func (r *run) choose(ev Choose) Outcome {
 		return s.fail(E1008) // POS-6
 	}
 	if !csrf {
-		// POS-3 (Q7): replaced as on GET /, the page shown again, no message.
+		// POS-3 (Q7): replaced as on GET /, the page shown again, no message;
+		// its language, not the first browser's (R49).
 		g := f.restart()
-		g.CSRF = csrfValue(ev.Cookie, r.Env.Draw)
+		g.CSRF, g.Locale = csrfValue(ev.Cookie, r.Env.Draw), ""
 		out := r.choicePage(g, r.offer(g), false).writing(g)
 		out.Response.SetCSRF = g.CSRF
 		return out
@@ -413,17 +415,21 @@ func (r *run) advance(ref string, f *Flow) Outcome {
 	// first one left, or the final accept once none is.
 	g := f.clone()
 	var reports []Report
+	var skippedApps []string
 	for {
 		g.Current++
 		skipped, call, reps := r.preCheck(g)
 		reports = append(reports, reps...)
+		if skipped {
+			skippedApps = append(skippedApps, g.Steps[g.Current-1].App)
+		}
 		switch {
 		case call != nil:
 			return *call
 		case !skipped:
-			return r.toStep(ref, g, g.Current, KindLogin).writing(g).report(reports...)
+			return tookEffect(r.toStep(ref, g, g.Current, KindLogin).writing(g).report(reports...), skippedApps)
 		case g.Current == len(g.Steps):
-			return r.finalAccept(ref, g).report(reports...)
+			return tookEffect(r.finalAccept(ref, g).report(reports...), skippedApps)
 		}
 	}
 }

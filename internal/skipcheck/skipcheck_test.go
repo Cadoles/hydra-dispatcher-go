@@ -55,7 +55,7 @@ func reply(w http.ResponseWriter, key []byte, at time.Time, body string) {
 	ts := strconv.FormatInt(at.Unix(), 10)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set(headerTimestamp, ts)
-	w.Header().Set(headerSignature, sign(key, ts, []byte(body)))
+	w.Header().Set(headerSignature, sign(key, responseLabel+ts, []byte(body)))
 	_, _ = io.WriteString(w, body)
 }
 
@@ -164,6 +164,14 @@ func TestCheckFails(t *testing.T) {
 		"stale": {func(w http.ResponseWriter, g request) {
 			reply(w, testKey, time.Now().Add(-6*time.Minute), `{"nonce":"`+g.Nonce+`","skip":true}`)
 		}, flow.SkipFailed, "timestamp"},
+		"signed as a request": {func(w http.ResponseWriter, g request) {
+			ts := strconv.FormatInt(time.Now().Unix(), 10)
+			body := `{"nonce":"` + g.Nonce + `","skip":true}`
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set(headerTimestamp, ts)
+			w.Header().Set(headerSignature, sign(testKey, ts, []byte(body)))
+			_, _ = io.WriteString(w, body)
+		}, flow.SkipFailed, "signature"},
 		"other nonce": {func(w http.ResponseWriter, g request) {
 			ok(w, g, `{"nonce":"`+strings.Repeat("0", 32)+`","skip":true}`)
 		}, flow.SkipFailed, "nonce"},
@@ -199,9 +207,13 @@ func TestCheckFails(t *testing.T) {
 		srv.Close()
 	}
 
-	// Nothing to call: the app gone, its key unreadable, nobody listening.
+	// Nothing to call: the app gone or without its URL, its key unreadable,
+	// nobody listening.
 	if got := newClient("http://127.0.0.1:1/skip").Check(context.Background(), flow.SkipCheckCall{App: "gone"}); got.Cause != "no_url" {
 		t.Errorf("gone: %+v", got)
+	}
+	if got := newClient("").Check(context.Background(), testCall); got.Result != flow.SkipFailed || got.Cause != "no_url" {
+		t.Errorf("no URL: %+v", got)
 	}
 	c := newClient("http://127.0.0.1:1/skip")
 	c.config.Snapshot().Apps[0].SkipCheckKey = "short"
@@ -210,5 +222,21 @@ func TestCheckFails(t *testing.T) {
 	}
 	if got := newClient("http://127.0.0.1:1/skip").Check(context.Background(), testCall); got.Result != flow.SkipFailed || got.Cause != "unreachable" {
 		t.Errorf("unreachable: %+v", got)
+	}
+}
+
+// A request sent back as it came, body and headers, is no answer (R50): its
+// signature is a request's.
+func TestCheckEcho(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerTimestamp, r.Header.Get(headerTimestamp))
+		w.Header().Set(headerSignature, r.Header.Get(headerSignature))
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+	if got := newClient(srv.URL).Check(context.Background(), testCall); got.Result != flow.SkipFailed || got.Cause != "signature" {
+		t.Errorf("echo: %+v", got)
 	}
 }

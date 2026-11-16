@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -356,5 +357,65 @@ func TestSkipCheckRemembered(t *testing.T) {
 	if err := json.Unmarshal(ctx["x_dispatcher_skipped_steps"], &skipped); err != nil || !slices.Equal(skipped, []string{"2fa"}) ||
 		!slices.Equal(w.hydra.accepted.Amr, []string{"pwd", "otp"}) {
 		t.Errorf("the skip's accept: %v, amr %q", ctx, w.hydra.accepted.Amr)
+	}
+}
+
+// recordingHooks keep the context the login webhook receives; fail makes
+// it fail.
+type recordingHooks struct {
+	fail     bool
+	contexts []Object
+}
+
+func (h *recordingHooks) Login(_ context.Context, c Call) LoginHookAnswer {
+	ctx, _ := c.AcceptLogin.Context.(Object)
+	h.contexts = append(h.contexts, ctx)
+	if h.fail {
+		return LoginHookAnswer{Err: errors.New("down")}
+	}
+	return LoginHookAnswer{}
+}
+
+func (h *recordingHooks) Consent(context.Context, Call) ConsentHookAnswer { return ConsentHookAnswer{} }
+
+// The login webhook receives x_dispatcher_skipped_steps (R50). The skip is
+// audited when it takes effect: not on a final accept that fails (FIN-4, the
+// webhook down), once on the reload that goes through, which calls again
+// (R50).
+func TestSkipCheckWebhookAndAudit(t *testing.T) {
+	w, c := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+	snap := w.o.Config.Snapshot()
+	settings := store.DefaultSettings()
+	settings.LoginAcceptWebhookURL = "http://hooks.test/login"
+	w.o.Config = snapshots{store.NewSnapshot(snap.Apps, snap.Flows, settings)}
+	hooks := &recordingHooks{fail: true}
+	w.o.Webhooks = hooks
+	r := throughSQL(t, w, "sql-2fa", testDevice)
+	if r.Response.Code != E1006 || len(reportsOf(r, EventStepSkipped)) != 0 || w.stored().Steps[1].Skipped {
+		t.Fatalf("FIN-4: %+v, reports %+v", r.Response, r.Reports)
+	}
+	var skipped []string
+	if len(hooks.contexts) != 1 || json.Unmarshal(hooks.contexts[0]["x_dispatcher_skipped_steps"], &skipped) != nil || !slices.Equal(skipped, []string{"2fa"}) {
+		t.Errorf("the webhook's context: %v", hooks.contexts)
+	}
+	hooks.fail = false
+	r = w.handle(Loop{Ref: lref, Cookie: w.cookie})
+	if r.Response.URL != verifierURL || len(reportsOf(r, EventStepSkipped)) != 1 || len(c.calls) != 2 {
+		t.Errorf("the reload: %+v, reports %+v, %d calls", r.Response, r.Reports, len(c.calls))
+	}
+}
+
+// An app with its URL and without its key in the configuration of the
+// moment: refused, no call (R50).
+func TestSkipCheckWithoutKey(t *testing.T) {
+	w, c := skipWorld(t, nil)
+	snap := w.o.Config.Snapshot()
+	apps := slices.Clone(snap.Apps)
+	for i := range apps {
+		apps[i].SkipCheckKey = ""
+	}
+	w.o.Config = snapshots{store.NewSnapshot(apps, snap.Flows, store.DefaultSettings())}
+	if r := throughSQL(t, w, "sql-2fa", testDevice); len(c.calls) != 0 || reportsOf(r, eventSkipCheck)[0].Reason != "no_url" {
+		t.Errorf("no key: %+v", r)
 	}
 }

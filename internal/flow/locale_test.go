@@ -161,3 +161,31 @@ func TestChosenLocaleEvents(t *testing.T) {
 		t.Errorf("a flow without a language: %s %v", data, err)
 	}
 }
+
+// Another browser takes the flow over (ENT-5 by the login challenge, POS-3
+// by the choice): the first browser's language does not go with it, its own
+// does (R49).
+func TestChosenLocaleOtherBrowser(t *testing.T) {
+	for name, takeOver := range map[string]func(w *world, other string) Result{
+		"ENT-5": func(w *world, other string) Result { return w.handle(Entry{LoginChallenge: hydraL, Cookie: other}) },
+		"POS-3": func(w *world, other string) Result {
+			return w.handle(Choose{FlowID: "hydra-sql", LoginChallenge: hydraL, Token: other, Cookie: other, SameOrigin: true})
+		},
+	} {
+		w := newWorld(t)
+		w.handle(Entry{LoginChallenge: hydraL, Locale: "en"})
+		other := strings.Repeat("ef", 32)
+		if r := takeOver(w, other); r.Response.SetCSRF != other {
+			t.Fatalf("%s: not taken over: %+v", name, r.Response)
+		}
+		if f := w.stored(); f.Locale != "" || f.CSRF != other {
+			t.Errorf("%s: the first browser's language: %q", name, f.Locale)
+		}
+		w = newWorld(t)
+		w.handle(Entry{LoginChallenge: hydraL, Locale: "en"})
+		w.handle(Entry{LoginChallenge: hydraL, Cookie: other, Locale: "fr"})
+		if f := w.stored(); f.Locale != "fr" {
+			t.Errorf("%s: its own language: %q", name, f.Locale)
+		}
+	}
+}

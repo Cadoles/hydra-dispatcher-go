@@ -1,7 +1,7 @@
 // Package skipcheck calls the pre-check of a step (phase 4, Plan phase 4,
 // P27 en détail): POST <skip_check_url>, signed by the app's key as a webhook
-// is, within 300 ms; the answer taken only signed by the same key, the nonce
-// of the request back, skip true. Anything else runs the step: the extension
+// is, within 300 ms; the answer taken only signed by the same key, over
+// "response." first, the nonce of the request back, skip true. Anything else runs the step: the extension
 // never blocks a login.
 package skipcheck
 
@@ -160,7 +160,7 @@ func (c *Client) Check(ctx context.Context, call flow.SkipCheckCall) flow.SkipCh
 	if err != nil || c.now().Sub(time.Unix(t, 0)).Abs() > skew {
 		return fail("timestamp")
 	}
-	if !hmac.Equal([]byte(resp.Header.Get(headerSignature)), []byte(sign(key, rts, data))) {
+	if !hmac.Equal([]byte(resp.Header.Get(headerSignature)), []byte(sign(key, responseLabel+rts, data))) {
 		return fail("signature")
 	}
 	var a answer
@@ -189,8 +189,14 @@ func (c *Client) Check(ctx context.Context, call flow.SkipCheckCall) flow.SkipCh
 	return out
 }
 
+// responseLabel starts what the answer's signature covers: a request sent
+// back as it came, its body and headers echoed, never passes for an answer
+// (R50).
+const responseLabel = "response."
+
 // sign gives the signature of body at the time ts: hex(HMAC-SHA256(key,
-// ts + "." + body)), as a webhook's.
+// ts + "." + body)), as a webhook's; an answer's covers "response." + ts +
+// "." + body.
 func sign(key []byte, ts string, body []byte) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(ts))
