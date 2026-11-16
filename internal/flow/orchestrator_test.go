@@ -926,13 +926,16 @@ func TestConditionalWrites(t *testing.T) {
 			t.Errorf("calls %v", w.hydra.calls)
 		}
 	})
-	t.Run("ECR-4, back to the choice meanwhile: the accept carried over", func(t *testing.T) {
+	t.Run("Q142, back to the choice meanwhile: the accept of the generation before not carried over", func(t *testing.T) {
 		w := running(t, lastDone(t))
 		w.hydra.before["accept_login"] = func() { w.put(lastDone(t).restart()) }
 		r := w.handle(loop)
 		f := w.stored()
-		if r.Response.URL != verifierURL || f.HydraRedirect != verifierURL || f.Sent == nil || f.Gen != 1001 {
+		if r.Response.Code != E1002 || f.HydraRedirect != "" || f.Sent != nil || f.Gen != 1001 || f.Current != 0 {
 			t.Errorf("answer %+v, flow %+v", r.Response, f)
+		}
+		if !slices.ContainsFunc(r.Reports, func(x Report) bool { return x.Event == "state.conflict" && x.Sentry }) {
+			t.Errorf("reports %+v", r.Reports)
 		}
 	})
 	t.Run("ECR-9, finished meanwhile: no accept carried over", func(t *testing.T) {

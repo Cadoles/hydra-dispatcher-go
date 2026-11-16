@@ -419,3 +419,34 @@ func TestSkipCheckWithoutKey(t *testing.T) {
 		t.Errorf("no key: %+v", r)
 	}
 }
+
+// R51, Q142: alice's 2fa skipped, her final accept made; during it, the same
+// browser goes back to the choice and plays sql as bob. The accept, of the
+// generation before, is not carried over to bob's flow, whose consent would
+// send bob's claims under alice's subject: page E1002, nothing written; bob's
+// flow goes on, its own 2fa to run.
+func TestSkipCheckAcceptOfAnotherGeneration(t *testing.T) {
+	w, c := skipWorld(t, nil)
+	c.answer = func(call SkipCheckCall) SkipCheckAnswer {
+		if call.Subject == "alice" {
+			return SkipCheckAnswer{Skip: true, Result: SkipSkipped}
+		}
+		return SkipCheckAnswer{Result: SkipDeclined}
+	}
+	w.hydra.before["accept_login"] = func() {
+		delete(w.hydra.before, "accept_login")
+		step := w.handle(Choose{FlowID: "sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true, Device: testDevice})
+		w.app(t, "sql", step, "bob", `{"email":"bob@example.org"}`)
+	}
+	r := throughSQL(t, w, "sql-2fa", testDevice)
+	f := w.stored()
+	if r.Response.Code != E1002 || f.Subject != "bob" || f.Sent != nil || f.HydraRedirect != "" || f.Steps[1].Skipped {
+		t.Fatalf("answer %+v, flow subject %s, sent %+v", r.Response, f.Subject, f.Sent)
+	}
+	if reps := reportsOf(r, EventStepSkipped); len(reps) != 0 {
+		t.Errorf("a skip audited that took no effect: %+v", reps)
+	}
+	if next := w.handle(Loop{Ref: lref, Cookie: w.cookie}); !strings.HasPrefix(next.Response.URL, "http://2fa.hydra.test/login?") {
+		t.Errorf("bob's flow: %+v", next.Response)
+	}
+}

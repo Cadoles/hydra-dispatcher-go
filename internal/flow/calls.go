@@ -515,6 +515,14 @@ func (r *run) unusedFact() (Outcome, bool) {
 			return s.redirect(a.Accept.RedirectTo), true
 		case f.Done:
 			return s.ended(f).report(conflict), true // ECR-9: its redirect_to is never followed
+		case a.Accept.Call.Gen != f.Gen && !a.Accept.Call.Skip:
+			// Q142 (R51): the flow read again is of another generation, back to
+			// the choice meanwhile, another subject maybe; carried over, the
+			// accept made for the one before would go with this one's claims at
+			// the consent. As ECR-9, nothing written, its redirect_to never
+			// followed: this flow's own final accept replaces it at Hydra. A
+			// skip's goes on: its consent reads the memory, not a flow.
+			return s.ended(f).report(conflict), true
 		case f.HydraRedirect != "":
 			return s.redirect(a.Accept.RedirectTo), true // ECR-3
 		}
