@@ -51,8 +51,11 @@ An app's `receive_claims` names the claims of the previous steps it receives,
 an existing one as it is; `~` gives every claim, to an app that has a list
 too, with the warning `bootstrap.claims_widened`.
 
-The pre-check of an app (phase 4: `skip_check_url`, `skip_check_key`,
-`skip_check_signals`) follows the same rule: without `skip_check_url`, `-force`
+The pre-check of a step (phase 4) lets an app say, server to server, that the
+browser's device is remembered for the subject, and the dispatcher skip its step:
+`examples/skipcheck-app` is its reference app, with the protocol in its README.
+Its fields of an app (`skip_check_url`, `skip_check_key`,
+`skip_check_signals`) follow the rule of `receive_claims`: without `skip_check_url`, `-force`
 leaves what the database holds, a key set by the screen or the API included,
 which nothing could give back; `~` or `""` removes the three. A seed that names
 the URL without the key keeps the key held, and is refused when there is none.
@@ -360,7 +363,10 @@ and a chain stopped at an app, passed by a new demand, cut by the next login, no
 by a preload of the login link, or left by the link of page E1003; what the apps answer
 to a challenge that is not theirs; a preload and a change of language on the logout's
 page; a subrequest of another site; `prompt=consent` accepted and refused; back to the
-choice. Start `make up-go` in
+choice; the pre-check of a step (`pre-check`, the Go dispatcher alone), on the flow
+`hydra-sql-remember` whose second step is the reference app below: the device
+remembered, the step skipped at the next login of the same device, run without the
+device cookie, under `prompt=login`, and once the device revoked. Start `make up-go` in
 `hydra-dev`, whose README sets the `*.hydra.test` names up, then:
 
 ```sh

@@ -1,4 +1,5 @@
-# Allowlist: only the Go sources this Dockerfile and tools/recorder/Dockerfile
+# Allowlist: only the Go sources this Dockerfile, tools/recorder/Dockerfile and
+# examples/skipcheck-app/Dockerfile
 # build from enter the context, never a local binary
 # (cmd/hydra-dispatcher/hydra-dispatcher after a go build there), an .env or
 # editor files. Files a package embeds will need a line of their own.
@@ -8,6 +9,7 @@
 !cmd/**/*.go
 !internal/**/*.go
 !tools/**/*.go
+!examples/skipcheck-app/**/*.go
 # Embedded by internal/store, internal/i18n, web and api.
 !internal/store/migrations/*.sql
 !internal/i18n/*.json

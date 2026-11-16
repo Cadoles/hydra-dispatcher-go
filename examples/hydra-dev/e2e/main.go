@@ -57,6 +57,9 @@ var identities = map[string]identity{
 	"hydra-oidc":    {Sub: alice, Email: "alice@example.com", ACR: "1", AMR: []string{"oidc"}},
 	"hydra-sql":     {Sub: isabelle, Email: isabelle, ACR: "1", AMR: []string{"pwd"}},
 	"hydra-sql-2fa": {Sub: isabelle, Email: isabelle, ACR: "2", AMR: []string{"pwd", "otp"}},
+	// The reference app of the pre-check (phase 4) as its second step, the
+	// same whether it ran or was skipped.
+	"hydra-sql-remember": {Sub: isabelle, Email: isabelle, ACR: "2", AMR: []string{"pwd", "otp"}},
 }
 
 type scenario struct {
@@ -108,6 +111,7 @@ var scenarios = []scenario{
 	{name: "back-to-choice", run: (*driver).backToChoice},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
 	{name: "consent-by-catalogue", run: (*driver).consentByCatalogue, goOnly: true},
+	{name: "pre-check", run: (*driver).preCheck, goOnly: true},
 	{name: "admin-journey", run: (*driver).adminJourney, goOnly: true},
 	{name: "expired-on-consent", run: (*driver).expiredOnConsent, optIn: true},
 	{name: "limiter-stops-forgery", run: (*driver).limiterStopsForgery, optIn: true},
@@ -386,6 +390,9 @@ type login struct {
 	consent       string
 	waitOnConsent time.Duration
 	prompt        string // of the authorization request
+	// remember checks "Remember this device" on the reference app of the
+	// pre-check; revoke revokes there the devices it lists first.
+	remember, revoke bool
 }
 
 // outcome is how an authorization went.
@@ -452,6 +459,8 @@ func (d *driver) drive(p page, l login) (outcome, error) {
 			p, err = d.sqlLogin(p, l.user)
 		case "hydra-2fa":
 			p, err = d.otp(p, l.user)
+		case "hydra-remember":
+			p, err = d.rememberStep(p, l)
 		case "idp":
 			p, err = d.idp(p, alice)
 		default:
@@ -491,6 +500,7 @@ func (d *driver) kind(p page) string {
 	for _, k := range []struct{ field, kind string }{
 		{"password", "hydra-sql"},
 		{"otp", "hydra-2fa"},
+		{"code", "hydra-remember"},
 		{"userID", "idp"},
 	} {
 		if _, ok := p.find(k.field); ok {
@@ -545,6 +555,42 @@ func (d *driver) otp(p page, user string) (page, error) {
 	}
 	f, _ := p.find("otp")
 	v, err := f.values(map[string]string{"otp": code}, nil)
+	if err != nil {
+		return page{}, err
+	}
+	return d.b.submit(p, f, v)
+}
+
+// rememberCode is the code of the reference app of the pre-check in hydra-dev
+// (compose.dispatcher-go.yaml).
+const rememberCode = "123456"
+
+// rememberStep plays the reference app of the pre-check
+// (examples/skipcheck-app): the devices it lists revoked first when l says
+// so, then its code, "Remember this device" checked when l says so.
+func (d *driver) rememberStep(p page, l login) (page, error) {
+	for range 5 {
+		f, ok := p.find("id")
+		if !l.revoke || !ok {
+			break
+		}
+		v, err := f.values(nil, nil)
+		if err == nil {
+			p, err = d.b.submit(p, f, v)
+		}
+		if err != nil {
+			return page{}, fmt.Errorf("revoke: %w", err)
+		}
+	}
+	f, ok := p.find("code")
+	if !ok {
+		return page{}, errUnexpected(p)
+	}
+	set := map[string]string{"code": rememberCode}
+	if l.remember {
+		set["remember"] = "1"
+	}
+	v, err := f.values(set, nil)
 	if err != nil {
 		return page{}, err
 	}
@@ -693,6 +739,81 @@ func (d *driver) secondLogin() error {
 		return err
 	}
 	d.note("skip honoured")
+	return nil
+}
+
+// deviceCookie is the dispatcher's device cookie of the pre-check (phase 4),
+// in plain HTTP without the __Host- prefix.
+const deviceCookie = "dispatcher_device"
+
+// newBrowserWith gives the driver a new browser, no Hydra session nor cookie
+// of the dispatcher or of the apps, but the cookies given of the
+// dispatcher's: the same device, another login.
+func (d *driver) newBrowserWith(cookies []*http.Cookie) {
+	stopAt := d.b.stopAt
+	d.b = newBrowser(d.client.redirect, d.log)
+	d.b.stopAt = stopAt
+	d.b.c.Jar.SetCookies(d.dispatcher, cookies)
+}
+
+// preCheck plays the pre-check of a step (phase 4) on the flow
+// hydra-sql-remember, whose second step is the reference app
+// (examples/skipcheck-app): the device remembered at a first login; at the
+// next, in a new browser of the same device, the step skipped, the same
+// id_token (acr 2, amr pwd and otp); without the device cookie, the step
+// runs; under prompt=login too, where the device is revoked; then it runs
+// again.
+func (d *driver) preCheck() error {
+	const flow = "hydra-sql-remember"
+	l := login{flow: flow, user: isabelle, consent: "accept"}
+	enroll := l
+	enroll.remember = true
+	o, err := d.authorize(enroll)
+	switch {
+	case err != nil:
+		return fmt.Errorf("enrollment: %w", err)
+	case !o.saw("hydra-remember"):
+		return fmt.Errorf("enrollment: no step of the reference app: %v", o.seen)
+	}
+	if err := d.granted(o, identities[flow]); err != nil {
+		return fmt.Errorf("enrollment: %w", err)
+	}
+	var device []*http.Cookie
+	for _, c := range d.b.c.Jar.Cookies(d.dispatcher) {
+		if c.Name == deviceCookie {
+			device = append(device, &http.Cookie{Name: c.Name, Value: c.Value, Path: "/"})
+		}
+	}
+	if device == nil {
+		return fmt.Errorf("enrollment: no %s cookie", deviceCookie)
+	}
+	for _, next := range []struct {
+		name      string
+		device    []*http.Cookie
+		prompt    string
+		revoke    bool
+		wantShown bool
+	}{
+		{name: "the same device", device: device},
+		{name: "without the device cookie", wantShown: true},
+		{name: "prompt=login, the device revoked", device: device, prompt: "login", revoke: true, wantShown: true},
+		{name: "the device revoked", device: device, wantShown: true},
+	} {
+		d.newBrowserWith(next.device)
+		step := l
+		step.prompt, step.revoke = next.prompt, next.revoke
+		o, err := d.authorize(step)
+		if err != nil {
+			return fmt.Errorf("%s: %w", next.name, err)
+		}
+		if o.saw("hydra-remember") != next.wantShown {
+			return fmt.Errorf("%s: the reference app's step shown %v: %v", next.name, o.saw("hydra-remember"), o.seen)
+		}
+		if err := d.granted(o, identities[flow]); err != nil {
+			return fmt.Errorf("%s: %w", next.name, err)
+		}
+	}
+	d.note("step skipped for the device remembered, run without it, under prompt=login and once revoked")
 	return nil
 }
 
