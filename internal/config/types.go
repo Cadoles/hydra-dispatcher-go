@@ -1,9 +1,6 @@
 package config
 
 import (
-	"encoding/base64"
-	"encoding/hex"
-	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -12,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
 )
 
 // Duration accepts Go durations ("5s", "30m"), days ("365d") and bare
@@ -110,24 +109,10 @@ func (k *Key) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-var errKeySize = errors.New("key must be 32 bytes, given as 64 hex characters or base64")
-
+// parseKey reads a key of the configuration, as domain.ParseKey does.
 func parseKey(s string) (Key, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, nil
-	}
-	if len(s) == 64 {
-		if b, err := hex.DecodeString(s); err == nil {
-			return b, nil
-		}
-	}
-	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
-		if b, err := enc.DecodeString(s); err == nil && len(b) == 32 {
-			return b, nil
-		}
-	}
-	return nil, errKeySize
+	b, err := domain.ParseKey(s)
+	return b, err
 }
 
 // Keys is a list of Key, as a YAML sequence or a comma-separated string.

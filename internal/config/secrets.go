@@ -48,6 +48,11 @@ func (c *Config) secretFiles() []secretFile {
 		sc := &c.Seed.OAuth2Clients[i]
 		files = append(files, textFile(fmt.Sprintf("dispatcher.oauth2_clients[%d].secret", i), sc.SecretFile, &sc.Secret))
 	}
+	// The keys of the pre-check of the apps (phase 4), likewise.
+	for i := range c.Seed.Apps {
+		sa := &c.Seed.Apps[i]
+		files = append(files, textFile(fmt.Sprintf("dispatcher.apps[%d].skip_check_key", i), sa.SkipCheckKeyFile, &sa.SkipCheckKey))
+	}
 	return files
 }
 

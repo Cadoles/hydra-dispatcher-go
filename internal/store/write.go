@@ -149,6 +149,9 @@ func (p *Postgres) checkSnapshot(ctx context.Context, tx *sql.Tx) error {
 	case err != nil:
 		return fmt.Errorf("read the configuration back: %w", err)
 	}
+	if err := domain.CheckSkipChecks(s.Apps, s.Flows); err != nil {
+		return &RefusedError{Err: err}
+	}
 	if p.check != nil {
 		if err := p.check(s); err != nil {
 			return &RefusedError{Err: err}
@@ -179,10 +182,10 @@ func (p *Postgres) CreateApp(ctx context.Context, by string, a App) error {
 		if v := domain.Collect(a.Check); v != nil {
 			return v
 		}
-		if _, found, err := findApp(ctx, tx, a.ID); err != nil || found {
+		if _, found, err := findApp(ctx, tx, p.secrets, a.ID); err != nil || found {
 			return cmpErr(err, ErrExists)
 		}
-		return putApp(ctx, tx, a, by)
+		return putApp(ctx, tx, p.secrets, a, by)
 	})
 }
 
@@ -195,7 +198,7 @@ func (p *Postgres) UpdateApp(ctx context.Context, by, id string, change func(*Ap
 		return err
 	}
 	return p.write(ctx, func(tx *sql.Tx) error {
-		a, found, err := findApp(ctx, tx, id)
+		a, found, err := findApp(ctx, tx, p.secrets, id)
 		if err != nil || !found {
 			return cmpErr(err, ErrNotFound)
 		}
@@ -208,7 +211,7 @@ func (p *Postgres) UpdateApp(ctx context.Context, by, id string, change func(*Ap
 		if v := domain.Collect(a.Check); v != nil {
 			return v
 		}
-		return putApp(ctx, tx, a, by)
+		return putApp(ctx, tx, p.secrets, a, by)
 	})
 }
 
@@ -287,13 +290,26 @@ func (p *Postgres) DeleteFlow(ctx context.Context, id string) error {
 	})
 }
 
-// checkFlow checks f against the apps the transaction sees.
+// checkFlow checks f against the apps the transaction sees: their ids
+// alone, no key opened.
 func checkFlow(ctx context.Context, tx *sql.Tx, f Flow) error {
-	apps, err := readApps(ctx, tx)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM app`)
 	if err != nil {
 		return err
 	}
-	known := func(id string) bool { return slices.ContainsFunc(apps, func(a App) bool { return a.ID == id }) }
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids[id] = true
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	known := func(id string) bool { return ids[id] }
 	if v := domain.Collect(func(fail domain.Fail) { f.Check(fail, known) }); v != nil {
 		return v
 	}
@@ -467,8 +483,8 @@ func deleteRow(ctx context.Context, tx *sql.Tx, query, id string) error {
 	return nil
 }
 
-func findApp(ctx context.Context, q querier, id string) (App, bool, error) {
-	apps, err := readApps(ctx, q)
+func findApp(ctx context.Context, q querier, keys *secretbox.Keys, id string) (App, bool, error) {
+	apps, err := readApps(ctx, q, keys)
 	if err != nil {
 		return App{}, false, fmt.Errorf("read apps: %w", err)
 	}
@@ -503,21 +519,48 @@ func findAPIClient(ctx context.Context, q querier, id string) (APIClient, bool, 
 	return clients[i], true, nil
 }
 
-// putApp writes a, created or replaced, by the author by.
-func putApp(ctx context.Context, tx *sql.Tx, a App, by string) error {
+// putApp writes a, created or replaced, by the author by, its skip_check_key
+// sealed by the active key of keys: a write of an app that has one needs
+// secrets.encryption_key.
+func putApp(ctx context.Context, tx *sql.Tx, keys *secretbox.Keys, a App, by string) error {
 	sources := make([]string, len(a.AllowedSources)) // NOT NULL: never nil
 	for i, s := range a.AllowedSources {
 		sources[i] = s.String()
 	}
+	var sealed *string
+	if a.SkipCheckKey != "" {
+		// The same key keeps its row, as an unchanged secret setting does:
+		// sealed again, it would change for nothing.
+		var held sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT skip_check_key FROM app WHERE id = $1`, a.ID).Scan(&held); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("app %s: %w", a.ID, err)
+		}
+		if plain, err := keys.Open(appKeyName(a.ID), held.String); held.Valid && err == nil && string(plain) == a.SkipCheckKey {
+			sealed = &held.String
+		} else {
+			s, err := keys.Seal(appKeyName(a.ID), []byte(a.SkipCheckKey))
+			if err != nil {
+				return domain.Violations{{Field: "skip_check_key", Message: "cannot be written without secrets.encryption_key, which encrypts it in the database"}}
+			}
+			sealed = &s
+		}
+	}
+	signals := a.SkipCheckSignals
+	if signals == nil {
+		signals = []string{} // NOT NULL
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO app (id, login_url, consent_url, logout_url, method, auth_mode, allowed_sources, client_cert_fingerprint,
-			receive_claims, updated_at, updated_by)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7::text[]::cidr[], NULLIF($8, ''), $9::text[], now(), $10)
+			receive_claims, skip_check_url, skip_check_key, skip_check_signals, updated_at, updated_by)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7::text[]::cidr[], NULLIF($8, ''), $9::text[], NULLIF($10, ''), $11, $12::text[], now(), $13)
 		ON CONFLICT (id) DO UPDATE SET login_url = EXCLUDED.login_url, consent_url = EXCLUDED.consent_url,
 			logout_url = EXCLUDED.logout_url, method = EXCLUDED.method, auth_mode = EXCLUDED.auth_mode,
 			allowed_sources = EXCLUDED.allowed_sources, client_cert_fingerprint = EXCLUDED.client_cert_fingerprint,
-			receive_claims = EXCLUDED.receive_claims, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-		a.ID, a.LoginURL, a.ConsentURL, a.LogoutURL, a.Method, a.AuthMode, sources, a.ClientCertFingerprint, a.ReceiveClaims, by); err != nil {
+			receive_claims = EXCLUDED.receive_claims, skip_check_url = EXCLUDED.skip_check_url,
+			skip_check_key = EXCLUDED.skip_check_key, skip_check_signals = EXCLUDED.skip_check_signals,
+			updated_at = now(), updated_by = EXCLUDED.updated_by`,
+		a.ID, a.LoginURL, a.ConsentURL, a.LogoutURL, a.Method, a.AuthMode, sources, a.ClientCertFingerprint, a.ReceiveClaims,
+		a.SkipCheckURL, sealed, signals, by); err != nil {
 		return fmt.Errorf("app %s: %w", a.ID, err)
 	}
 	return nil
@@ -537,21 +580,26 @@ func putFlow(ctx context.Context, tx *sql.Tx, f Flow, by string) error {
 		s := texts(f.IconURL)
 		icon = &s
 	}
+	allowed := f.SkipCheckAllowedACR
+	if allowed == nil {
+		allowed = []string{} // NOT NULL
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO flow (id, title, description, icon_url, enabled, acr, updated_at, updated_by)
-		VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, NULLIF($6, ''), now(), $7)
+		INSERT INTO flow (id, title, description, icon_url, enabled, acr, skip_check_allowed_acr, updated_at, updated_by)
+		VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, NULLIF($6, ''), $7::text[], now(), $8)
 		ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description,
 			icon_url = EXCLUDED.icon_url, enabled = EXCLUDED.enabled, acr = EXCLUDED.acr,
+			skip_check_allowed_acr = EXCLUDED.skip_check_allowed_acr,
 			updated_at = now(), updated_by = EXCLUDED.updated_by`,
-		f.ID, texts(f.Title), texts(f.Description), icon, f.Enabled, f.ACR, by); err != nil {
+		f.ID, texts(f.Title), texts(f.Description), icon, f.Enabled, f.ACR, allowed, by); err != nil {
 		return fmt.Errorf("flow %s: %w", f.ID, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM flow_step WHERE flow_id = $1`, f.ID); err != nil {
 		return fmt.Errorf("flow %s: %w", f.ID, err)
 	}
 	for _, s := range f.Steps {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO flow_step (flow_id, app_id, position, subject_check) VALUES ($1, $2, $3, $4)`,
-			f.ID, s.AppID, s.Position, s.SubjectCheck); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO flow_step (flow_id, app_id, position, subject_check, skip_check) VALUES ($1, $2, $3, $4, $5)`,
+			f.ID, s.AppID, s.Position, s.SubjectCheck, s.SkipCheck); err != nil {
 			return fmt.Errorf("flow %s: step %s: %w", f.ID, s.AppID, err)
 		}
 	}

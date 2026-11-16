@@ -196,3 +196,45 @@ func TestSeedClientSecretFile(t *testing.T) {
 		}
 	}
 }
+
+// The pre-check of an app (phase 4): its key by ${VAR} or by a file, the
+// fields to the domain; the URL without the key, which bootstrap fills from
+// the database.
+func TestSeedSkipCheck(t *testing.T) {
+	key := strings.Repeat("0a", 32)
+	c, _, err := load(t, `
+dispatcher:
+  apps:
+    - { id: pwd, login_url: https://pwd/login, consent_url: https://pwd/consent, method: pwd }
+    - { id: otp, login_url: https://otp/login, consent_url: https://otp/consent, method: otp,
+        skip_check_url: https://otp/skip-check, skip_check_key: "${OTP_KEY}", skip_check_signals: "ip, device_age" }
+    - { id: totp, login_url: https://totp/login, consent_url: https://totp/consent, method: otp,
+        skip_check_url: https://totp/skip-check, skip_check_key_file: `+secretFileOf(t, key+"\n")+` }
+    - { id: dump, login_url: https://dump/login, consent_url: https://dump/consent, method: otp,
+        skip_check_url: https://dump/skip-check }
+  flows:
+    - { id: f, title: F, description: D, skip_check_allowed_acr: [loa1, loa2],
+        steps: [{ id: pwd, order: 0 }, { id: otp, order: 1, skip_check: true }, { id: totp, order: 2, skip_check: true }] }
+`, map[string]string{"OTP_KEY": key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otp, err := c.Seed.Apps[1].App()
+	if err != nil || otp.SkipCheckURL != "https://otp/skip-check" || otp.SkipCheckKey != key || !slices.Equal(otp.SkipCheckSignals, []string{"ip", "device_age"}) {
+		t.Errorf("otp = %+v, %v", otp, err)
+	}
+	if totp, _ := c.Seed.Apps[2].App(); totp.SkipCheckKey != key {
+		t.Errorf("key by a file: %q", totp.SkipCheckKey)
+	}
+	if dump, _ := c.Seed.Apps[3].App(); dump.SkipCheckKey != "" || dump.SkipCheckSignals != nil {
+		t.Errorf("URL without its key: %+v", dump)
+	}
+	f := c.Seed.Flows[0].Flow()
+	if !slices.Equal(f.SkipCheckAllowedACR, []string{"loa1", "loa2"}) || f.Steps[0].SkipCheck || !f.Steps[1].SkipCheck || !f.Steps[2].SkipCheck {
+		t.Errorf("flow = %+v", f)
+	}
+	if _, _, err := load(t, "dispatcher:\n  apps:\n    - { id: a, login_url: https://a, consent_url: https://a, method: m, skip_check_url: https://a/c, skip_check_key: k, skip_check_key_file: "+secretFileOf(t, key)+" }\n", nil); err == nil ||
+		!strings.Contains(err.Error(), "dispatcher.apps[0].skip_check_key and dispatcher.apps[0].skip_check_key_file are exclusive") {
+		t.Errorf("key and its file: %v", err)
+	}
+}

@@ -501,6 +501,12 @@ func configCheck(allowHTTP, signed bool) func(*store.Snapshot) error {
 				errs = append(errs, fmt.Errorf("setting %s: is in http://, which needs tls.allow_http", u.key))
 			}
 		}
+		// The pre-check of a step carries subjects and claims, as a webhook.
+		for _, a := range s.Apps {
+			if !allowHTTP && strings.HasPrefix(strings.ToLower(a.SkipCheckURL), "http://") {
+				errs = append(errs, fmt.Errorf("app %s: skip_check_url is in http://, which needs tls.allow_http", a.ID))
+			}
+		}
 		return errors.Join(errs...)
 	}
 }

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/netip"
 	"slices"
@@ -74,11 +75,37 @@ func TestApp(t *testing.T) {
 		"every claim (nil)":   {func(a *App) { a.ReceiveClaims = nil }, nil},
 		"several at once":     {func(a *App) { a.ID, a.Method = "", "" }, []string{"id: is required", "method: is required"}},
 		"URL with a password": {func(a *App) { a.LoginURL = "ftp://user:secret@a/?token=t" }, []string{`login_url: "ftp://user:xxxxx@a/" is not`}},
+		// The pre-check of a step (phase 4): all of it or none of it.
+		"pre-check":          {skipCheck(), nil},
+		"pre-check, base64":  {func(a *App) { skipCheck()(a); a.SkipCheckKey = base64.StdEncoding.EncodeToString(make([]byte, 32)) }, nil},
+		"pre-check, signals": {func(a *App) { skipCheck()(a); a.SkipCheckSignals = SkipCheckSignals[1:] }, nil},
+		"pre-check, no key": {func(a *App) { skipCheck()(a); a.SkipCheckKey = "" },
+			[]string{"skip_check_key: is required with a skip_check_url"}},
+		"pre-check, short key": {func(a *App) { skipCheck()(a); a.SkipCheckKey = strings.Repeat("ab", 16) },
+			[]string{"skip_check_key: key must be 32 bytes"}},
+		"pre-check, relative URL": {func(a *App) { skipCheck()(a); a.SkipCheckURL = "/check" }, []string{"skip_check_url: is not an absolute"}},
+		"key without URL":         {func(a *App) { a.SkipCheckKey = key32 }, []string{"skip_check_key: only applies with a skip_check_url"}},
+		"signals without URL": {func(a *App) { a.SkipCheckSignals = []string{"ip"} },
+			[]string{"skip_check_signals: only apply with a skip_check_url"}},
+		"unknown signal": {func(a *App) { skipCheck()(a); a.SkipCheckSignals = []string{"ip", "cookies"} },
+			[]string{`skip_check_signals[1]: "cookies" is not one of ip, full_ip`}},
+		"signal twice": {func(a *App) { skipCheck()(a); a.SkipCheckSignals = []string{"user_agent", "user_agent"} },
+			[]string{`skip_check_signals[1]: "user_agent" is already given`}},
+		"ip and full_ip": {func(a *App) { skipCheck()(a); a.SkipCheckSignals = []string{"ip", "full_ip"} },
+			[]string{"skip_check_signals: ip and full_ip are exclusive"}},
 	} {
 		a := validApp()
 		tt.change(&a)
 		wants(t, name, violations(a.Check), tt.want...)
 	}
+}
+
+// key32 is a key of the pre-check, in hex.
+var key32 = strings.Repeat("0a", 32)
+
+// skipCheck gives an app the pre-check of a step.
+func skipCheck() func(*App) {
+	return func(a *App) { a.SkipCheckURL, a.SkipCheckKey = "https://a/skip-check", key32 }
 }
 
 func validFlow() Flow {
@@ -111,6 +138,20 @@ func TestFlow(t *testing.T) {
 		"acr with a space":   {func(f *Flow) { f.ACR = "loa 2" }, []string{`acr: "loa 2" contains a space`}},
 		"long acr":           {func(f *Flow) { f.ACR = strings.Repeat("a", 256) }, []string{"acr: is longer than 255 characters"}},
 		"no acr":             {func(f *Flow) { f.ACR = "" }, nil},
+		// The pre-check of a step (phase 4).
+		"pre-check of a later step": {func(f *Flow) { f.Steps[1].SkipCheck = true }, nil},
+		"pre-check of the first": {func(f *Flow) { f.Steps[0].SkipCheck = true },
+			[]string{"steps[0].skip_check: is refused on the first step"}},
+		// The first step is the lowest position, wherever it is in the list.
+		"first by position": {func(f *Flow) { f.Steps[1].Position, f.Steps[1].SkipCheck = -5, true },
+			[]string{"steps[1].skip_check: is refused on the first step"}},
+		"allowed acr":          {func(f *Flow) { f.SkipCheckAllowedACR = []string{"loa1", "loa2"} }, nil},
+		"allowed acr, empty":   {func(f *Flow) { f.SkipCheckAllowedACR = []string{""} }, []string{"skip_check_allowed_acr[0]: is empty"}},
+		"allowed acr, a space": {func(f *Flow) { f.SkipCheckAllowedACR = []string{"loa 1"} }, []string{`skip_check_allowed_acr[0]: "loa 1" contains a space`}},
+		"allowed acr, twice": {func(f *Flow) { f.SkipCheckAllowedACR = []string{"loa1", "loa1"} },
+			[]string{`skip_check_allowed_acr[1]: "loa1" is already given`}},
+		"allowed acr, long": {func(f *Flow) { f.SkipCheckAllowedACR = []string{strings.Repeat("a", 256)} },
+			[]string{"skip_check_allowed_acr[0]: is longer than 255 characters"}},
 	} {
 		f := validFlow()
 		tt.change(&f)
@@ -318,5 +359,57 @@ func TestCheckPassword(t *testing.T) {
 		if got != want {
 			t.Errorf("%q: %q, want %q", password, got, want)
 		}
+	}
+}
+
+func TestParseKey(t *testing.T) {
+	raw := make([]byte, 32)
+	for i := range raw {
+		raw[i] = byte(i) * 7
+	}
+	for name, s := range map[string]string{
+		"hex":          fmt.Sprintf("%x", raw),
+		"base64":       base64.StdEncoding.EncodeToString(raw),
+		"base64 url":   base64.URLEncoding.EncodeToString(raw),
+		"raw base64":   base64.RawStdEncoding.EncodeToString(raw),
+		"spaces round": " " + base64.StdEncoding.EncodeToString(raw) + "\n",
+	} {
+		if got, err := ParseKey(s); err != nil || string(got) != string(raw) {
+			t.Errorf("%s: ParseKey = %x, %v", name, got, err)
+		}
+	}
+	if got, err := ParseKey(""); got != nil || err != nil {
+		t.Errorf("ParseKey(\"\") = %x, %v", got, err)
+	}
+	for name, s := range map[string]string{
+		"31 bytes":   base64.StdEncoding.EncodeToString(raw[:31]),
+		"33 bytes":   base64.StdEncoding.EncodeToString(append(raw, 0)),
+		"63 hex":     fmt.Sprintf("%x", raw)[:63],
+		"not a key":  "correct horse battery staple, one more time",
+		"hex of 31b": fmt.Sprintf("%x", raw[:31]),
+	} {
+		if _, err := ParseKey(s); err == nil || err.Error() != "key must be 32 bytes, given as 64 hex characters or base64" {
+			t.Errorf("%s: ParseKey error = %v", name, err)
+		}
+	}
+}
+
+func TestCheckSkipChecks(t *testing.T) {
+	withURL := validApp()
+	skipCheck()(&withURL)
+	without := validApp()
+	without.ID = "b"
+	f := validFlow()
+	f.Steps[1].SkipCheck = true // app b
+	if err := CheckSkipChecks([]App{withURL, without}, []Flow{f}); err == nil || err.Error() != "flow f: steps[1].skip_check: app b has no skip_check_url" {
+		t.Errorf("app without a URL: %v", err)
+	}
+	f.Steps[0].AppID, f.Steps[1].AppID = "b", "a" // the step on a, which has one
+	if err := CheckSkipChecks([]App{withURL, without}, []Flow{f}); err != nil {
+		t.Errorf("app with a URL: %v", err)
+	}
+	f.Steps[1].SkipCheck = false
+	if err := CheckSkipChecks([]App{without}, []Flow{f}); err != nil {
+		t.Errorf("no pre-check asked: %v", err)
 	}
 }

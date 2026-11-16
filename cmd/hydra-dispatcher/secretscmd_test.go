@@ -71,3 +71,14 @@ func TestConfigCheckOIDC(t *testing.T) {
 		t.Errorf("https: %v", err)
 	}
 }
+
+// The pre-check of an app in http:// needs tls.allow_http, as a webhook.
+func TestConfigCheckSkipCheck(t *testing.T) {
+	snap := store.NewSnapshot([]store.App{{ID: "otp", SkipCheckURL: "HTTP://otp/skip-check"}}, nil, store.DefaultSettings())
+	if err := configCheck(false, false)(snap); err == nil || !strings.Contains(err.Error(), "app otp: skip_check_url is in http://, which needs tls.allow_http") {
+		t.Errorf("without allow_http: %v", err)
+	}
+	if err := configCheck(true, false)(snap); err != nil {
+		t.Errorf("with allow_http: %v", err)
+	}
+}

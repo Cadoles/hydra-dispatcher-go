@@ -9,12 +9,14 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
 )
 
-// EncryptedSetting is a setting the table holds encrypted, and the kid of the
-// key it is under: secrets status.
+// EncryptedSetting is a value the database holds encrypted, and the kid of the
+// key it is under: secrets status. Key names it: a setting's key, or
+// apps.<id>.skip_check_key for the key of the pre-check of an app.
 type EncryptedSetting struct{ Key, KID string }
 
-// EncryptedSettings reads the encrypted settings of the table, in the order
-// of the registry; an empty secret, not encrypted, is none of them.
+// EncryptedSettings reads the encrypted values of the database: the settings
+// in the order of the registry, then the keys of the apps by id; an empty
+// secret, not encrypted, is none of them.
 func (p *Postgres) EncryptedSettings(ctx context.Context) ([]EncryptedSetting, error) {
 	rows, err := readSettings(ctx, p.db)
 	if err != nil {
@@ -26,6 +28,14 @@ func (p *Postgres) EncryptedSettings(ctx context.Context) ([]EncryptedSetting, e
 		if kid, ok := kids[st.key]; ok {
 			l = append(l, EncryptedSetting{Key: st.key, KID: kid})
 		}
+	}
+	appKeys, err := readAppKeys(ctx, p.db)
+	if err != nil {
+		return nil, fmt.Errorf("read the keys of the apps: %w", err)
+	}
+	for _, k := range appKeys {
+		kid, _ := secretbox.KID(k.sealed) // "" for a value of another form: shown, rekey refuses it
+		l = append(l, EncryptedSetting{Key: appKeyName(k.id), KID: kid})
 	}
 	return l, nil
 }
@@ -66,6 +76,28 @@ func (p *Postgres) Rekey(ctx context.Context) ([]string, error) {
 				return fmt.Errorf("setting %s: %w", st.key, err)
 			}
 			done = append(done, st.key)
+		}
+		appKeys, err := readAppKeys(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("read the keys of the apps: %w", err)
+		}
+		for _, k := range appKeys {
+			name := appKeyName(k.id)
+			if kid, ok := secretbox.KID(k.sealed); ok && kid == p.secrets.Active() {
+				continue
+			}
+			plain, err := p.secrets.Open(name, k.sealed)
+			if err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			again, err := p.secrets.Seal(name, plain)
+			if err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE app SET skip_check_key = $2 WHERE id = $1`, k.id, again); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			done = append(done, name)
 		}
 		return nil
 	})

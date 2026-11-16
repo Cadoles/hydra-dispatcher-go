@@ -1355,8 +1355,22 @@ dispatcher:
 		"claims merged in options": {app + "      options: { <<: { receive_claims: [email] } }\n", "dispatcher.apps[0].options.receive_claims: is a key of the app"},
 		"claims in options":        {app + "      options: { receive_claims: [email] }\n", "dispatcher.apps[0].options.receive_claims: is a key of the app"},
 		"claims as a mapping":      {app + "      receive_claims: { a: b }\n", "expected a list"},
-		"no locale":                {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
-		"token TTL fraction":       {"admin:\n  api: { token_ttl: 1500ms }\n", "admin.api.token_ttl: must be a whole number of seconds"},
+		// The pre-check of a step (phase 4).
+		"pre-check in options": {app + "      options: { skip_check_url: https://a/check }\n", "dispatcher.apps[0].options.skip_check_url: is a key of the app"},
+		"pre-check key alone": {app + "      skip_check_key: " + strings.Repeat("0a", 32) + "\n",
+			"dispatcher.apps[0].skip_check_key: only applies with a skip_check_url"},
+		"pre-check short key": {app + "      skip_check_url: https://a/check\n      skip_check_key: abcd\n",
+			"dispatcher.apps[0].skip_check_key: key must be 32 bytes"},
+		"pre-check signal": {app + "      skip_check_url: https://a/check\n      skip_check_signals: [ip, cookies]\n",
+			`dispatcher.apps[0].skip_check_signals[1]: "cookies" is not one of`},
+		"pre-check of the first step": {apps + flow + "        - { id: a, order: 0, skip_check: true }\n        - { id: b, order: 1 }\n",
+			"dispatcher.flows[0].steps[0].skip_check: is refused on the first step"},
+		"pre-check without a URL": {apps + flow + "        - { id: a, order: 0 }\n        - { id: b, order: 1, skip_check: true }\n",
+			"dispatcher.flows[0].steps[1].skip_check: app b has no skip_check_url"},
+		"allowed acr with a space": {apps + "  flows:\n    - { id: f, title: T, description: D, skip_check_allowed_acr: [\"loa 2\"], steps: [{ id: a, order: 0 }] }\n",
+			`dispatcher.flows[0].skip_check_allowed_acr[0]: "loa 2" contains a space`},
+		"no locale":          {"dispatcher:\n  supported_locales: []\n", "dispatcher.supported_locales: is empty"},
+		"token TTL fraction": {"admin:\n  api: { token_ttl: 1500ms }\n", "admin.api.token_ttl: must be a whole number of seconds"},
 	} {
 		if _, _, err := load(t, tt.content, nil); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tt.want)

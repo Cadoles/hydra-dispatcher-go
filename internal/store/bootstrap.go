@@ -340,7 +340,7 @@ func seedSettings(s config.SeedSettings) map[string]any {
 }
 
 func (b *bootstrap) apps(seed config.Seed) error {
-	current, err := readApps(b.ctx, b.tx)
+	current, err := readApps(b.ctx, b.tx, b.keys)
 	if err != nil {
 		return fmt.Errorf("read apps: %w", err)
 	}
@@ -363,6 +363,11 @@ func (b *bootstrap) apps(seed config.Seed) error {
 		if sa.ReceiveClaims == nil && !sa.NullReceiveClaims {
 			a.ReceiveClaims = old.ReceiveClaims
 		}
+		// Neither does the key of the pre-check, which config dump leaves out:
+		// a seed that names the URL without it keeps the key held.
+		if a.SkipCheckURL != "" && a.SkipCheckKey == "" {
+			a.SkipCheckKey = old.SkipCheckKey
+		}
 		if !b.decide("app", a.ID, i >= 0, authors[a.ID], []field{
 			{name: "login_url", old: old.LoginURL, new: a.LoginURL},
 			{name: "consent_url", old: old.ConsentURL, new: a.ConsentURL},
@@ -372,10 +377,13 @@ func (b *bootstrap) apps(seed config.Seed) error {
 			{name: "allowed_sources", old: old.AllowedSources, new: a.AllowedSources},
 			{name: "client_cert_fingerprint", old: old.ClientCertFingerprint, new: a.ClientCertFingerprint},
 			{name: "receive_claims", old: old.ReceiveClaims, new: a.ReceiveClaims},
+			{name: "skip_check_url", old: old.SkipCheckURL, new: a.SkipCheckURL},
+			{name: "skip_check_key", secret: func() bool { return sameKey(old.SkipCheckKey, a.SkipCheckKey) }},
+			{name: "skip_check_signals", old: old.SkipCheckSignals, new: a.SkipCheckSignals},
 		}) || b.compare {
 			continue
 		}
-		if err := putApp(b.ctx, b.tx, a, bootstrapBy); err != nil {
+		if err := putApp(b.ctx, b.tx, b.keys, a, bootstrapBy); err != nil {
 			return err
 		}
 	}
@@ -411,6 +419,7 @@ func (b *bootstrap) flows(seed config.Seed) error {
 			{name: "icon_url", old: old.IconURL, new: f.IconURL},
 			{name: "enabled", old: old.Enabled, new: f.Enabled},
 			{name: "acr", old: old.ACR, new: f.ACR},
+			{name: "skip_check_allowed_acr", old: old.SkipCheckAllowedACR, new: f.SkipCheckAllowedACR},
 			{name: "steps", old: old.Steps, new: f.Steps},
 		}) || b.compare {
 			continue
@@ -496,4 +505,15 @@ func readAPIClients(ctx context.Context, q querier) ([]APIClient, error) {
 		clients = append(clients, c)
 	}
 	return clients, rows.Err()
+}
+
+// sameKey tells whether two keys of the pre-check are the same bytes, whatever
+// their encoding: hex in the seed, base64 in the database, the same key.
+func sameKey(a, b string) bool {
+	ka, erra := domain.ParseKey(a)
+	kb, errb := domain.ParseKey(b)
+	if erra != nil || errb != nil {
+		return a == b
+	}
+	return bytes.Equal(ka, kb)
 }

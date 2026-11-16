@@ -5,8 +5,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -291,7 +293,7 @@ func (p *Postgres) Snapshot(ctx context.Context) (*Snapshot, error) {
 func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapshot, error) {
 	var err error
 	s := &Snapshot{}
-	if s.Apps, err = readApps(ctx, q); err != nil {
+	if s.Apps, err = readApps(ctx, q, keys); err != nil {
 		return nil, fmt.Errorf("read apps: %w", err)
 	}
 	if s.APIClients, err = readAPIClients(ctx, q); err != nil {
@@ -312,6 +314,17 @@ func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapsh
 		return nil, fmt.Errorf("read settings: %w", err)
 	}
 	s.Encrypted, s.Sealed = encryptedKIDs(rows), sealedDigests(rows)
+	appKeys, err := readAppKeys(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("read the keys of the apps: %w", err)
+	}
+	for _, k := range appKeys {
+		if kid, ok := secretbox.KID(k.sealed); ok {
+			s.Encrypted[appKeyName(k.id)] = kid
+		}
+		sum := sha256.Sum256([]byte(k.sealed))
+		s.Sealed[appKeyName(k.id)] = hex.EncodeToString(sum[:12])
+	}
 	if s.Settings, s.Warnings, err = settingsFrom(rows, keys); err != nil {
 		err = unreadable{err}
 		return nil, err
@@ -324,10 +337,40 @@ func readSnapshot(ctx context.Context, q querier, keys *secretbox.Keys) (*Snapsh
 	return s, nil
 }
 
-func readApps(ctx context.Context, q querier) ([]App, error) {
+// appKeyName names the skip_check_key of the app id: what secretbox binds its
+// encryption to, so that a value copied to another app opens nowhere, and the
+// key secrets status shows.
+func appKeyName(id string) string { return "apps." + id + ".skip_check_key" }
+
+// appKey is the skip_check_key of an app as the table holds it, sealed.
+type appKey struct{ id, sealed string }
+
+// readAppKeys reads the sealed skip_check_key of the apps that have one, by
+// id in byte order: secrets status and rekey, the digests of the snapshot.
+func readAppKeys(ctx context.Context, q querier) ([]appKey, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, skip_check_key FROM app WHERE skip_check_key IS NOT NULL ORDER BY id COLLATE "C"`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var l []appKey
+	for rows.Next() {
+		var k appKey
+		if err := rows.Scan(&k.id, &k.sealed); err != nil {
+			return nil, err
+		}
+		l = append(l, k)
+	}
+	return l, rows.Err()
+}
+
+// readApps reads the apps, their skip_check_key opened by keys: a key that
+// does not open makes the apps unreadable, as an encrypted setting does.
+func readApps(ctx context.Context, q querier, keys *secretbox.Keys) ([]App, error) {
 	rows, err := q.QueryContext(ctx, `
 		SELECT id, login_url, consent_url, coalesce(logout_url, ''), method, auth_mode,
-		       allowed_sources::text[], coalesce(client_cert_fingerprint, ''), receive_claims
+		       allowed_sources::text[], coalesce(client_cert_fingerprint, ''), receive_claims,
+		       coalesce(skip_check_url, ''), skip_check_key, skip_check_signals
 		FROM app ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
@@ -338,9 +381,21 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 	for rows.Next() {
 		var a App
 		var sources []string
+		var sealed sql.NullString
 		if err := rows.Scan(&a.ID, &a.LoginURL, &a.ConsentURL, &a.LogoutURL, &a.Method, &a.AuthMode,
-			m.SQLScanner(&sources), &a.ClientCertFingerprint, m.SQLScanner(&a.ReceiveClaims)); err != nil {
+			m.SQLScanner(&sources), &a.ClientCertFingerprint, m.SQLScanner(&a.ReceiveClaims),
+			&a.SkipCheckURL, &sealed, m.SQLScanner(&a.SkipCheckSignals)); err != nil {
 			return nil, err
+		}
+		if len(a.SkipCheckSignals) == 0 {
+			a.SkipCheckSignals = nil // NOT NULL in the table: none is nil, as a seed gives it
+		}
+		if sealed.Valid {
+			plain, err := keys.Open(appKeyName(a.ID), sealed.String)
+			if err != nil {
+				return nil, unreadable{fmt.Errorf("app %s: skip_check_key: %w", a.ID, err)}
+			}
+			a.SkipCheckKey = string(plain)
 		}
 		for _, src := range sources {
 			prefix, err := netip.ParsePrefix(src)
@@ -355,17 +410,22 @@ func readApps(ctx context.Context, q querier) ([]App, error) {
 }
 
 func readFlows(ctx context.Context, q querier) ([]Flow, error) {
-	rows, err := q.QueryContext(ctx, `SELECT id, title, description, icon_url, enabled, coalesce(acr, '') FROM flow ORDER BY id COLLATE "C"`)
+	rows, err := q.QueryContext(ctx, `SELECT id, title, description, icon_url, enabled, coalesce(acr, ''), skip_check_allowed_acr
+		FROM flow ORDER BY id COLLATE "C"`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	m := pgtype.NewMap() // its types scan the text[] of the acr values
 	var flows []Flow
 	for rows.Next() {
 		var f Flow
 		var title, description, icon []byte
-		if err := rows.Scan(&f.ID, &title, &description, &icon, &f.Enabled, &f.ACR); err != nil {
+		if err := rows.Scan(&f.ID, &title, &description, &icon, &f.Enabled, &f.ACR, m.SQLScanner(&f.SkipCheckAllowedACR)); err != nil {
 			return nil, err
+		}
+		if len(f.SkipCheckAllowedACR) == 0 {
+			f.SkipCheckAllowedACR = nil
 		}
 		for _, l := range []struct {
 			name string
@@ -396,7 +456,7 @@ func readFlows(ctx context.Context, q querier) ([]Flow, error) {
 	for i, f := range flows {
 		byID[f.ID] = i
 	}
-	steps, err := q.QueryContext(ctx, `SELECT flow_id, app_id, position, subject_check FROM flow_step ORDER BY position`)
+	steps, err := q.QueryContext(ctx, `SELECT flow_id, app_id, position, subject_check, skip_check FROM flow_step ORDER BY position`)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +464,7 @@ func readFlows(ctx context.Context, q querier) ([]Flow, error) {
 	for steps.Next() {
 		var flowID string
 		var s Step
-		if err := steps.Scan(&flowID, &s.AppID, &s.Position, &s.SubjectCheck); err != nil {
+		if err := steps.Scan(&flowID, &s.AppID, &s.Position, &s.SubjectCheck, &s.SkipCheck); err != nil {
 			return nil, err
 		}
 		i, ok := byID[flowID]

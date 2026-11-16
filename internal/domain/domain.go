@@ -42,6 +42,16 @@ type App struct {
 	// ReceiveClaims names the claims of the previous steps the app receives:
 	// all of them when nil, none when empty.
 	ReceiveClaims []string
+	// SkipCheckURL is where the dispatcher asks the app, server to server,
+	// whether a step of it may be skipped on this device (the pre-check of a
+	// step, phase 4); "" leaves the app out of it.
+	SkipCheckURL string
+	// SkipCheckKey signs those requests, as webhooks are signed: 32 bytes, in
+	// 64 hex characters or base64 (ParseKey). The database holds it encrypted.
+	SkipCheckKey string
+	// SkipCheckSignals are the signals of the browser the app receives with
+	// them, of SkipCheckSignals: none when empty.
+	SkipCheckSignals []string
 }
 
 // Flow is a sequence of apps the user may choose.
@@ -53,14 +63,21 @@ type Flow struct {
 	IconURL map[string]string
 	Enabled bool
 	// ACR "" sends none.
-	ACR   string
-	Steps []Step // by position
+	ACR string
+	// SkipCheckAllowedACR are the values of acr_values under which a step may
+	// be skipped by its pre-check: a client asking only others runs every step.
+	SkipCheckAllowedACR []string
+	Steps               []Step // by position
 }
 
 type Step struct {
 	AppID        string `json:"app_id"`
 	Position     int    `json:"position"`
 	SubjectCheck string `json:"subject_check"` // none, equal or claim:<name>
+	// SkipCheck asks the app of the step, before the step, whether it may be
+	// skipped (phase 4): never on the first step, and only with an app that
+	// has a SkipCheckURL.
+	SkipCheck bool `json:"skip_check"`
 }
 
 // APIClient is a client of the admin API.
@@ -169,7 +186,50 @@ func (a App) Check(fail Fail) {
 	for i, c := range a.ReceiveClaims {
 		nonEmpty(fail, fmt.Sprintf("receive_claims[%d]", i), c)
 	}
+	a.checkSkipCheck(fail)
 }
+
+// checkSkipCheck checks the fields of the pre-check of a: all of them or none,
+// the key never in a message.
+func (a App) checkSkipCheck(fail Fail) {
+	if a.SkipCheckURL == "" {
+		if a.SkipCheckKey != "" {
+			fail("skip_check_key", "only applies with a skip_check_url")
+		}
+		if len(a.SkipCheckSignals) > 0 {
+			fail("skip_check_signals", "only apply with a skip_check_url")
+		}
+		return
+	}
+	if _, err := AbsoluteURL(a.SkipCheckURL); err != nil {
+		fail("skip_check_url", "%v", err)
+	}
+	if a.SkipCheckKey == "" {
+		fail("skip_check_key", "is required with a skip_check_url")
+	} else if _, err := ParseKey(a.SkipCheckKey); err != nil {
+		fail("skip_check_key", "%v", err)
+	}
+	seen := map[string]bool{}
+	for i, s := range a.SkipCheckSignals {
+		field := fmt.Sprintf("skip_check_signals[%d]", i)
+		switch {
+		case !slices.Contains(SkipCheckSignals, s):
+			fail(field, "%q is not one of %s", s, strings.Join(SkipCheckSignals, ", "))
+		case seen[s]:
+			fail(field, "%q is already given", s)
+		}
+		seen[s] = true
+	}
+	if seen["ip"] && seen["full_ip"] {
+		fail("skip_check_signals", "ip and full_ip are exclusive: ip is the address truncated, full_ip the whole of it")
+	}
+}
+
+// SkipCheckSignals are the signals of the browser an app may receive with the
+// pre-check of a step: the address truncated (/24, /48) or whole, the
+// User-Agent, the client hints (Sec-CH-UA, -Platform, -Mobile),
+// Accept-Language, the age of the device cookie.
+var SkipCheckSignals = []string{"ip", "full_ip", "user_agent", "client_hints", "accept_language", "device_age"}
 
 // NormalizeFingerprint gives a certificate fingerprint the form the emulated
 // API compares: lowercase hex, without the colons of openssl's output.
@@ -202,6 +262,29 @@ func (f Flow) Check(fail Fail, app func(id string) bool) {
 	if strings.ContainsFunc(f.ACR, unicode.IsSpace) {
 		// acr_values is a space-separated list: no value would match.
 		fail("acr", "%q contains a space", f.ACR)
+	}
+	seenACR := map[string]bool{}
+	for i, v := range f.SkipCheckAllowedACR {
+		field := fmt.Sprintf("skip_check_allowed_acr[%d]", i)
+		nonEmpty(fail, field, v)
+		text(fail, field, v, maxACR)
+		if strings.ContainsFunc(v, unicode.IsSpace) {
+			fail(field, "%q contains a space", v)
+		}
+		if seenACR[v] {
+			fail(field, "%q is already given", v)
+		}
+		seenACR[v] = true
+	}
+	// The first step runs always: a device alone would authenticate the user.
+	first := -1
+	for j, s := range f.Steps {
+		if first < 0 || s.Position < f.Steps[first].Position {
+			first = j
+		}
+	}
+	if first >= 0 && f.Steps[first].SkipCheck {
+		fail(fmt.Sprintf("steps[%d].skip_check", first), "is refused on the first step: the subject must come from a step run")
 	}
 	apps, positions := map[string]bool{}, map[int]bool{}
 	for j, s := range f.Steps {

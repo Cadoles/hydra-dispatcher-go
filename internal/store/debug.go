@@ -54,7 +54,7 @@ func (p *Postgres) SetDebugWindow(ctx context.Context, by string, w *DebugWindow
 			}
 		}
 		if w.App != "" {
-			if _, found, err := findApp(ctx, tx, w.App); err != nil {
+			if _, found, err := findApp(ctx, tx, p.secrets, w.App); err != nil {
 				return err
 			} else if !found {
 				v = append(v, domain.Violation{Field: "app", Message: fmt.Sprintf("%q is no app", w.App)})

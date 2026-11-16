@@ -101,6 +101,8 @@ type app struct {
 	AllowedSources        []string  `yaml:"allowed_sources,omitempty"`
 	ClientCertFingerprint string    `yaml:"client_cert_fingerprint,omitempty"`
 	ReceiveClaims         *[]string `yaml:"receive_claims"` // null: every claim
+	SkipCheckURL          string    `yaml:"skip_check_url,omitempty"`
+	SkipCheckSignals      []string  `yaml:"skip_check_signals,omitempty"`
 }
 
 type flow struct {
@@ -110,13 +112,16 @@ type flow struct {
 	IconURL     map[string]string `yaml:"icon_url,omitempty"`
 	Enabled     bool              `yaml:"enabled"`
 	ACR         string            `yaml:"acr,omitempty"`
-	Steps       []step            `yaml:"steps"`
+	// SkipCheckAllowedACR is left out when empty, as the seed reads it.
+	SkipCheckAllowedACR []string `yaml:"skip_check_allowed_acr,omitempty"`
+	Steps               []step   `yaml:"steps"`
 }
 
 type step struct {
 	ID           string `yaml:"id"`
 	Order        int    `yaml:"order"`
 	SubjectCheck string `yaml:"subject_check"`
+	SkipCheck    bool   `yaml:"skip_check,omitempty"`
 }
 
 type client struct {
@@ -175,10 +180,18 @@ func document(snap *store.Snapshot, want map[string]bool, o Options) (*yaml.Node
 				claims := slices.Clone(a.ReceiveClaims)
 				d.ReceiveClaims = &claims
 			}
+			d.SkipCheckURL, d.SkipCheckSignals = a.SkipCheckURL, a.SkipCheckSignals
 			apps = append(apps, d)
 		}
 		if err := add("apps", apps); err != nil {
 			return nil, err
+		}
+		// The key of the pre-check, held encrypted, is never dumped: a seed
+		// without it keeps the key the database holds.
+		for i, a := range root.Content[len(root.Content)-1].Content {
+			if snap.Apps[i].SkipCheckKey != "" {
+				a.HeadComment = "skip_check_key: not dumped, held encrypted; without it, bootstrap keeps the key the database holds"
+			}
 		}
 		if o.NoReceiveClaims {
 			for _, a := range root.Content[len(root.Content)-1].Content {
@@ -194,9 +207,10 @@ func document(snap *store.Snapshot, want map[string]bool, o Options) (*yaml.Node
 	if want["flows"] {
 		flows := []flow{}
 		for _, f := range snap.Flows {
-			d := flow{ID: f.ID, Title: f.Title, Description: f.Description, IconURL: f.IconURL, Enabled: f.Enabled, ACR: f.ACR}
+			d := flow{ID: f.ID, Title: f.Title, Description: f.Description, IconURL: f.IconURL, Enabled: f.Enabled, ACR: f.ACR,
+				SkipCheckAllowedACR: f.SkipCheckAllowedACR}
 			for _, s := range f.Steps {
-				d.Steps = append(d.Steps, step{ID: s.AppID, Order: s.Position, SubjectCheck: s.SubjectCheck})
+				d.Steps = append(d.Steps, step{ID: s.AppID, Order: s.Position, SubjectCheck: s.SubjectCheck, SkipCheck: s.SkipCheck})
 			}
 			flows = append(flows, d)
 		}

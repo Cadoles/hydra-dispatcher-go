@@ -87,7 +87,7 @@ func exec(t *testing.T, p *Postgres, query string, args ...any) {
 
 // allMigrations are the migrations of an empty database.
 var allMigrations = []string{"00001_schema.sql", "00002_checks.sql", "00003_app_receive_claims.sql", "00004_admin_writes.sql", "00005_admin_sessions.sql", "00006_scopes.sql",
-	"00007_debug_window.sql"}
+	"00007_debug_window.sql", "00008_skip_check.sql"}
 
 // What the code read of the options of an app becomes its receive_claims, and
 // comes back with a rollback: an app restricted before stays restricted.
@@ -142,7 +142,8 @@ func TestMigrateOptions(t *testing.T) {
 func TestMigrateDown(t *testing.T) {
 	ctx := context.Background()
 	p := migrated(t)
-	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims) VALUES ('a', 'x', 'x', 'pwd', '{email}')`)
+	exec(t, p, `INSERT INTO app (id, login_url, consent_url, method, receive_claims, skip_check_url, skip_check_key, skip_check_signals)
+		VALUES ('a', 'x', 'x', 'pwd', '{email}', 'https://a.test/check', 'sealed', '{ip}')`)
 	want := slices.Clone(allMigrations)
 	slices.Reverse(want)
 	for _, name := range want {
@@ -152,19 +153,35 @@ func TestMigrateDown(t *testing.T) {
 		if got, err := p.MigrateDown(ctx); err != nil || got != name {
 			t.Fatalf("MigrateDown = %q, %v; want %s", got, err, name)
 		}
-		if name == "00007_debug_window.sql" {
-			// A version on a database it has not migrated does not read it.
-			if _, err := p.Snapshot(ctx); err == nil || !strings.Contains(err.Error(), "debug_window") {
+		if name == "00008_skip_check.sql" {
+			// Its columns gone with it, the app kept.
+			if _, err := p.Snapshot(ctx); err == nil || !strings.Contains(err.Error(), "skip_check") {
 				t.Errorf("snapshot after the rollback of %s: %v", name, err)
+			}
+			var claims string
+			if err := p.db.QueryRow(`SELECT receive_claims::text FROM app WHERE id = 'a'`).Scan(&claims); err != nil || claims != "{email}" {
+				t.Errorf("app after the rollback of %s: %s, %v", name, claims, err)
+			}
+		}
+		if name == "00007_debug_window.sql" {
+			// A version on a database it has not migrated does not read it;
+			// the snapshot stops at the apps already, 00008 rolled back.
+			if _, err := readDebugWindow(ctx, p.db); err == nil || !strings.Contains(err.Error(), "debug_window") {
+				t.Errorf("window of debug after the rollback of %s: %v", name, err)
 			}
 		}
 		if name == "00004_admin_writes.sql" {
-			// The tables 00004 changed, read as before it.
-			if _, err := readApps(ctx, p.db); err != nil {
-				t.Errorf("apps after the rollback of %s: %v", name, err)
-			}
-			if _, err := readFlows(ctx, p.db); err != nil {
-				t.Errorf("flows after the rollback of %s: %v", name, err)
+			// The tables 00004 changed, read as the code read them before it:
+			// readApps and readFlows read the columns of 00008 too.
+			for _, q := range []string{
+				`SELECT id, login_url, consent_url, coalesce(logout_url, ''), method, auth_mode,
+				        allowed_sources::text[], coalesce(client_cert_fingerprint, ''), receive_claims FROM app`,
+				`SELECT id, title, description, icon_url, enabled, coalesce(acr, '') FROM flow`,
+				`SELECT flow_id, app_id, position, subject_check FROM flow_step`,
+			} {
+				if _, err := p.db.ExecContext(ctx, q); err != nil {
+					t.Errorf("after the rollback of %s: %s: %v", name, strings.Fields(q)[0:3], err)
+				}
 			}
 			if _, err := readAPIClients(ctx, p.db); err != nil {
 				t.Errorf("API clients after the rollback of %s: %v", name, err)

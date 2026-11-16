@@ -115,12 +115,23 @@ type SeedApp struct {
 	// ClientCertFingerprint is the SHA-256 of the app certificate, which Load
 	// turns into lowercase hex without colons.
 	ClientCertFingerprint string `yaml:"client_cert_fingerprint"`
+	// SkipCheckURL is where the dispatcher asks the app whether a step of it
+	// may be skipped (phase 4); empty leaves the app out of it.
+	SkipCheckURL string `yaml:"skip_check_url"`
+	// SkipCheckKey signs those requests: 32 bytes, in hex or base64, by
+	// ${VAR} or by SkipCheckKeyFile. Without it, bootstrap keeps the key the
+	// database holds (config dump leaves it out).
+	SkipCheckKey     string `yaml:"skip_check_key"`
+	SkipCheckKeyFile string `yaml:"skip_check_key_file"`
+	// SkipCheckSignals are the signals of the browser the app receives.
+	SkipCheckSignals List `yaml:"skip_check_signals"`
 }
 
 // appKeys are the app fields of the Go model: in options, where the design
 // document once put them, they would pass unread, and an app would receive
 // every claim for want of its receive_claims.
-var appKeys = []string{"auth_mode", "allowed_sources", "client_cert_fingerprint", "receive_claims"}
+var appKeys = []string{"auth_mode", "allowed_sources", "client_cert_fingerprint", "receive_claims",
+	"skip_check_url", "skip_check_key", "skip_check_key_file", "skip_check_signals"}
 
 // appOptions is the options key of an app. Symfony takes any form (its
 // variableNode) and never reads it: nothing here is expanded or checked. Only
@@ -154,6 +165,9 @@ type SeedFlow struct {
 	// ACR is sent to Hydra at the final accept and matched against the
 	// acr_values of the client; empty sends none.
 	ACR string `yaml:"acr"`
+	// SkipCheckAllowedACR are the acr_values under which a step may be
+	// skipped by its pre-check.
+	SkipCheckAllowedACR List `yaml:"skip_check_allowed_acr"`
 }
 
 // SeedStep accepts both spellings of the Symfony seed and admin API:
@@ -165,9 +179,11 @@ type SeedStep struct {
 	// SubjectCheck is none, equal or claim:<name>; empty leaves the engine's
 	// default.
 	SubjectCheck string
+	// SkipCheck asks the app of the step whether it may be skipped (phase 4).
+	SkipCheck bool
 }
 
-var stepKeys = []string{"id", "app_id", "order", "position", "subject_check"}
+var stepKeys = []string{"id", "app_id", "order", "position", "subject_check", "skip_check"}
 
 func (s *SeedStep) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.MappingNode {
@@ -182,6 +198,7 @@ func (s *SeedStep) UnmarshalYAML(n *yaml.Node) error {
 		Order        *string `yaml:"order"`
 		Position     *string `yaml:"position"`
 		SubjectCheck string  `yaml:"subject_check"`
+		SkipCheck    bool    `yaml:"skip_check"`
 	}
 	if err := n.Decode(&raw); err != nil {
 		return err
@@ -209,7 +226,7 @@ func (s *SeedStep) UnmarshalYAML(n *yaml.Node) error {
 	case len(positions) == 2 && positions[0] != positions[1]:
 		return fmt.Errorf("%sstep order and position differ", at(n))
 	}
-	*s = SeedStep{AppID: cmp.Or(raw.AppID, raw.ID), Position: positions[0], SubjectCheck: raw.SubjectCheck}
+	*s = SeedStep{AppID: cmp.Or(raw.AppID, raw.ID), Position: positions[0], SubjectCheck: raw.SubjectCheck, SkipCheck: raw.SkipCheck}
 	return nil
 }
 
@@ -286,7 +303,7 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 			fail(path, format, args...)
 		}
 	}
-	apps := map[string]bool{}
+	apps, skipCheck := map[string]bool{}, map[string]bool{}
 	for i, a := range s.Apps {
 		path := fmt.Sprintf("dispatcher.apps[%d]", i)
 		unique(fail, path, a.ID, apps)
@@ -294,7 +311,13 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 		if err != nil {
 			fail(path+".allowed_sources", "%v", err)
 		}
+		if app.SkipCheckURL != "" && app.SkipCheckKey == "" {
+			// bootstrap keeps the key the database holds, which config dump
+			// leaves out: the write says whether there is one.
+			app.SkipCheckKey = strings.Repeat("0", 64)
+		}
 		app.Check(in(path))
+		skipCheck[a.ID] = a.SkipCheckURL != ""
 		for _, k := range appKeys {
 			if _, ok := a.Options.keys[k]; ok {
 				fail(path+".options."+k, "is a key of the app, not an option")
@@ -307,6 +330,11 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 		path := fmt.Sprintf("dispatcher.flows[%d]", i)
 		unique(fail, path, f.ID, flows)
 		f.Flow().Check(in(path), func(id string) bool { return apps[id] })
+		for j, st := range f.Steps {
+			if st.SkipCheck && apps[st.AppID] && !skipCheck[st.AppID] {
+				fail(fmt.Sprintf("%s.steps[%d].skip_check", path, j), "app %s has no skip_check_url", st.AppID)
+			}
+		}
 	}
 
 	clients := map[string]bool{}
@@ -363,9 +391,14 @@ func (a SeedApp) App() (domain.App, error) {
 	if a.ReceiveClaims != nil {
 		claims = *a.ReceiveClaims
 	}
+	var signals []string
+	if len(a.SkipCheckSignals) > 0 {
+		signals = a.SkipCheckSignals
+	}
 	return domain.App{
 		ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
 		AuthMode: a.AuthMode, AllowedSources: sources, ClientCertFingerprint: a.ClientCertFingerprint, ReceiveClaims: claims,
+		SkipCheckURL: a.SkipCheckURL, SkipCheckKey: strings.TrimSpace(a.SkipCheckKey), SkipCheckSignals: signals,
 	}, err
 }
 
@@ -397,11 +430,14 @@ func (f SeedFlow) Flow() domain.Flow {
 	d := domain.Flow{
 		ID: f.ID, Title: f.Title, Description: f.Description, Enabled: f.Enabled == nil || *f.Enabled, ACR: f.ACR,
 	}
+	if len(f.SkipCheckAllowedACR) > 0 {
+		d.SkipCheckAllowedACR = f.SkipCheckAllowedACR
+	}
 	if len(f.IconURL) > 0 {
 		d.IconURL = f.IconURL
 	}
 	for _, s := range f.Steps {
-		d.Steps = append(d.Steps, domain.Step{AppID: s.AppID, Position: s.Position, SubjectCheck: cmp.Or(s.SubjectCheck, "none")})
+		d.Steps = append(d.Steps, domain.Step{AppID: s.AppID, Position: s.Position, SubjectCheck: cmp.Or(s.SubjectCheck, "none"), SkipCheck: s.SkipCheck})
 	}
 	slices.SortFunc(d.Steps, func(a, b domain.Step) int { return cmp.Compare(a.Position, b.Position) })
 	return d
