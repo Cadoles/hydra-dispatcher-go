@@ -2,6 +2,7 @@ package flow
 
 import (
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ type SkipCheckCall struct {
 	// login request.
 	Claims   map[string]any
 	DeviceAt int64
+	// Gen is the flow's generation: with the rest, what the answer is for.
+	Gen int64
 }
 
 // SkipCheckAnswer is the answer: Skip only from a valid response saying so.
@@ -35,6 +38,9 @@ type SkipCheckAnswer struct {
 	Result  string
 	Cause   string
 	Elapsed time.Duration
+	// Asked is the call answered: a flow read again in the same request
+	// (a write in conflict) takes the answer only for the same call (R50).
+	Asked SkipCheckCall
 }
 
 // The results of a pre-check (step_skips_total), and its event.
@@ -86,15 +92,18 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 	if reason := fresh(req.GetRequestUrl(), req.GetOidcContext().AcrValues, g.SkipCheckACR); reason != "" {
 		return refused(reason)
 	}
+	call := SkipCheckCall{K: k, App: step.App, Subject: g.Subject, Device: step.Device, ClientID: req.Client.GetClientId(), Flow: g.FlowID,
+		Claims: ReceivedClaims(g.PreviousClaims(k), app).values(), DeviceAt: g.DeviceAt, Gen: g.Gen}
 	a := r.Answers.SkipChecks[k]
-	if a == nil && len(r.Answers.SkipChecks) >= maxSkipChecks {
+	switch {
+	case a != nil && !reflect.DeepEqual(a.Asked, call):
+		// The flow read again is another one, or another subject, than the
+		// answer was for: the step runs, without a second call (R50, B1).
+		return refused("changed")
+	case a == nil && len(r.Answers.SkipChecks) >= maxSkipChecks:
 		return refused("chain")
-	}
-	if a == nil {
-		return false, &Outcome{Call: &Call{Op: SkipCheck, Gen: g.Gen, SkipCheck: &SkipCheckCall{
-			K: k, App: step.App, Subject: g.Subject, Device: step.Device, ClientID: req.Client.GetClientId(), Flow: g.FlowID,
-			Claims: ReceivedClaims(g.PreviousClaims(k), app).values(), DeviceAt: g.DeviceAt,
-		}}}, nil
+	case a == nil:
+		return false, &Outcome{Call: &Call{Op: SkipCheck, Gen: g.Gen, SkipCheck: &call}}, nil
 	}
 	rep := Report{Event: eventSkipCheck, App: step.App, Result: a.Result, Reason: a.Cause, Elapsed: a.Elapsed}
 	if !a.Skip {

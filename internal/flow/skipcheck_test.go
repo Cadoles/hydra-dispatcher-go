@@ -15,17 +15,28 @@ import (
 	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
-// fakeChecker answers the pre-checks as said, by app, and keeps the calls.
+// fakeChecker answers the pre-checks as said, by app, or by answer when
+// set, and keeps the calls; during runs before its first answer, as another
+// request of the browser would meanwhile.
 type fakeChecker struct {
-	mu    sync.Mutex
-	says  map[string]SkipCheckAnswer
-	calls []SkipCheckCall
+	mu     sync.Mutex
+	says   map[string]SkipCheckAnswer
+	answer func(SkipCheckCall) SkipCheckAnswer
+	during func()
+	calls  []SkipCheckCall
 }
 
 func (c *fakeChecker) Check(_ context.Context, call SkipCheckCall) SkipCheckAnswer {
+	if during := c.during; during != nil {
+		c.during = nil
+		during()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, call)
+	if c.answer != nil {
+		return c.answer(call)
+	}
 	return c.says[call.App]
 }
 
@@ -53,6 +64,8 @@ func skipWorld(t *testing.T, says map[string]SkipCheckAnswer) (*world, *fakeChec
 	flows := append(testFlows(),
 		store.Flow{ID: "sql-2fa", Enabled: true, ACR: "loa3", SkipCheckAllowedACR: []string{"loa2"}, Steps: []store.Step{
 			{AppID: "sql", Position: 1, SubjectCheck: "none"}, {AppID: "2fa", Position: 2, SubjectCheck: "equal", SkipCheck: true}}},
+		store.Flow{ID: "sql-oidc", Enabled: true, Steps: []store.Step{
+			{AppID: "sql", Position: 1, SubjectCheck: "none"}, {AppID: "oidc", Position: 2, SubjectCheck: "equal", SkipCheck: true}}},
 		store.Flow{ID: "sql-2fa-oidc", Enabled: true, Steps: []store.Step{
 			{AppID: "sql", Position: 1, SubjectCheck: "none"}, {AppID: "2fa", Position: 2, SubjectCheck: "equal", SkipCheck: true},
 			{AppID: "oidc", Position: 3, SubjectCheck: "equal", SkipCheck: true}}})
@@ -284,4 +297,39 @@ func logLine(t *testing.T, w *world, msg string) map[string]any {
 	}
 	t.Fatalf("no %s in %s", msg, w.logs.String())
 	return nil
+}
+
+// R50, B1: an answer is for the call it was asked for. During the pre-check
+// of 2fa for alice, the same browser goes back to the choice and plays sql
+// again, as bob, or into another flow whose second step is oidc; the write
+// of the first request conflicts, the flow is read again: the answer for
+// alice's 2fa skips nothing there, the step runs, no second call.
+func TestSkipCheckStaleAnswer(t *testing.T) {
+	for _, tt := range []struct{ flow, subject, app string }{
+		{"sql-2fa-oidc", "bob", "2fa"},
+		{"sql-oidc", "alice", "oidc"},
+	} {
+		w, c := skipWorld(t, nil)
+		c.answer = func(call SkipCheckCall) SkipCheckAnswer {
+			if call.App == "2fa" && call.Subject == "alice" {
+				return SkipCheckAnswer{Skip: true, Result: SkipSkipped}
+			}
+			return SkipCheckAnswer{Result: SkipDeclined}
+		}
+		c.during = func() {
+			step := w.handle(Choose{FlowID: tt.flow, LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true, Device: testDevice})
+			w.app(t, "sql", step, tt.subject, `{"email":"`+tt.subject+`@example.org"}`)
+		}
+		r := throughSQL(t, w, "sql-2fa-oidc", testDevice)
+		f := w.stored()
+		if f.FlowID != tt.flow || f.Subject != tt.subject || f.Current != 2 || f.Steps[1].Skipped || f.Sent != nil {
+			t.Errorf("%s: flow %s, subject %s, current %d, skipped %v", tt.flow, f.FlowID, f.Subject, f.Current, f.Steps[1].Skipped)
+		}
+		if !strings.HasPrefix(r.Response.URL, "http://"+tt.app+".hydra.test/login?") || w.hydra.accepted != nil {
+			t.Errorf("%s: %+v", tt.flow, r.Response)
+		}
+		if reps := reportsOf(r, eventSkipCheck); len(reps) != 1 || reps[0].Result != SkipRefused || reps[0].Reason != "changed" {
+			t.Errorf("%s: reports %+v", tt.flow, reps)
+		}
+	}
 }

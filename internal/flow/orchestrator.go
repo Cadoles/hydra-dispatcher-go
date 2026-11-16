@@ -605,6 +605,7 @@ func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
 		if o.SkipCheck != nil {
 			answer = o.SkipCheck.Check(ctx, *c.SkipCheck)
 		}
+		answer.Asked = *c.SkipCheck
 		if a.SkipChecks == nil {
 			a.SkipChecks = map[int]*SkipCheckAnswer{}
 		}
