@@ -20,7 +20,9 @@ const emptySteps = 3
 // flowForm is the form of a flow as it was typed.
 type flowForm struct {
 	ID, ACR, Version string
-	Enabled          bool
+	// AllowedACR are the skip_check_allowed_acr, one per line.
+	AllowedACR string
+	Enabled    bool
 	// Texts are by locale: supported_locales, then those the flow holds
 	// besides, for a save to lose none.
 	Texts []flowText
@@ -31,8 +33,8 @@ type flowForm struct {
 type flowText struct{ Locale, Title, Description, IconURL string }
 
 // stepRow is a step as the form shows it: Check is none, equal or claim, the
-// name of the claim apart.
-type stepRow struct{ App, Position, Check, Claim string }
+// name of the claim apart; Skip is "1" when the step asks for its pre-check.
+type stepRow struct{ App, Position, Check, Claim, Skip string }
 
 // locales are those of the texts of a flow: supported, then the others of the
 // flow, in their order.
@@ -51,13 +53,16 @@ func locales(supported []string, f store.Flow) []string {
 }
 
 func flowFormOf(f store.Flow, supported []string) flowForm {
-	form := flowForm{ID: f.ID, ACR: f.ACR, Enabled: f.Enabled, Version: version(f)}
+	form := flowForm{ID: f.ID, ACR: f.ACR, Enabled: f.Enabled, Version: version(f), AllowedACR: strings.Join(f.SkipCheckAllowedACR, "\n")}
 	for _, l := range locales(supported, f) {
 		form.Texts = append(form.Texts, flowText{Locale: l, Title: f.Title[l], Description: f.Description[l], IconURL: f.IconURL[l]})
 	}
 	steps := slices.SortedFunc(slices.Values(f.Steps), func(a, b store.Step) int { return cmp.Compare(a.Position, b.Position) })
 	for _, s := range steps {
 		row := stepRow{App: s.AppID, Position: strconv.Itoa(s.Position), Check: s.SubjectCheck}
+		if s.SkipCheck {
+			row.Skip = "1"
+		}
 		if name, ok := strings.CutPrefix(s.SubjectCheck, "claim:"); ok {
 			row.Check, row.Claim = "claim", name
 		}
@@ -85,12 +90,14 @@ func readFlowForm(r *http.Request) flowForm {
 		}
 		return ""
 	}
-	f := flowForm{ID: v("id"), ACR: v("acr"), Version: v("version"), Enabled: r.PostFormValue("enabled") != ""}
+	f := flowForm{ID: v("id"), ACR: v("acr"), Version: v("version"), Enabled: r.PostFormValue("enabled") != "",
+		AllowedACR: strings.TrimSpace(lf(r.PostFormValue("skip_check_allowed_acr")))}
 	for i, l := range r.PostForm["locale"] {
 		f.Texts = append(f.Texts, flowText{Locale: l, Title: at("title", i), Description: at("description", i), IconURL: at("icon_url", i)})
 	}
 	for i := range r.PostForm["step_app"] {
-		row := stepRow{App: at("step_app", i), Position: at("step_position", i), Check: at("step_check", i), Claim: at("step_claim", i)}
+		row := stepRow{App: at("step_app", i), Position: at("step_position", i), Check: at("step_check", i), Claim: at("step_claim", i),
+			Skip: at("step_skip", i)}
 		if row.App != "" {
 			f.Steps = append(f.Steps, row)
 		}
@@ -102,6 +109,9 @@ func readFlowForm(r *http.Request) flowForm {
 // a position takes the one after the highest, in the order of the form.
 func (f flowForm) flow() (store.Flow, fieldErrors) {
 	fl := store.Flow{ID: f.ID, ACR: f.ACR, Enabled: f.Enabled, Title: map[string]string{}, Description: map[string]string{}}
+	if acr := lines(f.AllowedACR); len(acr) > 0 {
+		fl.SkipCheckAllowedACR = acr
+	}
 	for _, t := range f.Texts {
 		for _, x := range []struct {
 			into  *map[string]string
@@ -141,7 +151,7 @@ func (f flowForm) flow() (store.Flow, fieldErrors) {
 		if check == "claim" {
 			check = "claim:" + row.Claim
 		}
-		fl.Steps = append(fl.Steps, store.Step{AppID: row.App, Position: positions[i], SubjectCheck: check})
+		fl.Steps = append(fl.Steps, store.Step{AppID: row.App, Position: positions[i], SubjectCheck: check, SkipCheck: row.Skip == "1"})
 	}
 	if len(errs) > 0 {
 		return fl, errs
@@ -152,7 +162,7 @@ func (f flowForm) flow() (store.Flow, fieldErrors) {
 // flowFields are the fields of the form of a flow, its rows of steps
 // included.
 func (f flowForm) fields() []string {
-	fields := []string{"id", "title", "description", "icon_url", "enabled", "acr", "steps"}
+	fields := []string{"id", "title", "description", "icon_url", "enabled", "acr", "skip_check_allowed_acr", "steps"}
 	for i := range f.Steps {
 		fields = append(fields, fmt.Sprintf("steps[%d]", i))
 	}
@@ -168,6 +178,7 @@ func flowChanges(a, b store.Flow) []string {
 	c.add("icon_url", !maps.Equal(a.IconURL, b.IconURL))
 	c.add("enabled", a.Enabled != b.Enabled)
 	c.add("acr", a.ACR != b.ACR)
+	c.add("skip_check_allowed_acr", !slices.Equal(a.SkipCheckAllowedACR, b.SkipCheckAllowedACR))
 	byPosition := func(s []store.Step) []store.Step {
 		return slices.SortedFunc(slices.Values(s), func(x, y store.Step) int { return cmp.Compare(x.Position, y.Position) })
 	}

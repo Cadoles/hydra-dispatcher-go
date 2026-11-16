@@ -47,8 +47,9 @@ type App struct {
 	// step, phase 4); "" leaves the app out of it.
 	SkipCheckURL string
 	// SkipCheckKey signs those requests, as webhooks are signed: 32 bytes, in
-	// 64 hex characters or base64 (ParseKey). The database holds it encrypted.
-	SkipCheckKey string
+	// 64 hex characters or base64 (ParseKey). The database holds it encrypted;
+	// no JSON of an app carries it, a digest of a form's version included.
+	SkipCheckKey string `json:"-"`
 	// SkipCheckSignals are the signals of the browser the app receives with
 	// them, of SkipCheckSignals: none when empty.
 	SkipCheckSignals []string

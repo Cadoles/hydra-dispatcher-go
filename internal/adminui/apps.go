@@ -1,6 +1,8 @@
 package adminui
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
@@ -19,6 +21,56 @@ type appForm struct {
 	Version string
 	// AllClaims is a ReceiveClaims of nil: every claim.
 	AllClaims bool
+	// The pre-check of a step (phase 4). SkipCheckKey is the key typed, never
+	// shown again; KeyGenerate asks for a new one, shown once; KeySet tells
+	// whether the app holds one.
+	SkipCheckURL, SkipCheckKey string
+	SkipCheckSignals           []string
+	KeyGenerate, KeySet        bool
+}
+
+// signalBox is a box of a signal of the browser on the form of an app.
+type signalBox struct {
+	Name, Label string
+	Checked     bool
+}
+
+// signalLabels say what each signal gives the app.
+var signalLabels = map[string]string{
+	"ip": "its address, truncated (/24, /48)", "full_ip": "its whole address", "user_agent": "its User-Agent",
+	"client_hints": "its client hints (Sec-CH-UA, -Platform, -Mobile)", "accept_language": "its Accept-Language",
+	"device_age": "the age of the device cookie",
+}
+
+// Signals are the boxes of the signals: those the domain knows, in its order,
+// then those the app holds besides, for a save to lose none.
+func (f appForm) Signals() []signalBox {
+	var boxes []signalBox
+	for _, s := range domain.SkipCheckSignals {
+		boxes = append(boxes, signalBox{Name: s, Label: signalLabels[s], Checked: slices.Contains(f.SkipCheckSignals, s)})
+	}
+	for _, s := range f.SkipCheckSignals {
+		if !slices.Contains(domain.SkipCheckSignals, s) {
+			boxes = append(boxes, signalBox{Name: s, Label: s, Checked: true})
+		}
+	}
+	return boxes
+}
+
+// appVersion is the version of a: whether it holds a key, never the key
+// (revue R42).
+func appVersion(a store.App) string {
+	return version(struct {
+		App    store.App
+		KeySet bool
+	}{a, a.SkipCheckKey != ""})
+}
+
+// newSkipCheckKey makes a key of the pre-check: 32 random bytes, in base64.
+func newSkipCheckKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b) // crypto/rand never fails
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 func appFormOf(a store.App) appForm {
@@ -28,14 +80,17 @@ func appFormOf(a store.App) appForm {
 	}
 	return appForm{ID: a.ID, LoginURL: a.LoginURL, ConsentURL: a.ConsentURL, LogoutURL: a.LogoutURL, Method: a.Method,
 		AuthMode: a.AuthMode, AllowedSources: strings.Join(sources, "\n"), Fingerprint: a.ClientCertFingerprint,
-		Claims: strings.Join(a.ReceiveClaims, "\n"), AllClaims: a.ReceiveClaims == nil, Version: version(a)}
+		Claims: strings.Join(a.ReceiveClaims, "\n"), AllClaims: a.ReceiveClaims == nil, Version: appVersion(a),
+		SkipCheckURL: a.SkipCheckURL, SkipCheckSignals: a.SkipCheckSignals, KeySet: a.SkipCheckKey != ""}
 }
 
 func readAppForm(r *http.Request) appForm {
 	v := func(name string) string { return strings.TrimSpace(r.PostFormValue(name)) }
 	return appForm{ID: v("id"), LoginURL: v("login_url"), ConsentURL: v("consent_url"), LogoutURL: v("logout_url"),
 		Method: v("method"), AuthMode: v("auth_mode"), AllowedSources: v("allowed_sources"), Fingerprint: v("client_cert_fingerprint"),
-		Claims: v("receive_claims"), AllClaims: r.PostFormValue("receive_all_claims") != "", Version: v("version")}
+		Claims: v("receive_claims"), AllClaims: r.PostFormValue("receive_all_claims") != "", Version: v("version"),
+		SkipCheckURL: v("skip_check_url"), SkipCheckKey: v("skip_check_key"), SkipCheckSignals: r.PostForm["skip_check_signals"],
+		KeyGenerate: r.PostFormValue("skip_check_key_generate") != ""}
 }
 
 // app is the app of the form, or what cannot be read of it. The field of the
@@ -57,13 +112,27 @@ func (f appForm) app() (store.App, fieldErrors) {
 	if !f.AllClaims {
 		a.ReceiveClaims = append([]string{}, lines(f.Claims)...)
 	}
+	// The URL is the switch of the pre-check: without it, the signals go; a
+	// key typed or asked for stays, for the domain to refuse it.
+	a.SkipCheckURL, a.SkipCheckKey = f.SkipCheckURL, f.SkipCheckKey
+	if f.SkipCheckURL != "" && len(f.SkipCheckSignals) > 0 {
+		a.SkipCheckSignals = slices.Clone(f.SkipCheckSignals)
+	}
+	switch {
+	case f.KeyGenerate && f.SkipCheckKey != "":
+		return a, fieldErrors{"skip_check_key": {"type a key or make one, not both"}}
+	case f.KeyGenerate && f.SkipCheckURL == "":
+		return a, fieldErrors{"skip_check_key": {"only applies with a skip_check_url"}}
+	case f.KeyGenerate:
+		a.SkipCheckKey = newSkipCheckKey()
+	}
 	return a, nil
 }
 
 // appFields are the fields of the form of an app, by their names in the seed
 // and in the violations of the store.
 var appFields = []string{"id", "login_url", "consent_url", "logout_url", "method", "auth_mode", "allowed_sources",
-	"client_cert_fingerprint", "receive_claims"}
+	"client_cert_fingerprint", "receive_claims", "skip_check_url", "skip_check_key", "skip_check_signals"}
 
 // appChanges names the fields of b that differ from a, by their names in the
 // seed.
@@ -77,6 +146,9 @@ func appChanges(a, b store.App) []string {
 	c.add("allowed_sources", !slices.Equal(a.AllowedSources, b.AllowedSources))
 	c.add("client_cert_fingerprint", a.ClientCertFingerprint != b.ClientCertFingerprint)
 	c.add("receive_claims", !slices.Equal(a.ReceiveClaims, b.ReceiveClaims) || (a.ReceiveClaims == nil) != (b.ReceiveClaims == nil))
+	c.add("skip_check_url", a.SkipCheckURL != b.SkipCheckURL)
+	c.add("skip_check_key", a.SkipCheckKey != b.SkipCheckKey)
+	c.add("skip_check_signals", !slices.Equal(a.SkipCheckSignals, b.SkipCheckSignals))
 	return c
 }
 
@@ -160,6 +232,10 @@ func (ui *UI) createApp(w http.ResponseWriter, r *http.Request, s *current) {
 		return
 	}
 	ui.wrote(r.Context(), s, "apps", a.ID, "create", append([]string{"id"}, appChanges(store.App{}, a)...))
+	if f.KeyGenerate {
+		ui.handOver(w, r, s, "apps", secretPage{ID: a.ID, Secret: a.SkipCheckKey, Created: true, Key: true, What: "app", Back: ui.appPath(a.ID)})
+		return
+	}
 	http.Redirect(w, r, ui.appPath(a.ID)+"?done=created", http.StatusSeeOther)
 }
 
@@ -177,7 +253,7 @@ func (ui *UI) updateApp(w http.ResponseWriter, r *http.Request, s *current) {
 	}
 	var fields []string
 	err := ui.o.Writer.UpdateApp(r.Context(), author(s.account.Username), id, func(old *store.App) error {
-		if v := version(*old); v != f.Version {
+		if v := appVersion(*old); v != f.Version {
 			f.Version = v // saved again, the form writes over
 			return errChanged
 		}
@@ -188,6 +264,15 @@ func (ui *UI) updateApp(w http.ResponseWriter, r *http.Request, s *current) {
 		}
 		if !f.AllClaims && sentBack(old.ReceiveClaims, f.Claims) {
 			a.ReceiveClaims = old.ReceiveClaims
+		}
+		// The key, never shown, stays unless typed or made again; the
+		// signals, boxes in the domain's order, keep the order held.
+		a.SkipCheckURL = keptLine(old.SkipCheckURL, a.SkipCheckURL)
+		if a.SkipCheckURL != "" && a.SkipCheckKey == "" {
+			a.SkipCheckKey = old.SkipCheckKey
+		}
+		if len(a.SkipCheckSignals) == len(old.SkipCheckSignals) && !slices.ContainsFunc(a.SkipCheckSignals, func(x string) bool { return !slices.Contains(old.SkipCheckSignals, x) }) {
+			a.SkipCheckSignals = old.SkipCheckSignals
 		}
 		if fields = appChanges(*old, a); len(fields) == 0 {
 			return errUnchanged
@@ -204,6 +289,10 @@ func (ui *UI) updateApp(w http.ResponseWriter, r *http.Request, s *current) {
 		return
 	}
 	ui.wrote(r.Context(), s, "apps", id, "update", fields)
+	if f.KeyGenerate {
+		ui.handOver(w, r, s, "apps", secretPage{ID: id, Secret: a.SkipCheckKey, Key: true, What: "app", Back: ui.appPath(id)})
+		return
+	}
 	http.Redirect(w, r, ui.appPath(id)+"?done=saved", http.StatusSeeOther)
 }
 

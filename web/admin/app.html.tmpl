@@ -63,6 +63,28 @@ Receives every claim of the previous steps
 {{template "errors" .Errors.For "receive_claims"}}
 <small>One per line; none when empty.</small>
 </label>
+<h2>Pre-check of a step</h2>
+<p><small>Before a step of this app, the dispatcher may ask it, server to server, whether the user is already known on this device, and skip the step. Empty URL: none, the key and the signals dropped with it.</small></p>
+<label>Pre-check URL
+<input type="url" name="skip_check_url" value="{{.Form.SkipCheckURL}}"{{if .Errors.For "skip_check_url"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "skip_check_url"}}
+</label>
+<label>Key
+<input type="password" name="skip_check_key" autocomplete="off" spellcheck="false"{{if .Errors.For "skip_check_key"}} aria-invalid="true"{{end}}>
+{{template "errors" .Errors.For "skip_check_key"}}
+<small>{{if .Form.KeySet}}A key is held: empty keeps it.{{else}}No key is held.{{end}} It signs the requests, as a webhook's: 32 bytes, in 64 hex characters or base64. It is never shown again.</small>
+</label>
+<label>
+<input type="checkbox" name="skip_check_key_generate" value="1"{{if .Form.KeyGenerate}} checked{{end}}>
+Make a new key, shown once, to copy into the app
+</label>
+<fieldset>
+<legend>Signals the app receives</legend>
+{{- range .Form.Signals}}
+<label><input type="checkbox" name="skip_check_signals" value="{{.Name}}"{{if .Checked}} checked{{end}}> {{.Label}}</label>
+{{- end}}
+{{template "errors" .Errors.For "skip_check_signals"}}
+</fieldset>
 </fieldset>
 {{- if $.CanWrite}}
 <button type="submit">{{if .New}}Create{{else}}Save{{end}}</button>

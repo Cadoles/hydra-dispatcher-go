@@ -57,6 +57,9 @@ type secretPage struct {
 	What    string `json:"what"`
 	Back    string `json:"back"`
 	Created bool   `json:"created"`
+	// Key is the key of the pre-check of an app, which the database holds
+	// encrypted, not as a hash.
+	Key bool `json:"key"`
 }
 
 // boxes are the scopes of the form: those of the dispatcher, then those the

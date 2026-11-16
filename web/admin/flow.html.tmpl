@@ -26,6 +26,11 @@ Enabled: offered to the users
 {{template "errors" .Errors.For "acr"}}
 <small>The acr Hydra receives at the end of the flow; empty, none.</small>
 </label>
+<label>ACR under which a step may be skipped
+<textarea name="skip_check_allowed_acr" rows="2"{{if .Errors.For "skip_check_allowed_acr"}} aria-invalid="true"{{end}}>{{.Form.AllowedACR}}</textarea>
+{{template "errors" .Errors.For "skip_check_allowed_acr"}}
+<small>One per line. A client asking acr_values of none of these runs every step; empty, no client is refused the pre-check for its acr_values.</small>
+</label>
 <h2>Texts</h2>
 {{- with .Errors.For "title"}}<p role="alert"><strong>Title: {{range $i, $m := .}}{{if $i}} {{end}}{{$m}}.{{end}}</strong></p>{{end}}
 {{- with .Errors.For "description"}}<p role="alert"><strong>Description: {{range $i, $m := .}}{{if $i}} {{end}}{{$m}}.{{end}}</strong></p>{{end}}
@@ -42,10 +47,10 @@ Enabled: offered to the users
 {{- end}}
 <h2>Steps</h2>
 {{template "errors" .Errors.For "steps"}}
-<p><small>In the order of their positions; an app left at — is no step. {{if $.CanWrite}}Drag the rows to order them, or type their positions.{{end}}</small></p>
+<p><small>In the order of their positions; an app left at — is no step. {{if $.CanWrite}}Drag the rows to order them, or type their positions.{{end}} Pre-check: before the step, the dispatcher asks its app whether it may be skipped on this device; never on the first step, and only with an app that has a pre-check URL.</small></p>
 <div class="overflow-auto">
 <table id="steps">
-<thead><tr><th scope="col"></th><th scope="col">App</th><th scope="col">Position</th><th scope="col">Subject check</th><th scope="col">Claim</th></tr></thead>
+<thead><tr><th scope="col"></th><th scope="col">App</th><th scope="col">Position</th><th scope="col">Subject check</th><th scope="col">Claim</th><th scope="col">Pre-check</th></tr></thead>
 <tbody>
 {{- range $i, $row := .Rows}}
 <tr>
@@ -64,6 +69,10 @@ Enabled: offered to the users
 <option value="claim"{{if eq $row.Check "claim"}} selected{{end}}>equal to a claim of the previous steps</option>
 </select></td>
 <td><input name="step_claim" value="{{$row.Claim}}" aria-label="Claim"></td>
+<td><select name="step_skip" aria-label="Pre-check">
+<option value=""{{if ne $row.Skip "1"}} selected{{end}}>no</option>
+<option value="1"{{if eq $row.Skip "1"}} selected{{end}}>ask the app</option>
+</select></td>
 </tr>
 {{- end}}
 </tbody>
