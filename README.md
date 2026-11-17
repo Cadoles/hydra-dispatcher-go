@@ -10,8 +10,10 @@ Go rewrite of the Symfony dispatcher (repository `hydra-dispatcher`), released
 and the delivery are under way (phase 5; plan and journal in `hydra-dev/conception`).
 
 **Documentation**, in French, in `docs/`: `comprendre.md`, what the dispatcher is
-for and how a sign-in goes through it, with a glossary; `themes.md`, the themes of
-its pages. To come: delivering, configuring and operating it.
+for and how a sign-in goes through it, with a glossary; `livrer.md`, what to deploy,
+what it needs, how to install, check, switch over from Symfony and update it;
+`configurer.md`, the reference of `dispatcher.yaml`; `themes.md`, the themes of its
+pages. To come: operating it and rotating its keys.
 
 The binary serves the pages (choice of
 the flow, consent, errors, logout with its confirmation), the emulated admin API
