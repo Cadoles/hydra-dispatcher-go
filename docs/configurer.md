@@ -214,7 +214,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `login_url`, `consent_url` | où le dispatcher envoie le navigateur pour le login et le consent de l'étape |
 | `logout_url` | où il l'envoie à la déconnexion ; sans elle, l'app n'est pas prévenue |
 | `method` | la valeur d'`amr` que l'app apporte (`pwd`, `otp`, `oidc`…) |
-| `auth_mode` | comment l'app est reconnue sur l'API émulée : `network` (par défaut), ou `mtls` |
+| `auth_mode` | comment l'app est reconnue sur l'API émulée : `network`, par ses adresses (par défaut). `mtls`, par son certificat client, est accepté mais pas encore servi : le dispatcher ne sert pas de TLS, et refuse tous les appels d'une telle app (un avertissement le dit au démarrage) |
 | `allowed_sources` | en `network`, les adresses de l'app ; vides, celles de `security.emulated_api_authorized_hosts` |
 | `client_cert_fingerprint` | en `mtls`, l'empreinte SHA-256 de son certificat |
 | `receive_claims` | les claims des étapes précédentes que l'app reçoit ; sans la clé, tous pour une app nouvelle ; `[]`, aucun ; `~`, tous |
@@ -227,7 +227,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `id` | l'identifiant |
 | `enabled` | vrai par défaut ; faux, le flow n'est pas offert |
 | `title`, `description`, `icon_url` | par langue (`{ fr: …, en: … }`) ; l'icône relative se cherche dans le thème |
-| `acr` | l'acr envoyé à Hydra à la fin ; un client qui le demande par `acr_values` se voit imposer ce flow |
+| `acr` | l'acr envoyé à Hydra à la fin ; un client qui envoie des `acr_values` ne se voit offrir que les flows dont l'acr y figure (aucun : le login est rejeté). Pour imposer un flow, le client met `urn:hydra-dispatcher:preferred-app:<id du flow>` dans ses `acr_values` |
 | `steps` | les étapes, chacune `{ id: <app>, order: <position> }`, et éventuellement `subject_check` (`none` par défaut, `equal`, ou `claim:<nom>`) et `skip_check: true` (jamais sur la première étape) |
 | `skip_check_allowed_acr` | les `acr_values` sous lesquelles une étape peut être sautée |
 

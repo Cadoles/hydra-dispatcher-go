@@ -12,9 +12,9 @@ Il remplace le dispatcher Symfony (`Cadoles/hydra-dispatcher`) en gardant ses co
 
 ## Flows, apps, étapes
 
-- Une **app** est une login app déclarée au dispatcher : son `login_url`, son `consent_url`, son `logout_url` si elle en a une, sa *méthode* (la valeur d'*amr* qu'elle apporte, `pwd`, `otp`…), et ce qui l'identifie quand elle appelle l'API émulée (ses adresses réseau, ou son certificat client).
+- Une **app** est une login app déclarée au dispatcher : son `login_url`, son `consent_url`, son `logout_url` si elle en a une, sa *méthode* (la valeur d'*amr* qu'elle apporte, `pwd`, `otp`…), et ce qui l'identifie quand elle appelle l'API émulée (ses adresses réseau).
 - Un **flow** est une suite ordonnée d'étapes, avec un titre, une description et une icône dans chaque langue, affichés sur la page de choix ; il peut déclarer son *acr*.
-- Une **étape** est une app à une position dans un flow. Elle peut exiger que le *subject* qu'elle accepte soit celui de la première étape (`subject_check: equal`), ou la valeur d'un claim d'une étape précédente (`claim:email`) : une étape ne peut pas authentifier quelqu'un d'autre que celui que la première a reconnu.
+- Une **étape** est une app à une position dans un flow. Elle peut exiger que le *subject* qu'elle accepte soit celui de la première étape (`subject_check: equal`), ou la valeur d'un claim d'une étape précédente (`claim:email`) : la règle posée, une étape ne peut pas authentifier quelqu'un d'autre que celui que la première a reconnu. Par défaut, il n'y en a aucune (`none`). Le subject final est toujours celui de la première étape.
 
 La même app peut servir dans plusieurs flows. Par exemple, le flow `sql-2fa` enchaîne `sql` (le mot de passe), `2fa` (un code par courriel) et `charter` (la charte) ; le flow `france-connect` enchaîne `france-connect` et `charter`.
 
@@ -36,11 +36,11 @@ sequenceDiagram
   D->>N: redirige vers l'app, ?login_challenge=c1
   N->>A: GET login_url
   A->>D: lit la login request c1 (API émulée)
-  A->>D: accepte le login c1 (subject, context)
+  A->>D: accepte le login c1 (subject)
   A->>N: redirige vers le dispatcher
   N->>D: GET /oauth2/auth?ref=…
   D->>N: redirige vers l'app, ?consent_challenge=c1'
-  A->>D: lit la consent request, accepte le consent (claims)
+  A->>D: lit la consent request, accepte le consent (claims, context)
   A->>N: redirige vers le dispatcher
   Note over N,A: … de même pour chaque étape du flow
   D->>H: accepte le login L (subject, acr, amr, context)
@@ -54,20 +54,33 @@ sequenceDiagram
 2. Le dispatcher lit la login request (sur l'admin de Hydra, ou en la déchiffrant lui-même avec Hydra 2.2), crée l'état de la connexion, et affiche la **page de choix** : les flows que ce client peut utiliser.
 3. L'usager choisit. Le dispatcher envoie le navigateur vers la première app, avec un challenge à lui, propre à cette étape : jamais celui de Hydra.
 4. L'app joue son protocole habituel, contre l'API émulée : elle lit la login request, authentifie l'usager, accepte le login ; puis, de retour par le dispatcher, elle lit la consent request et accepte le consent, avec les claims qu'elle fournit (une adresse, un nom…).
-5. Le dispatcher passe à l'étape suivante. Il donne à chaque app les claims des étapes précédentes (`x_dispatcher_claims`), filtrés par ce qu'elle déclare recevoir (`receive_claims`) : c'est ainsi que l'app du second facteur connaît l'adresse à qui envoyer le code.
-6. Toutes les étapes faites, le dispatcher accepte le login auprès de Hydra : le subject de la première étape, l'acr du flow, l'amr (la méthode de chaque étape), le contexte des étapes. Le *webhook* de login, s'il est configuré, passe juste avant.
-7. Hydra renvoie vers l'URL de consent, le dispatcher. Il accepte le consent avec les scopes demandés et les claims des étapes fusionnés (le dernier gagnant), après le webhook de consent ; ou il affiche d'abord un écran de consentement, selon la configuration et le client.
+5. Le dispatcher passe à l'étape suivante. Il donne à chaque app les claims `id_token` des étapes précédentes (`x_dispatcher_claims`), filtrés par ce qu'elle déclare recevoir (`receive_claims` ; tous si l'app n'en déclare pas) : c'est ainsi que l'app du second facteur connaît l'adresse à qui envoyer le code.
+6. Toutes les étapes faites, le dispatcher accepte le login auprès de Hydra : le subject de la première étape, l'acr du flow, l'amr (la méthode de chaque étape), et le *contexte* que chaque étape a donné à son accept de consent, fusionné (le dernier gagnant). Le *webhook* de login, s'il est configuré, passe juste avant.
+7. Hydra renvoie vers l'URL de consent, le dispatcher. Il accepte le consent avec les scopes demandés et les claims des étapes fusionnés (le dernier gagnant ; un `null` n'efface rien), après le webhook de consent ; ou il affiche d'abord un écran de consentement, selon la configuration et le client. Avec `consent.claims_filter: strict`, un claim qu'aucun scope accordé ne couvre n'est pas envoyé.
 8. Hydra délivre le code au client, qui l'échange contre ses jetons.
 
 L'usager peut revenir au choix à tout moment : une app peut afficher le lien que le dispatcher lui donne (`x_dispatcher_restart_url`), sauf quand le flow est imposé.
+
+### Ce qu'une login app doit faire
+
+Une app qui marche derrière Hydra marche derrière le dispatcher, à quelques points près :
+
+- son URL d'admin de Hydra pointe sur le dispatcher (chemins v2 `/admin/oauth2/auth/requests/…`, ou v1 sans `/admin`) ;
+- le challenge arrive dans la query (`login_challenge`, `consent_challenge`, `logout_challenge`) ; elle lit la demande, l'accepte ou la rejette, et envoie le navigateur vers le `redirect_to` de la réponse ;
+- `skip` vaut toujours `false` : le dispatcher a déjà traité le skip de Hydra ; après la première étape, `subject` est déjà rempli, avec celui de la première ;
+- un appel rejoué (un double envoi, un retour du navigateur) reçoit le même `redirect_to`, en 200 sur un accept, en 410 sur une lecture : à suivre comme une réponse normale ;
+- elle trouve les claims des étapes précédentes dans `x_dispatcher_claims`, et met les siens dans le `session.id_token` de son accept de consent ;
+- le `context` de son accept de login ne revient qu'à elle, dans sa consent request ; celui de son accept de consent part chez Hydra, fusionné avec ceux des autres étapes ;
+- si elle déclare un `logout_url`, elle y reçoit un `logout_challenge` à la déconnexion : elle lit la demande, l'accepte, et suit le `redirect_to`.
 
 ### Le choix du flow
 
 La page de choix n'offre que les flows activés que le client peut utiliser :
 
-- un client peut être restreint à certains flows (`metadata.dispatcher.flows` du client Hydra) ;
-- un client qui demande un niveau (`acr_values`) se voit imposer le flow qui déclare cet acr, sans page de choix ;
-- un seul flow possible est choisi d'office si `app_auto_select` est vrai ;
+- un client peut être restreint à certains flows (`metadata.dispatcher.flows` du client Hydra) ; s'il n'en reste aucun, le login est rejeté ;
+- un client qui demande un niveau (`acr_values`) ne se voit offrir que les flows dont l'acr y figure ; s'il en reste plusieurs, la page s'affiche ; s'il n'en reste aucun, le login est rejeté (`unmet_authentication_requirements`) ;
+- un client peut désigner un flow par la valeur `urn:hydra-dispatcher:preferred-app:<id du flow>` dans ses `acr_values` : ce flow est alors *imposé*, sans page, s'il fait partie des flows offerts ;
+- un seul flow possible est choisi d'office si `app_auto_select` est vrai ; il est imposé si c'est la restriction du client qui ne laisse que lui ;
 - le dernier flow choisi dans ce navigateur peut être présélectionné.
 
 La page, le consent, la confirmation de déconnexion et les erreurs sont les seules pages du dispatcher. Elles sont dans la langue de l'usager (le `ui_locales` du client, ou le choix fait sur la page) et peuvent porter un thème (voir `themes.md`).
@@ -76,26 +89,26 @@ La page, le consent, la confirmation de déconnexion et les erreurs sont les seu
 
 C'est l'API d'administration de Hydra, telle que les login apps l'appellent : lire, accepter ou rejeter une login request, une consent request, une logout request. Elle est servie sous les chemins de Hydra v2 (`/admin/oauth2/auth/requests/…`) et sous ceux de Hydra v1, sans `/admin`, que le dispatcher Symfony servait (dépréciés, gardés pour la migration). Ses réponses ont la forme de celles de Hydra, avec quelques membres de plus, préfixés `x_dispatcher_` (les claims des étapes précédentes, le lien de retour au choix, la valeur de l'appareil de la vérification préalable).
 
-Seules les apps déclarées y ont accès, chacune pour ses propres étapes : le dispatcher les reconnaît à leur adresse réseau, ou à leur certificat client. Une app ne voit jamais le challenge de Hydra, seulement ceux que le dispatcher lui émet.
+Seules les apps déclarées y ont accès, chacune pour ses propres étapes : le dispatcher les reconnaît à leur adresse réseau. (Un mode par certificat client, `auth_mode: mtls`, existe dans la configuration mais n'est pas encore servi : le dispatcher ne sert pas de TLS, et refuse tous les appels d'une app ainsi déclarée.) Une app ne voit jamais le challenge de Hydra, seulement ceux que le dispatcher lui émet.
 
 ## Ce que le dispatcher retient
 
 - **La configuration** (apps, flows, réglages, clients de l'API, comptes de l'admin, catalogue des scopes) vit dans une base **Postgres**. Le fichier `dispatcher.yaml` décrit l'infrastructure et une *graine* : la configuration initiale, que `bootstrap` écrit en base. Ensuite, l'admin la modifie en base : l'instance qui écrit l'applique aussitôt, les autres la relisent dans la minute.
 - **Les connexions en cours** vivent dans un store d'état : **Redis** (ou Dragonfly), ou la mémoire pour une instance seule. Une connexion y tient une clé, le temps du parcours.
-- **Le navigateur** porte quelques cookies scellés : la protection CSRF du parcours, la langue, la *mémoire du skip*, et l'appareil de la vérification préalable quand elle est active.
+- **Le navigateur** porte quelques cookies : scellés, la *mémoire du skip*, le dernier flow choisi et l'appareil de la vérification préalable quand elle est active ; en clair, la protection CSRF du parcours et la langue.
 
 Les instances sont donc interchangeables : on en met autant que la charge le demande, derrière un répartiteur, sans affinité de session.
 
 ## Le skip
 
-Une fois connecté, l'usager garde une session chez Hydra. À la connexion suivante, pour un autre client ou le même, Hydra le signale (`skip`) : il n'y a rien à redemander. Le dispatcher accepte alors directement, sans page ni app, en reprenant ce que la connexion précédente avait accepté : il le garde, chiffré, dans le cookie `dispatcher_remember`. Si ce cookie manque, ou ne correspond plus (une autre session, un flow changé, d'autres scopes), il refait le parcours, et vérifie à la fin que c'est bien le même subject que Hydra connaît.
+Une fois connecté, l'usager garde une session chez Hydra. À la connexion suivante, pour un autre client ou le même, Hydra le signale (`skip`) : il n'y a rien à redemander. Le dispatcher accepte alors directement, sans page de choix ni app (l'écran de consentement peut s'afficher, selon la configuration et le client), en reprenant ce que la connexion précédente avait accepté : il le garde, chiffré, dans le cookie `dispatcher_remember`. Si ce cookie manque, ou ne correspond plus (une autre session, un flow changé, d'autres scopes), il refait le parcours, et vérifie à la fin que c'est bien le même subject que Hydra connaît.
 
 ## La déconnexion
 
 Quand un client déconnecte l'usager, Hydra envoie le navigateur vers l'URL de logout, le dispatcher.
 
 1. Si la demande ne vient pas d'un client qui prouve qui il est (`id_token_hint`), le dispatcher demande d'abord confirmation : un autre site ne peut pas déconnecter l'usager à son insu.
-2. Il accepte la déconnexion auprès de Hydra, puis fait passer le navigateur par chaque app que la session a utilisée et qui déclare un `logout_url` : chacune ferme sa propre session et renvoie au dispatcher, qui passe à la suivante.
+2. Il accepte la déconnexion auprès de Hydra, puis fait passer le navigateur par chaque app que la session a utilisée et qui déclare un `logout_url` : chacune reçoit un `logout_challenge`, le lit et l'accepte sur l'API émulée, ferme sa propre session et suit le `redirect_to`, qui la renvoie au dispatcher ; il passe à la suivante. Sans trace des apps de la session (la mémoire du skip absente), il passe par toutes celles qui ont un `logout_url`, ou par aucune, selon `logout.propagate_without_record` ; une app qui déclare `receive_claims` reçoit alors un subject et un `sid` vides.
 3. Après la dernière, il renvoie le navigateur vers Hydra, qui termine la déconnexion et prévient les clients.
 
 C'est au mieux : une app qui ne répond pas arrête la chaîne côté navigateur ; la session de Hydra est alors supprimée à la prochaine connexion dans ce navigateur.
@@ -111,7 +124,7 @@ Une extension, désactivée par défaut. Avant une étape qui le demande (jamais
 - Le dispatcher pose dans le navigateur un cookie d'appareil, et donne à chaque app une valeur qui en est dérivée (`x_dispatcher_device`) : une app ne peut pas reconnaître l'appareil d'une autre.
 - Après un second facteur réussi, l'app retient cette valeur pour l'usager, le temps qu'elle choisit.
 - À la connexion suivante, le dispatcher lui demande, par un appel signé, si elle connaît ce couple ; elle répond par une réponse signée. Il ne demande pas si le client exige une authentification fraîche (`prompt=login`, `max_age`, un `acr_values` que le flow n'admet pas), et toute erreur, tout délai dépassé (300 ms), fait jouer l'étape normalement.
-- L'acceptation finale le dit au client : `x_dispatcher_skipped_steps` liste les étapes sautées.
+- Le contexte de l'accept de login le dit : `x_dispatcher_skipped_steps` liste les apps des étapes sautées. Les webhooks le reçoivent ; le client ne le voit pas, sauf si le webhook de consent en fait un claim.
 
 L'app de référence (`examples/skipcheck-app`) et hydra-passwordless l'implémentent ; le protocole est décrit dans le README de l'app de référence.
 
@@ -125,7 +138,7 @@ Toute modification est vérifiée avant d'être écrite (une étape sur une app 
 
 ## Ce qui se voit
 
-- `/health` (le processus répond) et `/ready` (Hydra, la base et Redis répondent) pour les sondes.
+- `/health` (le processus répond) et `/ready` (l'instance sert ; 503 seulement pendant son arrêt) pour les sondes. L'état de Hydra, de la base et de Redis est dans la réponse de `/ready` et dans la métrique `hydra_dispatcher_ready_check_up`, sans changer son code : une panne commune ne retire pas toutes les instances à la fois.
 - Des métriques Prometheus (`/metrics`), sur le port du service ou sur un port à part que l'ingress n'expose pas.
 - Trois journaux JSON, distingués par `log_type` : le service, les accès, l'audit (connexions réussies ou échouées, déconnexions, changements de configuration).
 - Des erreurs vers Sentry, des traces OpenTelemetry, si on les configure.
@@ -136,12 +149,13 @@ Toute modification est vérifiée avant d'être écrite (une étape sur une app 
 | Terme | Sens |
 | --- | --- |
 | **acr** | le niveau d'authentification annoncé au client ; celui du flow, ou, à défaut, le nombre d'étapes faites, plafonné à 2 |
-| **amr** | les méthodes d'authentification employées (`pwd`, `otp`…) ; la méthode de chaque app du flow |
+| **amr** | les méthodes d'authentification employées (`pwd`, `otp`…) ; la méthode de chaque app du flow, ou, avec `aggregate_amr_from_login_request`, l'amr que chaque app a envoyé |
 | **API émulée** | l'API d'administration de Hydra, servie par le dispatcher aux login apps |
 | **app** (login app) | une application qui authentifie l'usager pour une étape : un mot de passe, un code, un fournisseur externe |
 | **challenge** | l'identifiant d'une demande en cours (login, consent, logout) ; celui de Hydra pour le dispatcher, ceux du dispatcher pour les apps |
 | **claims** | les informations sur l'usager qui iront dans ses jetons (adresse, nom…), fournies par les apps à leur consent |
 | **client** | l'application qui demande les jetons à Hydra (le portail, un service partenaire) |
+| **contexte** (`context`) | un objet libre joint à un accept ; celui de l'accept de consent de chaque étape part chez Hydra, fusionné, et revient au webhook de consent ; celui de l'accept de login ne revient qu'à l'app elle-même |
 | **consent** | la seconde phase d'une connexion OAuth2 : les droits (scopes) accordés au client, et les claims qu'il reçoit |
 | **étape** | une app à sa position dans un flow |
 | **flow** | un mode de connexion : une suite d'étapes, offerte sur la page de choix |

@@ -99,7 +99,7 @@ Hors Kubernetes, le principe est le même : `migrate` et `bootstrap` avant chaqu
   L'admin API signe ses jetons avec une paire de clés (EC P-256, ou RSA) : `admin.api.private_key`.
 - **Le réseau** :
   - les adresses des reverse proxies devant le dispatcher (`server.trusted_proxies`), pour qu'il lise l'adresse réelle des navigateurs ;
-  - les réseaux d'où les login apps appellent l'API émulée (`security.emulated_api_authorized_hosts`), et l'adresse de chaque app, ou son certificat client.
+  - les réseaux d'où les login apps appellent l'API émulée (`security.emulated_api_authorized_hosts`), et les adresses de chaque app (`allowed_sources`).
 - **Les login apps**, configurées avec l'URL du dispatcher comme si c'était celle de l'admin de Hydra.
 
 ## Installer

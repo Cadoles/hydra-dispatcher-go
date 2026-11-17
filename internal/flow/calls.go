@@ -584,7 +584,8 @@ func (o Outcome) audited(d *Done) Outcome {
 }
 
 // withSkipped gives ctx the apps of the steps a pre-check skipped, for the
-// client and the webhook to tell a factor remembered from a factor typed
+// webhooks to tell a factor remembered from a factor typed (the client, only
+// through a claim the consent webhook makes of it)
 // (x_dispatcher_skipped_steps, phase 4), at the final accept and at the
 // accept of a skip (Q140); ctx as it is when none was.
 func withSkipped(ctx Object, apps []string) Object {
