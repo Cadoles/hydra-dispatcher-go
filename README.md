@@ -363,10 +363,12 @@ and a chain stopped at an app, passed by a new demand, cut by the next login, no
 by a preload of the login link, or left by the link of page E1003; what the apps answer
 to a challenge that is not theirs; a preload and a change of language on the logout's
 page; a subrequest of another site; `prompt=consent` accepted and refused; back to the
-choice; the pre-check of a step (`pre-check`, the Go dispatcher alone), on the flow
-`hydra-sql-remember` whose second step is the reference app below: the device
-remembered, the step skipped at the next login of the same device, run without the
-device cookie, under `prompt=login`, and once the device revoked. Start `make up-go` in
+choice; the pre-check of a step (the Go dispatcher alone): `pre-check` on the flow
+`hydra-sql-remember`, whose second step is the reference app below, and
+`pre-check-2fa` on `hydra-sql-2fa`, whose second factor is hydra-passwordless built
+from `../hydra-passwordless` with its pre-check: the device remembered, the step
+skipped at the next login of the same device, run under `prompt=login`, and run again
+once another device forgot them all. Start `make up-go` in
 `hydra-dev`, whose README sets the `*.hydra.test` names up, then:
 
 ```sh
