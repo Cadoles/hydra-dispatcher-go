@@ -8,14 +8,14 @@ La configuration tient dans un fichier YAML, `dispatcher.yaml` : d'abord l'**inf
 - **`${VAR}`** dans une valeur est remplacée par la variable d'environnement, vide si elle n'existe pas ; `${VAR:-défaut}` prend le défaut quand elle est absente ou vide. `$${` écrit un `${` littéral ; toute autre forme est une erreur. Une variable oubliée laisse donc la clé vide : refusée si la clé est requise, acceptée sinon.
 - **`DISPATCHER_<SECTION>_<CLÉ>`** remplace une clé de l'infrastructure, prioritaire sur le fichier : `DISPATCHER_SERVER_BASE_URL`, `DISPATCHER_OBSERVABILITY_METRICS_LISTEN`. Une liste s'y écrit séparée par des virgules, comme elle peut l'être dans le fichier. Ni la graine ni `ui.csp_extra` ne sont concernées.
 - **Les durées** s'écrivent comme en Go (`30m`, `1h30m`, `90s`) ou en secondes entières (`900`).
-- **Les secrets** peuvent se donner par un fichier : la clé suivie de `_file` (`cookie_key_file: /run/secrets/cookie_key`), jamais les deux. C'est préférable à une variable d'environnement, que tout programme du même utilisateur lit dans `/proc` ; le dispatcher signale au démarrage les secrets venus de l'environnement.
+- **Les secrets** peuvent se donner par un fichier : la clé suivie de `_file` (`cookie_key_file: /run/secrets/cookie_key`), jamais les deux. C'est préférable à une variable d'environnement, que tout programme du même utilisateur lit dans `/proc`. Le dispatcher le signale au démarrage quand un webhook est un programme local, en nommant les secrets venus de l'environnement.
 - **Au démarrage**, une erreur arrête le dispatcher avec le chemin de la clé fautive ; ce qui est accepté mais douteux est écrit au journal (`config.warning`).
 
 ## Ce qui n'a pas de défaut
 
 | Clé | Ce qu'elle dit |
 | --- | --- |
-| `server.base_url` | l'URL publique du dispatcher, son chemin compris (`https://exemple.fr/auth/dispatcher`) |
+| `server.base_url` | l'URL publique du dispatcher, son chemin compris (`https://exemple.fr/auth/dispatcher`) ; le dispatcher sert à la racine, le reverse proxy retire ce chemin |
 | `server.trusted_proxies` | les adresses des reverse proxies devant lui, `[]` si les navigateurs arrivent directement |
 | `hydra.admin_url` | l'admin API de Hydra (`http://hydra:4445`) |
 | `security.emulated_api_authorized_hosts` | les réseaux d'où les login apps appellent l'API émulée |
@@ -27,14 +27,16 @@ Un exemple minimal :
 
 ```yaml
 server:
-  base_url: https://exemple.fr/auth/dispatcher
+  base_url: https://exemple.fr/auth/dispatcher   # l'Ingress retire /auth/dispatcher
   cookie_path: /auth/dispatcher
-  trusted_proxies: [10.0.0.0/16]
+  trusted_proxies: [10.0.0.10/32]   # l'Ingress seul, pas tout le réseau des pods
+  replicas_hint: 2                  # plus d'une instance : Redis exigé
+  drain_delay: 5s                   # sous Kubernetes
 hydra:
   admin_url: http://hydra:4445
   version: "2.1"
 security:
-  emulated_api_authorized_hosts: [10.0.0.0/16]
+  emulated_api_authorized_hosts: [10.0.1.0/24]   # le réseau des login apps
 secrets:
   cookie_key: "${DISPATCHER_COOKIE_KEY}"
   challenge_key: "${DISPATCHER_CHALLENGE_KEY}"
@@ -52,7 +54,7 @@ dispatcher:
       consent_url: https://exemple.fr/auth/sql/consent
       logout_url: https://exemple.fr/auth/sql/logout
       method: pwd
-      allowed_sources: [10.0.0.0/16]
+      allowed_sources: [10.0.1.20/32]   # l'adresse de cette app
   flows:
     - id: mot-de-passe
       title: { fr: Mot de passe, en: Password }
@@ -68,7 +70,7 @@ dispatcher:
 | Clé | Défaut | Sens |
 | --- | --- | --- |
 | `listen` | `:8080` | l'adresse d'écoute |
-| `base_url` | requis | l'URL publique ; les liens et les redirections en partent |
+| `base_url` | requis | l'URL publique ; les liens et les redirections en partent. Son chemin est un préfixe que le reverse proxy retire avant le dispatcher, qui sert à la racine : un proxy qui le laisse fait répondre 404 à toutes les pages (`livrer.md`, l'Ingress de l'exemple) |
 | `trusted_proxies` | requis | les mandataires dont le dispatcher croit le `X-Forwarded-For` ; l'adresse d'un navigateur sert à l'audit, aux allowlists et à la limite des échecs |
 | `cookie_path` | `/` | le chemin des cookies du dispatcher ; sous `/`, en HTTPS, ils prennent le préfixe `__Host-` |
 | `replicas_hint` | | au-dessus de 1, le store en mémoire est refusé |
@@ -115,7 +117,7 @@ Toutes des clés de 32 octets (64 caractères hexadécimaux, ou base64), chacune
 | `min_version` | `1.2` | `1.2` ou `1.3`, vers Hydra et les webhooks |
 | `ca_file` | | les autorités pour Hydra, à la place de celles du système |
 | `allow_http` | faux | accepter des cibles en `http://` : sans lui, un webhook ou une vérification préalable en `http://` est refusé, une admin de Hydra en `http://` signalée au démarrage, et une adresse de retour en `http://` d'un client de Hydra signalée dans l'écran des clients. À réserver au développement, ou à un réseau interne assumé |
-| `pinned_spki_sha256` | | épingler la clé publique du certificat de Hydra |
+| `pinned_spki_sha256` | | pas encore pris en charge : toute valeur arrête le démarrage |
 | `hsts_include_subdomains` | faux | `includeSubDomains` dans l'en-tête HSTS |
 
 ### `state`
@@ -245,7 +247,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `consent_remember_for` | un mois | la mémoire d'un consentement chez Hydra |
 | `login_accept_webhook_url`, `consent_accept_webhook_url` | | les webhooks ; une URL, ou un programme local |
 | `supported_locales`, `default_locale`, `fallback_locale` | `[fr, en]`, `fr`, `en` | les langues des pages |
-| `admin_oidc.*` | | la connexion aux écrans par un fournisseur OpenID Connect : `enabled`, `issuer`, `client_id`, `client_secret`, `scopes`, `username_claim`, `required_acr`, `auto_create` |
+| `admin_oidc.*` | | la connexion aux écrans par un fournisseur OpenID Connect : `enabled`, `issuer`, `client_id`, `client_secret`, `scopes`, `username_claim`, `required_acr`, `auto_create`, et, pour un fournisseur sans découverte, `authorization_endpoint`, `token_endpoint`, `jwks_uri`. Ce sont des clés à point, à la racine de `dispatcher:` (`admin_oidc.enabled: true`), pas un bloc `admin_oidc:` imbriqué, refusé comme clé inconnue |
 
 Un réglage retiré de la graine garde sa valeur en base ; `~` le remet à son défaut.
 

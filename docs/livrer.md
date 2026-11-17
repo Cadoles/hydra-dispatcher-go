@@ -20,8 +20,9 @@ Le même binaire fait tout, par ses sous-commandes : `serve` (le service), `migr
 - un **Deployment** qui lance `serve`, avec ses sondes : `/health` pour la vie (le processus répond), `/ready` pour la disponibilité. `/ready` répond 200 dès que l'instance sert, et 503 seulement pendant son arrêt. L'état de Hydra, de la base et de Redis figure dans sa réponse, dans le journal et dans la métrique `hydra_dispatcher_ready_check_up`, sans changer le code : une dépendance commune à toutes les instances les retirerait toutes à la fois, alors qu'une instance qui reste sert à l'usager une page d'erreur claire. La sonde doit attendre plus de 2 s, le temps de ces vérifications ;
 - un **Job** d'initialisation, joué avant chaque déploiement : `migrate`, puis `bootstrap`. L'image n'ayant pas de shell, ce sont deux conteneurs, `migrate` en init container ;
 - un **Service** vers le port 8080 ;
+- un **Ingress** pour les navigateurs. **Le dispatcher sert à la racine** : si son URL publique a un chemin (`server.base_url: https://exemple.fr/auth/dispatcher`), l'Ingress doit retirer ce chemin avant de lui passer la requête. Sans cela, toutes les pages répondent 404. Le dispatcher remet ce chemin devant les liens de ses pages. Les sondes, les login apps et tout ce qui appelle le Service directement n'utilisent pas le préfixe ;
 - une **ConfigMap** qui porte `dispatcher.yaml`, montée en lecture seule ;
-- un **Secret** pour les clés et le mot de passe de la base, passés en variables d'environnement ou, mieux, en fichiers (`configurer.md`, « Les secrets »).
+- un **Secret** pour les clés et l'URL de la base. Avec `envFrom`, ses clés sont les noms des variables que `dispatcher.yaml` lit en `${VAR}` : dans l'exemple de `configurer.md`, `DISPATCHER_COOKIE_KEY`, `DISPATCHER_CHALLENGE_KEY`, `DISPATCHER_ENCRYPTION_KEY` et `DATABASE_URL`. Ils peuvent aussi se donner en fichiers montés (`configurer.md`, « Comment elle se lit »).
 
 À l'arrêt (SIGTERM), l'instance répond 503 sur `/ready` pendant `server.drain_delay` tout en servant encore, le temps que Kubernetes la retire du Service ; puis elle laisse 6 s aux requêtes en cours. Sous Kubernetes, poser `drain_delay: 5s`, et un `terminationGracePeriodSeconds` d'au moins `drain_delay` + 10 s.
 
@@ -36,7 +37,11 @@ metadata:
   name: hydra-dispatcher
 spec:
   replicas: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: hydra-dispatcher }
   template:
+    metadata:
+      labels: { app.kubernetes.io/name: hydra-dispatcher }
     spec:
       # au moins server.drain_delay (5s) + 10 s
       terminationGracePeriodSeconds: 20
@@ -78,7 +83,39 @@ spec:
         image: reg.cadoles.com/cadoles/hydra-dispatcher-go@sha256:<digest>
         args: ["bootstrap"]
         # les mêmes env, envFrom et volumeMounts que le Deployment
+      volumes:
+      - name: config
+        configMap: { name: hydra-dispatcher }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hydra-dispatcher
+spec:
+  selector: { app.kubernetes.io/name: hydra-dispatcher }
+  ports:
+  - { name: http, port: 80, targetPort: http }
+---
+# ingress-nginx : /auth/dispatcher/… arrive au dispatcher sans son préfixe
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hydra-dispatcher
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  rules:
+  - host: exemple.fr
+    http:
+      paths:
+      - path: /auth/dispatcher(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service: { name: hydra-dispatcher, port: { name: http } }
 ```
+
+Le port des métriques (9142) n'est pas dans le Service : Prometheus le lit sur les pods, et l'Ingress ne l'expose pas.
 
 Hors Kubernetes, le principe est le même : `migrate` et `bootstrap` avant chaque démarrage, puis `serve`.
 
@@ -98,9 +135,10 @@ Hors Kubernetes, le principe est le même : `migrate` et `bootstrap` avant chaqu
 
   L'admin API signe ses jetons avec une paire de clés (EC P-256, ou RSA) : `admin.api.private_key`.
 - **Le réseau** :
-  - les adresses des reverse proxies devant le dispatcher (`server.trusted_proxies`), pour qu'il lise l'adresse réelle des navigateurs ;
-  - les réseaux d'où les login apps appellent l'API émulée (`security.emulated_api_authorized_hosts`), et les adresses de chaque app (`allowed_sources`).
-- **Les login apps**, configurées avec l'URL du dispatcher comme si c'était celle de l'admin de Hydra.
+  - les adresses des reverse proxies devant le dispatcher (`server.trusted_proxies`), et elles seules, pour qu'il lise l'adresse réelle des navigateurs dans `X-Forwarded-For`. Une adresse de cette liste peut se faire passer pour n'importe quelle autre : y mettre tout le réseau des pods laisserait chaque pod passer les allowlists de l'admin et de l'API émulée ;
+  - les réseaux d'où les login apps appellent l'API émulée (`security.emulated_api_authorized_hosts`), et les adresses de chaque app (`allowed_sources`) ;
+  - d'où l'on joindra l'admin et `/metrics` (`security.admin_authorized_hosts`, par défaut les réseaux privés `10.0.0.0/8`, `172.16.0.0/12` et `192.168.0.0/16`). La boucle locale n'en fait pas partie : par `kubectl port-forward`, qui arrive au pod depuis `127.0.0.1`, l'admin et `/metrics` répondent 403. Passer par l'Ingress depuis un réseau autorisé, ou ajouter `127.0.0.1/32` à la liste.
+- **Les login apps**, configurées avec l'URL du dispatcher comme si c'était celle de l'admin de Hydra : dans le cluster, celle du Service, sans préfixe (`http://hydra-dispatcher`). Leurs appels arrivent alors avec l'adresse de leur pod, qui doit être dans `emulated_api_authorized_hosts` et dans les `allowed_sources` de leur app.
 
 ## Installer
 
@@ -135,6 +173,8 @@ L'outil `symfonyimport` n'est pas dans l'image : il se lance depuis les sources 
   go run ./tools/symfonyimport export -url https://ancien-dispatcher -client-id <client> -client-secret-file <fichier> > graine.yaml
   ```
 
+  **Les apps exportées n'ont pas d'`allowed_sources`** : le Symfony n'en avait pas. Les déclarer pour chaque app avant `bootstrap`. Sans elles, toute adresse de `emulated_api_authorized_hosts` peut accepter les étapes de n'importe quelle app.
+
 - **Les comptes de l'admin et les clients de l'API** : `symfonyimport accounts` les copie de la base du Symfony dans celle du Go, chaque refus nommé avant toute écriture ; un compte ou un client déjà présent est laissé tel quel. `-dry-run` dit ce qu'il écrirait.
 
   ```sh
@@ -148,17 +188,18 @@ L'outil `symfonyimport` n'est pas dans l'image : il se lance depuis les sources 
 Le passage du Symfony au Go se fait en place, sans faire tourner les deux à la fois :
 
 1. **Avant** : la nouvelle base, les clés et la configuration du Go prêtes ; le Go prend le même Redis que le Symfony, sous un autre préfixe (`state.key_prefix`), pour que les clés du Symfony restent. Relever aussi une mesure de référence du Symfony (la latence à l'ingress, le volume de connexions, la charge de Hydra) : c'est à elle que se compare le Go ensuite.
-2. **Le Job** avec l'image du Go : `migrate`, `bootstrap -dry-run` relu, `bootstrap`, la reprise des comptes et des clients.
-3. **Le déploiement** : les mêmes Deployment, Service et Ingress, sans les renommer (un objet renommé est un objet supprimé et recréé, ce qui complique le retour). L'image, le port (8080), les sondes, la configuration et les secrets changent. Avec `strategy: Recreate` pour cette fois : quelques secondes de coupure, et jamais les deux versions sur le trafic en même temps. Hors des heures de pointe.
-4. **Une fenêtre de quelques semaines** : les login apps restent sur les chemins v1 de l'API émulée, Hydra reste dans sa version ; la base, l'image, la configuration et les secrets du Symfony sont gardés.
-5. **En cas de problème** : redéployer la version d'avant (le revert du changement). Ce qui a été modifié dans l'admin du Go pendant la fenêtre n'est pas reporté au Symfony.
+2. **Le Job** avec l'image du Go : `migrate`, `bootstrap -dry-run` relu, `bootstrap`.
+3. **La reprise des comptes et des clients** : `symfonyimport accounts`, qui n'est pas dans l'image. Il se lance depuis un poste qui a Go et les sources, et qui joint les deux bases (un `kubectl port-forward` vers chacune, par exemple).
+4. **Le déploiement** : les mêmes Deployment, Service et Ingress, sans les renommer (un objet renommé est un objet supprimé et recréé, ce qui complique le retour). L'image, le port (8080), les sondes, la configuration et les secrets changent, et l'Ingress retire le préfixe si le Symfony le gardait. Avec `strategy: Recreate` pour cette fois : quelques secondes de coupure, et jamais les deux versions sur le trafic en même temps. Hors des heures de pointe.
+5. **Une fenêtre de quelques semaines** : les login apps restent sur les chemins v1 de l'API émulée, Hydra reste dans sa version ; la base, l'image, la configuration et les secrets du Symfony sont gardés.
+6. **En cas de problème** : redéployer la version d'avant (le revert du changement). Ce qui a été modifié dans l'admin du Go pendant la fenêtre n'est pas reporté au Symfony.
 
 Ce que voient les usagers : ceux qui étaient en pleine connexion recommencent ; ceux qui avaient une session se reconnectent une fois (le Go n'a pas encore sa mémoire du skip). Au retour arrière, de même.
 
 ## Mettre à jour
 
 - **Le Job avant le Deployment**, à chaque version : les migrations d'une version ne font qu'ajouter (une colonne, une table) ; ce qu'elles retirent ne l'est qu'à la version suivante. Une instance de la version d'avant tourne donc sans faute sur la base migrée, le temps du déploiement.
-- **Revenir à la version d'avant** : `hydra-dispatcher migrate down` avec l'image qu'on retire (elle seule connaît sa dernière migration ; en terminal, elle la nomme et demande confirmation, sauf `-yes`), puis l'image d'avant.
+- **Revenir à la version d'avant** : redéployer l'image d'avant suffit, puisqu'elle tourne sur la base migrée. Défaire aussi les migrations est facultatif, et perd ce qu'elles avaient ajouté. Pour le faire, `hydra-dispatcher migrate down` avec l'image qu'on retire, avant de redéployer l'autre : elle seule connaît ses migrations. Chaque appel en défait une seule, à répéter si la version en apporte plusieurs ; en terminal, il nomme la migration et demande confirmation, sauf `-yes`.
 - **Vérifier une graine avant de l'appliquer** : `hydra-dispatcher config diff` dit ce que `bootstrap -force` changerait, en lecture seule (code de sortie 0 rien, 1 des changements, 2 une erreur).
 
 ## Après la bascule
