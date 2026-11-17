@@ -5,8 +5,15 @@ chains several real login apps into a flow (MFA, identity provider choice,
 protocol choice) by replaying Hydra's login/consent protocol towards each of
 them.
 
-Go rewrite of the Symfony dispatcher (repository `hydra-dispatcher`). Work in
-progress, phase 1 (plan and journal in `hydra-dev/conception`): the binary serves the pages (choice of
+Go rewrite of the Symfony dispatcher (repository `hydra-dispatcher`), released
+(`1.0.0`), with its admin, its screens and the pre-check of a step; the documentation
+and the delivery are under way (phase 5; plan and journal in `hydra-dev/conception`).
+
+**Documentation**, in French, in `docs/`: `comprendre.md`, what the dispatcher is
+for and how a sign-in goes through it, with a glossary; `themes.md`, the themes of
+its pages. To come: delivering, configuring and operating it.
+
+The binary serves the pages (choice of
 the flow, consent, errors, logout with its confirmation), the emulated admin API
 the login apps call (v2 paths and v1 aliases), `/health` and `/ready`; it keeps its configuration in Postgres and the flows in
 progress in memory, or in Redis (or Dragonfly) when `state.redis_dsn` is set, a
