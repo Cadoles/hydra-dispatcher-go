@@ -1365,7 +1365,9 @@ dispatcher:
 			`dispatcher.apps[0].skip_check_signals[1]: "cookies" is not one of`},
 		"pre-check of the first step": {apps + flow + "        - { id: a, order: 0, skip_check: true }\n        - { id: b, order: 1 }\n",
 			"dispatcher.flows[0].steps[0].skip_check: is refused on the first step"},
-		"pre-check without a URL": {apps + flow + "        - { id: a, order: 0 }\n        - { id: b, order: 1, skip_check: true }\n",
+		"pre-check without a URL": {"dispatcher:\n  apps:\n    - { id: a, login_url: \"http://a\", consent_url: \"http://a\", method: m }\n" +
+			"    - { id: b, login_url: \"http://b\", consent_url: \"http://b\", method: m, skip_check_url: ~ }\n" + flow +
+			"        - { id: a, order: 0 }\n        - { id: b, order: 1, skip_check: true }\n",
 			"dispatcher.flows[0].steps[1].skip_check: app b has no skip_check_url"},
 		"allowed acr with a space": {apps + "  flows:\n    - { id: f, title: T, description: D, skip_check_allowed_acr: [\"loa 2\"], steps: [{ id: a, order: 0 }] }\n",
 			`dispatcher.flows[0].skip_check_allowed_acr[0]: "loa 2" contains a space`},
@@ -1460,6 +1462,22 @@ func TestSeedSkipCheckSet(t *testing.T) {
 		if got := c.Seed.Apps[0].SkipCheckSet; got != set {
 			t.Errorf("%q: SkipCheckSet = %v, want %v", extra, got, set)
 		}
+	}
+}
+
+// A step may ask for the pre-check of an app the seed is silent on: the
+// database may hold its URL (Q139), bootstrap's check of the whole decides
+// (R51).
+func TestSeedSkipCheckOfAnAppSilent(t *testing.T) {
+	if _, _, err := load(t, `
+dispatcher:
+  apps:
+    - { id: a, login_url: "http://a", consent_url: "http://a", method: m }
+    - { id: b, login_url: "http://b", consent_url: "http://b", method: m }
+  flows:
+    - { id: f, title: T, description: D, steps: [{ id: a, order: 0 }, { id: b, order: 1, skip_check: true }] }
+`, nil); err != nil {
+		t.Error(err)
 	}
 }
 

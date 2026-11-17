@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -190,5 +191,67 @@ func TestPagePolicy(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/login?login_challenge=c", nil))
 	if csp := w.Header().Get("Content-Security-Policy"); w.Code != http.StatusOK || strings.Contains(csp, "form-action") || !strings.Contains(csp, "default-src 'none'") {
 		t.Errorf("%d, policy %q", w.Code, csp)
+	}
+}
+
+// The cookie of the form's token: Secure when the app says it is served over
+// HTTPS, behind a proxy too; not over plain HTTP otherwise (R51).
+func TestSecureCookies(t *testing.T) {
+	var accepted map[string]any
+	api := emulated(t, "dev-of-alice", &accepted)
+	defer api.Close()
+	for _, secure := range []bool{false, true} {
+		h, _ := New(Options{AdminURL: api.URL, Key: testKey, Code: "123456", SecureCookies: secure})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/login?login_challenge=c", nil))
+		if c := w.Result().Cookies(); len(c) != 1 || c[0].Secure != secure || !c[0].HttpOnly {
+			t.Errorf("secure %v: %+v", secure, c)
+		}
+	}
+}
+
+// A revoke forgets the device it names alone: the subject's other device
+// still skips (R51).
+func TestRevokeOneDevice(t *testing.T) {
+	dev := "dev-a"
+	var accepted map[string]any
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /admin/oauth2/auth/requests/login":
+			_ = json.NewEncoder(w).Encode(map[string]any{"subject": "alice", "x_dispatcher_device": dev})
+		case "PUT /admin/oauth2/auth/requests/login/accept":
+			_ = json.NewDecoder(r.Body).Decode(&accepted)
+			_, _ = io.WriteString(w, `{"redirect_to":"http://dispatcher.test/oauth2/auth?ref=r"}`)
+		}
+	}))
+	defer api.Close()
+	now := time.Now()
+	h, _ := New(Options{AdminURL: api.URL, Key: testKey, Code: "123456", Now: func() time.Time { return now }})
+	enroll(t, h, "Firefox")
+	dev = "dev-b"
+	enroll(t, h, "Chrome")
+	// The page lists both; revoke the first one listed, dev-a's.
+	page := httptest.NewRecorder()
+	h.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/login?login_challenge=c", nil))
+	token := page.Result().Cookies()[0].Value
+	ids := regexp.MustCompile(`name="id" value="([0-9a-f]{64})"`).FindAllStringSubmatch(page.Body.String(), -1)
+	if len(ids) != 2 {
+		t.Fatalf("devices listed: %d", len(ids))
+	}
+	form := url.Values{"login_challenge": {"c"}, "csrf": {token}, "id": {ids[0][1]}}
+	r := httptest.NewRequest(http.MethodPost, "/revoke", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.AddCookie(&http.Cookie{Name: csrfCookie, Value: token})
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("revoke: %d", w.Code)
+	}
+	for device, want := range map[string]bool{"dev-a": false, "dev-b": true} {
+		body := `{"version":1,"nonce":"n1","subject":"alice","device":"` + device + `"}`
+		if got := skips(t, check(h, testKey, now, body)); got != want {
+			t.Errorf("%s: skip %v, want %v", device, got, want)
+		}
 	}
 }

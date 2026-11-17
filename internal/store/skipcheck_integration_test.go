@@ -319,3 +319,39 @@ dispatcher:
 		}
 	}
 }
+
+// R51: a seed silent on the URL of an app may ask for its pre-check on a
+// step, the database holding the URL; on a database without it, bootstrap
+// refuses, its dry run too.
+func TestBootstrapSkipCheckStepOfAnAppSilent(t *testing.T) {
+	ctx := context.Background()
+	p := migrated(t)
+	p.SetSecrets(keyring(t, encKeyA))
+	seed := func(otp, step string) config.Seed {
+		return loadSeed(t, `
+dispatcher:
+  apps:
+    - { id: pwd, login_url: https://pwd/login, consent_url: https://pwd/consent, method: pwd }
+    - { id: otp, login_url: https://otp/login, consent_url: https://otp/consent, method: otp`+otp+` }
+  flows:
+    - { id: f, title: F, description: D, steps: [{ id: pwd, order: 0 }, { id: otp, order: 1`+step+` }] }
+`)
+	}
+	for _, write := range []bool{false, true} {
+		_, err := p.Bootstrap(ctx, seed("", ", skip_check: true"), Force, write)
+		var refused *RefusedError
+		if !errors.As(err, &refused) || !strings.Contains(err.Error(), "app otp has no skip_check_url") {
+			t.Errorf("no URL held, write %v: %v", write, err)
+		}
+	}
+	if _, err := p.Bootstrap(ctx, seed(", skip_check_url: https://otp/skip-check, skip_check_key: "+keyA, ""), Force, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Bootstrap(ctx, seed("", ", skip_check: true"), Force, true); err != nil {
+		t.Fatalf("the URL held: %v", err)
+	}
+	snap, _ := p.Snapshot(ctx)
+	if f := flowOf(t, snap, "f"); !f.Steps[1].SkipCheck {
+		t.Errorf("step: %+v", f.Steps[1])
+	}
+}

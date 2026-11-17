@@ -349,8 +349,19 @@ func TestSkipCheckRemembered(t *testing.T) {
 		t.Fatalf("memory: %+v", c.Response.Remember)
 	}
 	w.hydra.login.Skip, w.hydra.login.Subject = true, "alice"
+	// The login webhook of the skip receives the mark too (R51).
+	snap := w.o.Config.Snapshot()
+	settings := store.DefaultSettings()
+	settings.LoginAcceptWebhookURL = "http://hooks.test/login"
+	w.o.Config = snapshots{store.NewSnapshot(snap.Apps, snap.Flows, settings)}
+	hooks := &recordingHooks{}
+	w.o.Webhooks = hooks
 	if r := w.handle(Entry{LoginChallenge: hydraL2, Memory: Memory{Content: c.Response.Remember}}); r.Response.URL != verifierURL {
 		t.Fatalf("SKP-1: %+v", r.Response)
+	}
+	var hooked []string
+	if len(hooks.contexts) != 1 || json.Unmarshal(hooks.contexts[0]["x_dispatcher_skipped_steps"], &hooked) != nil || !slices.Equal(hooked, []string{"2fa"}) {
+		t.Errorf("the skip's webhook: %v", hooks.contexts)
 	}
 	var skipped []string
 	ctx := w.hydra.accepted.Context.(Object)
@@ -448,5 +459,37 @@ func TestSkipCheckAcceptOfAnotherGeneration(t *testing.T) {
 	}
 	if next := w.handle(Loop{Ref: lref, Cookie: w.cookie}); !strings.HasPrefix(next.Response.URL, "http://2fa.hydra.test/login?") {
 		t.Errorf("bob's flow: %+v", next.Response)
+	}
+}
+
+// R51: the same subject, the same flow, the same device, back to the choice
+// meanwhile: another generation is another call; its answer is refused, the
+// step runs.
+func TestSkipCheckStaleAnswerSameSubject(t *testing.T) {
+	w, c := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+	c.during = func() {
+		step := w.handle(Choose{FlowID: "sql-2fa-oidc", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true, Device: testDevice})
+		w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+	}
+	r := throughSQL(t, w, "sql-2fa-oidc", testDevice)
+	if f := w.stored(); f.Current != 2 || f.Steps[1].Skipped || !strings.HasPrefix(r.Response.URL, "http://2fa.hydra.test/login?") {
+		t.Errorf("answer %+v, flow current %d", r.Response, f.Current)
+	}
+	if reps := reportsOf(r, eventSkipCheck); len(reps) != 1 || reps[0].Reason != "changed" {
+		t.Errorf("reports %+v", reps)
+	}
+}
+
+// R51: a skip whose final accept ends the flow (FIN-6, Hydra 404) took no
+// effect: no audit.
+func TestSkipCheckNoAuditOnAFlowEnded(t *testing.T) {
+	w, _ := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+	w.hydra.errs["accept_login"] = err404
+	r := throughSQL(t, w, "sql-2fa", testDevice)
+	if f := w.stored(); r.Response.Code != E1002 || !f.Done {
+		t.Fatalf("FIN-6: %+v, flow %+v", r.Response, f)
+	}
+	if reps := reportsOf(r, EventStepSkipped); len(reps) != 0 {
+		t.Errorf("a skip audited on a flow ended: %+v", reps)
 	}
 }

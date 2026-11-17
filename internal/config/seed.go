@@ -322,7 +322,9 @@ func (s *Seed) validate(fail func(path, format string, args ...any)) {
 			app.SkipCheckKey = strings.Repeat("0", 64)
 		}
 		app.Check(in(path))
-		skipCheck[a.ID] = a.SkipCheckURL != ""
+		// An app the seed is silent on may hold its URL in the database, which
+		// bootstrap keeps (Q139): bootstrap's check of the whole decides (R51).
+		skipCheck[a.ID] = a.SkipCheckURL != "" || !a.SkipCheckSet
 		for _, k := range appKeys {
 			if _, ok := a.Options.keys[k]; ok {
 				fail(path+".options."+k, "is a key of the app, not an option")

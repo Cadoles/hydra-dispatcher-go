@@ -50,6 +50,10 @@ type Options struct {
 	Code string
 	// RememberFor is how long a device stays trusted, 30 days by default.
 	RememberFor time.Duration
+	// SecureCookies marks the form's token cookie Secure: behind a proxy
+	// that ends TLS, the request the app sees is in plain HTTP (R51). A
+	// request over TLS marks it all the same.
+	SecureCookies bool
 	// Client calls the emulated API; Now gives the time; Log, nil for none.
 	Client *http.Client
 	Now    func() time.Time
@@ -139,12 +143,12 @@ type view struct {
 const csrfCookie = "skipcheck_app_csrf"
 
 // csrf returns the browser's token, drawn and set when it has none.
-func csrf(w http.ResponseWriter, r *http.Request) string {
+func (a *app) csrf(w http.ResponseWriter, r *http.Request) string {
 	if c, err := r.Cookie(csrfCookie); err == nil && len(c.Value) == 64 {
 		return c.Value
 	}
 	v := random()
-	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: v, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil})
+	http.SetCookie(w, &http.Cookie{Name: csrfCookie, Value: v, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: a.o.SecureCookies || r.TLS != nil})
 	return v
 }
 
@@ -173,7 +177,7 @@ func (a *app) render(w http.ResponseWriter, status int, v view) {
 
 // form is the step's page for the login request of challenge.
 func (a *app) form(w http.ResponseWriter, r *http.Request, challenge string, req loginRequest, status int, msg string) {
-	a.render(w, status, view{Challenge: challenge, CSRF: csrf(w, r), Error: msg, Device: req.Device != "", Devices: a.trusted(req.Subject)})
+	a.render(w, status, view{Challenge: challenge, CSRF: a.csrf(w, r), Error: msg, Device: req.Device != "", Devices: a.trusted(req.Subject)})
 }
 
 func (a *app) loginPage(w http.ResponseWriter, r *http.Request) {

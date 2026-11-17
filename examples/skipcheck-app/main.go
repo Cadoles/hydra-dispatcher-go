@@ -33,6 +33,7 @@ func run(args []string) error {
 	adminURL := fs.String("admin-url", "", "the dispatcher's emulated API, as Hydra's admin URL")
 	code := fs.String("code", "", "the code the step asks")
 	rememberFor := fs.Duration("remember-for", 30*24*time.Hour, "how long a device stays trusted")
+	secure := fs.Bool("secure-cookies", false, "mark the cookie of the form Secure: the app is served over HTTPS, behind a proxy that ends TLS too")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -48,7 +49,7 @@ func run(args []string) error {
 		return errors.New("-admin-url and -code are required")
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	h, err := app.New(app.Options{AdminURL: *adminURL, Key: key, Code: *code, RememberFor: *rememberFor, Log: log})
+	h, err := app.New(app.Options{AdminURL: *adminURL, Key: key, Code: *code, RememberFor: *rememberFor, SecureCookies: *secure, Log: log})
 	if err != nil {
 		return err
 	}

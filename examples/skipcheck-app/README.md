@@ -39,7 +39,8 @@ SKIPCHECK_APP_KEY=<the same key> go run ./examples/skipcheck-app \
 ```
 
 `-admin-url` is the dispatcher's emulated API, as Hydra's admin URL is to an
-app; the app's address must be in its `allowed_sources`.
+app; the app's address must be in its `allowed_sources`. Served over HTTPS, behind a proxy that ends TLS too,
+`-secure-cookies` marks the cookie of its forms' token `Secure`.
 
 ## What it does
 
