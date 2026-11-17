@@ -163,7 +163,11 @@ Ce que voient les usagers : ceux qui étaient en pleine connexion recommencent ;
 
 ## Après la bascule
 
-- Passer les login apps aux chemins v2 de l'API émulée (`/admin/oauth2/auth/requests/…`) ; les chemins v1 sont servis jusqu'à la version 2.0 du dispatcher (`emulated_api.legacy_v1_paths`).
+- Passer les login apps aux chemins v2 de l'API émulée. Le dispatcher sert l'API émulée sous deux jeux de chemins, sur la même URL de base :
+  - v1, ceux de Hydra 1 que le Symfony servait, et qu'appellent les apps configurées pour lui : `/oauth2/auth/requests/login?login_challenge=…`, `/oauth2/auth/requests/login/accept`, de même pour `consent` et `logout` ;
+  - v2, ceux de l'admin de Hydra 2, les mêmes sous `/admin` : `/admin/oauth2/auth/requests/login?login_challenge=…`, etc.
+
+  Le passage ne change que la configuration de chaque app, pas son URL de base. Pour les apps qui ont le réglage (hydra-sql-go, hydra-oidc-go, hydra-charter), `HYDRA_API_PATH_PREFIX` passe de `""` à `/admin`, son défaut. hydra-passwordless a ses chemins v1 en dur : il reste en v1 tant qu'il n'a pas ce réglage. On le fait après la fenêtre et pas à la bascule, parce que le Symfony ne sert que les chemins v1 : une app passée en v2 casserait le retour arrière. Les chemins v1 restent servis jusqu'à la version 2.0 du dispatcher (`emulated_api.legacy_v1_paths`) ; le journal signale le premier appel v1 de chaque adresse (`emulated.legacy_path`), ce qui dit quelles apps restent à passer.
 - Monter Hydra en 2.2. C'est le point de non-retour : le Symfony refuse les challenges de Hydra 2.2. Poser d'abord `hydra.version: "2.2"` et `hydra.system_secrets` dans la configuration du dispatcher : les challenges de 2.1 passent alors en repli, sans erreur, et le déchiffrement s'enclenche seul avec les premiers challenges de 2.2. Plus généralement, tant que `hydra.version` ne suit pas la version de Hydra, les challenges passent en repli : plus d'appels à Hydra, mais rien ne casse.
 - Supprimer la base, l'image, la configuration et les secrets du Symfony ; rendre au Deployment sa stratégie habituelle.
 
@@ -171,4 +175,4 @@ Ce que voient les usagers : ceux qui étaient en pleine connexion recommencent ;
 
 - **Les usagers** : la coupure, et une reconnexion pour ceux qui avaient une session.
 - **Les intégrateurs de l'API d'administration** : leurs jetons sont à redemander après la bascule ; l'API et ses scopes ne changent pas.
-- **Les équipes des login apps** : rien à changer à la bascule ; le passage aux chemins v2 ensuite.
+- **Les équipes des login apps** : rien à changer à la bascule ; après la fenêtre, le passage aux chemins v2 (`HYDRA_API_PATH_PREFIX=/admin`, voir « Après la bascule »).
