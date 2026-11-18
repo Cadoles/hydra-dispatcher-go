@@ -111,8 +111,8 @@ var scenarios = []scenario{
 	{name: "back-to-choice", run: (*driver).backToChoice},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
 	{name: "consent-by-catalogue", run: (*driver).consentByCatalogue, goOnly: true},
-	{name: "pre-check", run: preCheckOn("hydra-sql-remember", "hydra-remember"), goOnly: true},
-	{name: "pre-check-2fa", run: preCheckOn("hydra-sql-2fa", "hydra-2fa"), goOnly: true},
+	{name: "pre-check", run: preCheckOn("hydra-sql-remember", "hydra-remember", true), goOnly: true},
+	{name: "pre-check-2fa", run: preCheckOn("hydra-sql-2fa", "hydra-2fa", false), goOnly: true},
 	{name: "admin-journey", run: (*driver).adminJourney, goOnly: true},
 	{name: "expired-on-consent", run: (*driver).expiredOnConsent, optIn: true},
 	{name: "limiter-stops-forgery", run: (*driver).limiterStopsForgery, optIn: true},
@@ -459,7 +459,7 @@ func (d *driver) drive(p page, l login) (outcome, error) {
 		case "hydra-sql":
 			p, err = d.sqlLogin(p, l.user)
 		case "hydra-2fa":
-			p, err = d.otpStep(p, l)
+			p, err = d.otp(p, l.user)
 		case "hydra-remember":
 			p, err = d.rememberStep(p, l)
 		case "idp":
@@ -560,25 +560,6 @@ func (d *driver) otp(p page, user string) (page, error) {
 		return page{}, err
 	}
 	return d.b.submit(p, f, v)
-}
-
-// otpStep plays hydra-passwordless: with l.revoke, its "forget all my
-// devices" first (the pre-check of phase 4, P29), then the code of the mail.
-func (d *driver) otpStep(p page, l login) (page, error) {
-	if l.revoke {
-		f, ok := p.formTo("/devices/revoke-all")
-		if !ok {
-			return page{}, fmt.Errorf("no device to forget: %w", errUnexpected(p))
-		}
-		v, err := f.values(nil, nil)
-		if err == nil {
-			p, err = d.b.submit(p, f, v)
-		}
-		if err != nil {
-			return page{}, fmt.Errorf("forget the devices: %w", err)
-		}
-	}
-	return d.otp(p, l.user)
 }
 
 // rememberCode is the code of the reference app of the pre-check in hydra-dev
@@ -779,12 +760,13 @@ func (d *driver) newBrowserWith(cookies []*http.Cookie) {
 // preCheckOn plays the pre-check of a step (phase 4) on flow, whose second
 // step, of the page kind, asks for it: the device remembered at a first
 // login; at the next, in a new browser of the same device, the step skipped,
-// the same id_token; under prompt=login, the step runs; another device, on
-// the step's page, forgets them all; the first device runs the step again.
-// The reference app (examples/skipcheck-app) on hydra-sql-remember, the P29
-// hydra-passwordless on hydra-sql-2fa, which remembers each device that
-// passes the code: the revoke comes from another device.
-func preCheckOn(flow, kind string) func(*driver) error {
+// the same id_token; under prompt=login, the step runs; another device runs
+// it too. When the app revokes from the step's page (revocable), that other
+// device forgets them all there, and the first device runs the step again:
+// so does the reference app (examples/skipcheck-app) on hydra-sql-remember;
+// hydra-passwordless, on hydra-sql-2fa, lists no device on its page, their
+// management to come by an API of its own (Q150).
+func preCheckOn(flow, kind string, revocable bool) func(*driver) error {
 	return func(d *driver) error {
 		l := login{flow: flow, user: isabelle, consent: "accept"}
 		enroll := l
@@ -808,18 +790,23 @@ func preCheckOn(flow, kind string) func(*driver) error {
 		if device == nil {
 			return fmt.Errorf("enrollment: no %s cookie", deviceCookie)
 		}
-		for _, next := range []struct {
+		type attempt struct {
 			name      string
 			device    []*http.Cookie
 			prompt    string
 			revoke    bool
 			wantShown bool
-		}{
+		}
+		attempts := []attempt{
 			{name: "the same device", device: device},
 			{name: "prompt=login", device: device, prompt: "login", wantShown: true},
-			{name: "another device, which forgets them all", revoke: true, wantShown: true},
-			{name: "the first device, revoked", device: device, wantShown: true},
-		} {
+			{name: "another device", wantShown: true},
+		}
+		if revocable {
+			attempts[2] = attempt{name: "another device, which forgets them all", revoke: true, wantShown: true}
+			attempts = append(attempts, attempt{name: "the first device, revoked", device: device, wantShown: true})
+		}
+		for _, next := range attempts {
 			d.newBrowserWith(next.device)
 			step := l
 			step.prompt, step.revoke = next.prompt, next.revoke
@@ -833,6 +820,10 @@ func preCheckOn(flow, kind string) func(*driver) error {
 			if err := d.granted(o, identities[flow]); err != nil {
 				return fmt.Errorf("%s: %w", next.name, err)
 			}
+		}
+		if !revocable {
+			d.note("step skipped for the device remembered, run under prompt=login and on another device")
+			return nil
 		}
 		d.note("step skipped for the device remembered, run under prompt=login, on another device, and once revoked from it")
 		return nil
