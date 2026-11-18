@@ -26,13 +26,23 @@ type offer struct {
 	// a candidate: chosen by any path, either is imposed (Q29).
 	clientOnly string
 	preferred  string
-	reports    []Report
+	// unmet are the acr_values no candidate declares, every candidate
+	// offered all the same (Q151, acr_values_mode prefer).
+	unmet   []string
+	reports []Report
 }
+
+// EventACRValuesUnmet is a flow chosen among every candidate, none declaring
+// one of the acr_values the client asked (Q151).
+const EventACRValuesUnmet = "flow.acr_values_unmet"
 
 // offer evaluates the choice rules on the login request kept in f (CHX):
 // flows enabled, by id, restricted to the client's metadata.dispatcher.flows
 // (unknown ids ignored, with a warning), then to those whose acr is among the
-// acr_values other than the preferred flow's prefix.
+// acr_values other than the preferred flow's prefix. acr_values are a request,
+// not a requirement (OpenID Connect Core 3.1.2.1, Q151): when no candidate
+// declares one of them, every candidate stays, and the acr sent says what was
+// done; acr_values_mode require rejects the login instead (CHX-1).
 func (r *run) offer(f *Flow) offer {
 	cfg := r.Env.Config
 	var o offer
@@ -58,13 +68,18 @@ func (r *run) offer(f *Flow) offer {
 	}
 	acr, preferred := acrValues(f.Hydra.OIDCContext)
 	if len(acr) > 0 {
-		o.flows = slices.DeleteFunc(o.flows, func(id string) bool {
+		met := slices.DeleteFunc(slices.Clone(o.flows), func(id string) bool {
 			fl, _ := flowOf(cfg, id)
 			return !slices.Contains(acr, fl.ACR)
 		})
-		if len(o.flows) == 0 {
+		switch {
+		case len(met) > 0:
+			o.flows = met
+		case cfg.Settings.ACRValuesMode == store.ACRValuesRequire:
 			o.reject, o.description = ReasonUnmet, "No flow meets the acr_values requested."
 			return o
+		default:
+			o.unmet = acr // CHX-6
 		}
 	}
 	switch {
@@ -109,6 +124,12 @@ func clientFlows(client json.RawMessage) ([]string, bool) {
 		return nil, true
 	}
 	return ids, true
+}
+
+// withoutPreferred returns values without the preferred flow's prefix: the
+// acr_values a client asks as acr.
+func withoutPreferred(values []string) []string {
+	return slices.DeleteFunc(slices.Clone(values), func(v string) bool { return strings.HasPrefix(v, preferredPrefix) })
 }
 
 // acrValues returns the oidc_context's acr_values other than the preferred
@@ -172,6 +193,9 @@ func (r *run) choice(ref string, f *Flow) Outcome {
 		out = r.choicePage(f, o, false).writing(f)
 	}
 	out.Reports = append(o.reports, out.Reports...)
+	if len(o.unmet) > 0 {
+		out.Reports = append(out.Reports, Report{Event: EventACRValuesUnmet, Detail: strings.Join(o.unmet, " ")})
+	}
 	return out
 }
 

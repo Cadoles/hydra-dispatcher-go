@@ -78,7 +78,7 @@ Une app qui marche derrière Hydra marche derrière le dispatcher, à quelques p
 La page de choix n'offre que les flows activés que le client peut utiliser :
 
 - un client peut être restreint à certains flows (`metadata.dispatcher.flows` du client Hydra) ; s'il n'en reste aucun, le login est rejeté ;
-- un client qui demande un niveau (`acr_values`) ne se voit offrir que les flows dont l'acr y figure ; s'il en reste plusieurs, la page s'affiche ; s'il n'en reste aucun, le login est rejeté (`unmet_authentication_requirements`) ;
+- un client qui demande un niveau (`acr_values`) ne se voit offrir que les flows dont l'acr y figure, s'il y en a. Si aucun flow ne le déclare, tous restent offerts, et l'acr envoyé dit ce qui a été fait : OpenID Connect fait des `acr_values` une demande, pas une exigence, et c'est au client de juger. Le réglage `acr_values_mode: require` rejette alors le login (`unmet_authentication_requirements`) ;
 - un client peut désigner un flow par la valeur `urn:hydra-dispatcher:preferred-app:<id du flow>` dans ses `acr_values` : ce flow est alors *imposé*, sans page, s'il fait partie des flows offerts ;
 - un seul flow possible est choisi d'office si `app_auto_select` est vrai ; il est imposé si c'est la restriction du client qui ne laisse que lui ;
 - le dernier flow choisi dans ce navigateur peut être présélectionné.

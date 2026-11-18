@@ -1201,7 +1201,7 @@ components:
     Settings:
       type: object
       required: [appAutoSelect, consentAutoAccept, aggregateAmrFromLoginRequest, challengeTtl, remember, loginRememberFor, consentRememberFor,
-        loginAcceptWebhookUrl, consentAcceptWebhookUrl, supportedLocales, defaultLocale, fallbackLocale]
+        loginAcceptWebhookUrl, consentAcceptWebhookUrl, supportedLocales, defaultLocale, fallbackLocale, acrValuesMode]
       properties:
         appAutoSelect: { type: boolean }
         consentAutoAccept: { type: boolean }
@@ -1215,6 +1215,7 @@ components:
         supportedLocales: { type: array, items: { type: string } }
         defaultLocale: { type: string }
         fallbackLocale: { type: string }
+        acrValuesMode: { type: string, enum: [prefer, require], description: 'What acr_values no flow declares do: prefer offers every flow, require rejects the login.' }
     SettingsWrite:
       type: object
       additionalProperties: false
@@ -1232,6 +1233,7 @@ components:
         supportedLocales: { type: [array, "null"], items: { type: string } }
         defaultLocale: { type: [string, "null"] }
         fallbackLocale: { type: [string, "null"] }
+        acrValuesMode: { type: [string, "null"], enum: [prefer, require, null] }
         sessionTtl: { type: [integer, "null"], deprecated: true }
         id: { deprecated: true }
         hydraPublicUrl: { deprecated: true }

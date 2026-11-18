@@ -61,10 +61,11 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes, audien
 		// scopes would get claims of scopes neither requested nor granted,
 		// another client's included, until the catalogue filters them.
 		return SkipScopes, o.reports
-	case len(acr) > 0 && !slices.Contains(acr, c.ACR):
+	case len(acr) > 0 && len(o.unmet) == 0 && !slices.Contains(acr, c.ACR):
 		// MEM-9 (Q36): fh does not cover the acr the flow declares, which
 		// may have changed since the cookie was written; the accept sends
-		// the cookie's.
+		// the cookie's. acr_values no flow declares (Q151): a flow run again
+		// would meet them no better, the skip stands.
 		return SkipACR, o.reports
 	case !sameSet(audience, c.Aud):
 		// MEM-10 (revue R21): the access token claims of the cookie were

@@ -340,7 +340,7 @@ func TestSkipLogin(t *testing.T) {
 			says: hydraSays{GetLogin: {login: skipRequest(t, nil), requestedAt: testNow.Add(-29*time.Minute - 30*time.Second)}, RejectLogin: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished, check: ignoredFor("login", SkipAbsent)},
 		// SKP-2 at CHX-1: ignored, then the rules of the choice reject.
-		{name: "SKP-2 CHX-1, ignored then rejected", env: withACRs, ev: Entry{LoginChallenge: hydraL, Cookie: cookie, Memory: memory(nil)},
+		{name: "SKP-2 CHX-1, ignored then rejected", env: func(e *Env) { withACRs(e); requireACR(e) }, ev: Entry{LoginChallenge: hydraL, Cookie: cookie, Memory: memory(nil)},
 			says: hydraSays{GetLogin: read(func(r *ory.OAuth2LoginRequest) {
 				r.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{"3"}}
 			}), RejectLogin: {redirectTo: hydraDone}},
@@ -349,6 +349,13 @@ func TestSkipLogin(t *testing.T) {
 				ignoredFor("login", SkipFlow)(t, p)
 				rejected(RejectLogin, "unmet_authentication_requirements")(t, p)
 			}},
+		// Q151: acr_values no flow declares, every flow offered; a flow run
+		// again would meet them no better, the skip is honoured (MEM-6, MEM-9).
+		{name: "SKP-1 CHX-6, acr_values no flow declares: honoured", env: withACRs, ev: Entry{LoginChallenge: hydraL, Cookie: cookie, Memory: memory(nil)},
+			says: hydraSays{GetLogin: read(func(r *ory.OAuth2LoginRequest) {
+				r.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{"3"}}
+			}), AcceptLogin: {redirectTo: skipCSRF}},
+			kind: Redirect, url: skipCSRF, calls: []Op{GetLogin, AcceptLogin}, write: finished},
 		// SKP-11 (revue R21): prompt=none forbids the page a skip ignored would
 		// show; Hydra, which has a session, leaves that to the login app.
 		{name: "SKP-11, prompt=none without the cookie: login_required", ev: Entry{LoginChallenge: hydraL, Cookie: cookie},

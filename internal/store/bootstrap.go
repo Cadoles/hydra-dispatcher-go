@@ -325,6 +325,7 @@ func seedSettings(s config.SeedSettings) map[string]any {
 	put("supported_locales", s.SupportedLocales != nil, func() any { return []string(*s.SupportedLocales) })
 	put("default_locale", s.DefaultLocale != nil, func() any { return *s.DefaultLocale })
 	put("fallback_locale", s.FallbackLocale != nil, func() any { return *s.FallbackLocale })
+	put("acr_values_mode", s.ACRValuesMode != nil, func() any { return *s.ACRValuesMode })
 	put("admin_oidc.enabled", s.AdminOIDCEnabled != nil, func() any { return *s.AdminOIDCEnabled })
 	put("admin_oidc.issuer", s.AdminOIDCIssuer != nil, func() any { return *s.AdminOIDCIssuer })
 	put("admin_oidc.client_id", s.AdminOIDCClientID != nil, func() any { return *s.AdminOIDCClientID })

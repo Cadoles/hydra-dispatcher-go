@@ -38,8 +38,18 @@ type Settings struct {
 	SupportedLocales             []string
 	DefaultLocale                string
 	FallbackLocale               string
-	AdminOIDC                    AdminOIDC
+	// ACRValuesMode is what a client's acr_values do when no flow declares
+	// one of them (Q151): ACRValuesPrefer offers every flow, ACRValuesRequire
+	// rejects the login.
+	ACRValuesMode string
+	AdminOIDC     AdminOIDC
 }
+
+// The values of acr_values_mode.
+const (
+	ACRValuesPrefer  = "prefer"
+	ACRValuesRequire = "require"
+)
 
 // AdminOIDC is the block admin_oidc: the login to the admin UI by an identity
 // provider (P22). It stays out of the document of the admin API and of the
@@ -75,6 +85,7 @@ func DefaultSettings() Settings {
 		SupportedLocales:   []string{"fr", "en"},
 		DefaultLocale:      "fr",
 		FallbackLocale:     "en",
+		ACRValuesMode:      ACRValuesPrefer,
 		AdminOIDC:          AdminOIDC{Scopes: []string{"openid", "email", "profile"}, UsernameClaim: "preferred_username", RequiredACR: []string{}},
 	}
 }
@@ -110,6 +121,7 @@ var registry = []setting{
 	{key: "supported_locales", help: "locales of the pages", field: func(s *Settings) any { return &s.SupportedLocales }},
 	{key: "default_locale", help: "locale of the pages when the browser asks for none of them", field: func(s *Settings) any { return &s.DefaultLocale }},
 	{key: "fallback_locale", help: "locale of a text missing from the page's locale", field: func(s *Settings) any { return &s.FallbackLocale }},
+	{key: "acr_values_mode", help: "prefer: the acr_values of a client narrow the flows offered to those declaring one of them, every flow when none does; require: none declaring one rejects the login", field: func(s *Settings) any { return &s.ACRValuesMode }},
 	{key: "admin_oidc.enabled", help: "log in to the admin by the identity provider", field: func(s *Settings) any { return &s.AdminOIDC.Enabled }, block: blockOIDC},
 	{key: "admin_oidc.issuer", help: "issuer of the identity provider, as its ID tokens name it", field: func(s *Settings) any { return &s.AdminOIDC.Issuer }, block: blockOIDC},
 	{key: "admin_oidc.client_id", help: "client_id of the admin at the identity provider", field: func(s *Settings) any { return &s.AdminOIDC.ClientID }, block: blockOIDC},
@@ -431,6 +443,9 @@ func (s Settings) Check(fail domain.Fail) {
 	}
 	if !i18n.WellFormed(s.FallbackLocale) {
 		fail("fallback_locale", "%q is not a locale in lowercase (fr, pt-br)", s.FallbackLocale)
+	}
+	if s.ACRValuesMode != ACRValuesPrefer && s.ACRValuesMode != ACRValuesRequire {
+		fail("acr_values_mode", "%q is neither %s nor %s", s.ACRValuesMode, ACRValuesPrefer, ACRValuesRequire)
 	}
 	s.AdminOIDC.check(fail)
 }

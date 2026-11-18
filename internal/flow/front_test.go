@@ -547,12 +547,25 @@ func TestChoiceRules(t *testing.T) {
 		e.Config = store.NewSnapshot(testApps(), flows, e.Config.Settings)
 	}
 	for _, tc := range []pageCase{
-		{name: "CHX-1", ev: entry, says: hydraSays{GetLogin: {login: withACR(t, "urn:acr:eidas")}, RejectLogin: {redirectTo: hydraDone}},
+		{name: "CHX-1, acr_values_mode require", env: requireACR, ev: entry, says: hydraSays{GetLogin: {login: withACR(t, "urn:acr:eidas")}, RejectLogin: {redirectTo: hydraDone}},
 			kind: Redirect, url: hydraDone, calls: []Op{GetLogin, RejectLogin}, write: finished,
 			check: rejected(RejectLogin, "unmet_authentication_requirements")},
+		// Q151: acr_values are a request; no flow declaring one, every flow
+		// is offered, and the event says which were asked.
+		{name: "CHX-6, no flow meets acr_values: every flow offered", ev: entry,
+			says: hydraSays{GetLogin: {login: withACR(t, "urn:acr:eidas", "urn:acr:other")}},
+			kind: ChoicePage, calls: []Op{GetLogin}, write: inChoice(5000, cookie),
+			check: func(t *testing.T, p played) {
+				offered("hydra-oidc", "hydra-sql", "hydra-sql-2fa")(t, p)
+				if !slices.ContainsFunc(p.Reports, func(r Report) bool {
+					return r.Event == EventACRValuesUnmet && r.Detail == "urn:acr:eidas urn:acr:other"
+				}) {
+					t.Errorf("no %s: %+v", EventACRValuesUnmet, p.Reports)
+				}
+			}},
 		{name: "CHX-1, a flow meets acr_values", env: acr, ev: entry, says: hydraSays{GetLogin: {login: withACR(t, "urn:acr:eidas", "urn:acr:other")}},
 			kind: ChoicePage, calls: []Op{GetLogin}, write: inChoice(5000, cookie), check: offered("hydra-oidc")},
-		{name: "CHX-1, retour au choix", env: acr, ev: entry,
+		{name: "CHX-1, retour au choix", env: func(e *Env) { acr(e); requireACR(e) }, ev: entry,
 			stored: func() *Flow {
 				f := atStep(t, 1, false, false)
 				f.Hydra.OIDCContext = json.RawMessage(`{"acr_values":["urn:acr:none"]}`)
@@ -1310,10 +1323,10 @@ func TestPageRejects(t *testing.T) {
 			says: hydraSays{RejectLogin: {err: err403}}, kind: ErrorPage, code: E1002, link: true, calls: []Op{RejectLogin}},
 		{name: "EXP-4, unavailable", ev: entry, stored: expired(choiceFlow(t)), says: hydraSays{RejectLogin: {err: errDown}},
 			kind: ErrorPage, code: E1004, calls: []Op{RejectLogin}},
-		{name: "EXP-4, CHX at the creation: 401 writes it finished", ev: entry,
+		{name: "EXP-4, CHX at the creation: 401 writes it finished", env: requireACR, ev: entry,
 			says: hydraSays{GetLogin: {login: unmet}, RejectLogin: {err: err401}},
 			kind: ErrorPage, code: E1002, link: false, calls: []Op{GetLogin, RejectLogin}, write: finished},
-		{name: "EXP-4, CHX at the creation: unavailable creates nothing", ev: entry,
+		{name: "EXP-4, CHX at the creation: unavailable creates nothing", env: requireACR, ev: entry,
 			says: hydraSays{GetLogin: {login: unmet}, RejectLogin: {err: errDown}},
 			kind: ErrorPage, code: E1004, calls: []Op{GetLogin, RejectLogin}},
 	} {

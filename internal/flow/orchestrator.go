@@ -370,6 +370,14 @@ func (o *Orchestrator) result(ctx context.Context, in Input, out Outcome, report
 			if r.Event == "consent.resubmitted" {
 				args = append(args, "result", r.Result)
 			}
+			if r.Event == EventACRValuesUnmet {
+				// Which client asks acr_values no flow declares (Q151).
+				f := in.Flow
+				if out.Write != nil {
+					f = out.Write
+				}
+				args = append(args, "client_id", f.ClientID())
+			}
 			if r.Event == eventSkipCheck && r.Result != SkipRefused {
 				args = append(args, "duration_ms", r.Elapsed.Milliseconds())
 			}

@@ -229,7 +229,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `id` | l'identifiant |
 | `enabled` | vrai par défaut ; faux, le flow n'est pas offert |
 | `title`, `description`, `icon_url` | par langue (`{ fr: …, en: … }`) ; l'icône relative se cherche dans le thème |
-| `acr` | l'acr envoyé à Hydra à la fin ; un client qui envoie des `acr_values` ne se voit offrir que les flows dont l'acr y figure (aucun : le login est rejeté). Pour imposer un flow, le client met `urn:hydra-dispatcher:preferred-app:<id du flow>` dans ses `acr_values` |
+| `acr` | l'acr envoyé à Hydra à la fin ; un client qui envoie des `acr_values` ne se voit offrir que les flows dont l'acr y figure, s'il y en a (aucun : tous restent offerts, ou le login est rejeté sous `acr_values_mode: require`). Pour imposer un flow, le client met `urn:hydra-dispatcher:preferred-app:<id du flow>` dans ses `acr_values` |
 | `steps` | les étapes, chacune `{ id: <app>, order: <position> }`, et éventuellement `subject_check` (`none` par défaut, `equal`, ou `claim:<nom>`) et `skip_check: true` (jamais sur la première étape) |
 | `skip_check_allowed_acr` | les `acr_values` sous lesquelles une étape peut être sautée |
 
@@ -247,6 +247,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `consent_remember_for` | un mois | la mémoire d'un consentement chez Hydra |
 | `login_accept_webhook_url`, `consent_accept_webhook_url` | | les webhooks ; une URL, ou un programme local |
 | `supported_locales`, `default_locale`, `fallback_locale` | `[fr, en]`, `fr`, `en` | les langues des pages |
+| `acr_values_mode` | `prefer` | ce que font des `acr_values` qu'aucun flow ne déclare : `prefer`, tous les flows restent offerts ; `require`, le login est rejeté. Le préfixe du flow préféré n'en fait pas partie |
 | `admin_oidc.*` | | la connexion aux écrans par un fournisseur OpenID Connect : `enabled`, `issuer`, `client_id`, `client_secret`, `scopes`, `username_claim`, `required_acr`, `auto_create`, et, pour un fournisseur sans découverte, `authorization_endpoint`, `token_endpoint`, `jwks_uri`. Ce sont des clés à point, à la racine de `dispatcher:` (`admin_oidc.enabled: true`), pas un bloc `admin_oidc:` imbriqué, refusé comme clé inconnue |
 
 Un réglage retiré de la graine garde sa valeur en base ; `~` le remet à son défaut.

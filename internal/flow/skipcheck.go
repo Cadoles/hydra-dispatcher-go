@@ -89,7 +89,14 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 	if err != nil {
 		return refused("request")
 	}
-	if reason := fresh(req.GetRequestUrl(), req.GetOidcContext().AcrValues, g.SkipCheckACR); reason != "" {
+	// The acr_values the client asks as acr: not the preferred flow's
+	// prefix, which names a flow; none when no flow declares one of them,
+	// every flow offered then (Q151): the skip changes no acr asked.
+	acr := withoutPreferred(req.GetOidcContext().AcrValues)
+	if len(r.offer(g).unmet) > 0 {
+		acr = nil
+	}
+	if reason := fresh(req.GetRequestUrl(), acr, g.SkipCheckACR); reason != "" {
 		return refused(reason)
 	}
 	call := SkipCheckCall{K: k, App: step.App, Subject: g.Subject, Device: step.Device, ClientID: req.Client.GetClientId(), Flow: g.FlowID,

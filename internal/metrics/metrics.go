@@ -66,6 +66,7 @@ type Metrics struct {
 	stateDuration                 *prometheus.HistogramVec
 	stateErrors                   *prometheus.CounterVec
 	stateConflicts                prometheus.Counter
+	acrValuesUnmet                prometheus.Counter
 	webhookDuration               *prometheus.HistogramVec
 	httpRequests                  *prometheus.CounterVec
 	httpDuration                  *prometheus.HistogramVec
@@ -131,6 +132,7 @@ func New(maxLabelValues int, log *slog.Logger) *Metrics {
 		stateDuration:       histogram("state_operation_duration_seconds", "Latency of the state store.", shortBuckets, "op"),
 		stateErrors:         counter("state_errors_total", "Errors of the state store.", "op"),
 		stateConflicts:      single("state_conflicts_total", "Conditional writes replayed."),
+		acrValuesUnmet:      single("acr_values_unmet_total", "Flows offered whole, no flow declaring one of the acr_values asked (acr_values_mode prefer)."),
 		webhookDuration:     histogram("webhook_duration_seconds", "Latency of the webhooks.", shortBuckets, "kind", "outcome"),
 		httpRequests:        counter("http_requests_total", "HTTP traffic, by route.", "route", "method", "status_class"),
 		httpDuration:        histogram("http_request_duration_seconds", "HTTP latency, by route.", shortBuckets, "route"),
@@ -600,6 +602,8 @@ func (m *Metrics) Observe(ctx context.Context, o flow.Observation) {
 			m.stepRequests.WithLabelValues(m.appLabel(o, r.Detail), "consent", "accepted").Inc()
 		case flow.EventSkipCheck:
 			m.stepSkips.WithLabelValues(m.appLabel(o, r.App), skipResult(r.Result)).Inc()
+		case flow.EventACRValuesUnmet:
+			m.acrValuesUnmet.Inc()
 		case "skip.accepted":
 			m.skips.WithLabelValues(r.Kind, "accepted").Inc()
 		case "skip.ignored":

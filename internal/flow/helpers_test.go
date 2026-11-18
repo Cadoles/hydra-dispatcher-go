@@ -145,3 +145,11 @@ func hookReport(event, kind string) func(*testing.T, played) {
 		}
 	}
 }
+
+// requireACR sets acr_values_mode require: acr_values no flow declares
+// reject the login (CHX-1, Q151).
+func requireACR(e *Env) {
+	s := e.Config.Settings
+	s.ACRValuesMode = store.ACRValuesRequire
+	e.Config = store.NewSnapshot(e.Config.Apps, e.Config.Flows, s)
+}

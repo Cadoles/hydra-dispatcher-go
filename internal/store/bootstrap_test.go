@@ -51,6 +51,7 @@ dispatcher:
   supported_locales: [en]
   default_locale: en
   fallback_locale: fr
+  acr_values_mode: require
   admin_oidc.enabled: true
   admin_oidc.issuer: https://idp.test
   admin_oidc.client_id: dispatcher-admin
@@ -82,7 +83,7 @@ dispatcher:
 		AppAutoSelect: true, ConsentAutoAccept: true, AggregateAMRFromLoginRequest: true,
 		ChallengeTTL: 30 * time.Minute, LoginRememberFor: time.Hour, ConsentRememberFor: 7 * 24 * time.Hour,
 		LoginAcceptWebhookURL: "http://hooks/login", ConsentAcceptWebhookURL: "http://hooks/consent",
-		SupportedLocales: []string{"en"}, DefaultLocale: "en", FallbackLocale: "fr",
+		SupportedLocales: []string{"en"}, DefaultLocale: "en", FallbackLocale: "fr", ACRValuesMode: ACRValuesRequire,
 		AdminOIDC: AdminOIDC{Enabled: true, Issuer: "https://idp.test", ClientID: "dispatcher-admin", ClientSecret: "s3cret",
 			Scopes: []string{"openid", "email"}, UsernameClaim: "email", RequiredACR: []string{"mfa"}, AutoCreate: true,
 			AuthorizationEndpoint: "https://idp.test/authorize", TokenEndpoint: "https://idp.test/token", JWKSURI: "https://idp.test/jwks"},

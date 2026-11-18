@@ -77,6 +77,7 @@ func TestCatalogue(t *testing.T) {
 		"state_operation_duration_seconds":      {"histogram", []string{"op"}},
 		"state_errors_total":                    {"counter", []string{"op"}},
 		"state_conflicts_total":                 {"counter", nil},
+		"acr_values_unmet_total":                {"counter", nil},
 		"webhook_duration_seconds":              {"histogram", []string{"kind", "outcome"}},
 		"http_requests_total":                   {"counter", []string{"method", "route", "status_class"}},
 		"http_request_duration_seconds":         {"histogram", []string{"route"}},

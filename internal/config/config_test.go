@@ -200,6 +200,7 @@ dispatcher:
   supported_locales: [en, de]
   default_locale: en
   fallback_locale: de
+  acr_values_mode: require
   admin_oidc.enabled: true
   admin_oidc.issuer: https://idp.test
   admin_oidc.client_id: dispatcher-admin

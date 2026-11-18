@@ -176,7 +176,9 @@ func TestSkipCheckRunsTheStep(t *testing.T) {
 
 // The guards, each without a call: no device, prompt=login, a max_age,
 // acr_values the flow does not allow the skip under; acr_values it allows go
-// on. The flow declares loa3, which the client may ask (CHX-1).
+// on. The flow declares loa3, which the client may ask (CHX-1). The preferred
+// flow's prefix names a flow, it asks no acr; acr_values no flow declares,
+// every flow offered (Q151), the skip changes no acr asked: both go on.
 func TestSkipCheckGuards(t *testing.T) {
 	for name, tt := range map[string]struct {
 		dev     Device
@@ -191,6 +193,8 @@ func TestSkipCheckGuards(t *testing.T) {
 		"max_age":     {dev: testDevice, url: "&max_age=3600", reason: "max_age"},
 		"acr refused": {dev: testDevice, acr: []string{"loa3"}, reason: "acr"},
 		"acr allowed": {dev: testDevice, acr: []string{"loa3", "loa2"}, called: true},
+		"preferred":   {dev: testDevice, acr: []string{preferredPrefix + "sql-2fa"}, called: true},
+		"acr unmet":   {dev: testDevice, acr: []string{"urn:acr:unknown"}, called: true},
 	} {
 		w, c := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Result: SkipDeclined}})
 		w.hydra.login.RequestUrl += tt.url
@@ -264,6 +268,18 @@ func TestSkipCheckAggregateAMR(t *testing.T) {
 	w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
 	if final := w.handle(Loop{Ref: lref, Cookie: w.cookie}); final.Response.URL != verifierURL || !slices.Contains(w.hydra.accepted.Amr, "otp") {
 		t.Errorf("%+v, amr %q", final.Response, w.hydra.accepted.Amr)
+	}
+}
+
+// Q151: acr_values no flow declares, every flow offered; the line of the log,
+// at info, names the values asked and the client that asks them.
+func TestACRValuesUnmetLog(t *testing.T) {
+	w, _ := skipWorld(t, nil)
+	w.hydra.login.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{preferredPrefix + "sql-2fa", "urn:acr:unknown"}}
+	w.handle(Entry{LoginChallenge: hydraL, Device: testDevice})
+	line := logLine(t, w, EventACRValuesUnmet)
+	if id := w.hydra.login.Client.GetClientId(); line["level"] != "INFO" || line["detail"] != "urn:acr:unknown" || id == "" || line["client_id"] != id {
+		t.Errorf("%v", line)
 	}
 }
 
