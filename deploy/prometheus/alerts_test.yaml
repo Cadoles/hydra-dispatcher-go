@@ -60,4 +60,4 @@ tests:
               severity: warning
             exp_annotations:
               summary: More than 10 % of the logins lose their session
-              description: The users get page E1002. The challenges expire (challenge_ttl, Hydra's ttl.login_consent_request), or a login app sends its users back badly.
+              description: The users get page E1002. Their request expired at Hydra before they came back (its ttl.login_consent_request), or a login app sends its users back badly.
