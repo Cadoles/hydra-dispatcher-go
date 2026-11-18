@@ -12,8 +12,9 @@ and the delivery are under way (phase 5; plan and journal in `hydra-dev/concepti
 **Documentation**, in French, in `docs/`: `comprendre.md`, what the dispatcher is
 for and how a sign-in goes through it, with a glossary; `livrer.md`, what to deploy,
 what it needs, how to install, check, switch over from Symfony and update it;
-`configurer.md`, the reference of `dispatcher.yaml`; `themes.md`, the themes of its
-pages. To come: operating it and rotating its keys.
+`configurer.md`, the reference of `dispatcher.yaml`; `exploiter.md`, its probes,
+metrics, alerts (`deploy/prometheus/alerts.yaml`), logs, debug window and error codes;
+`rotation.md`, rotating each key and certificate; `themes.md`, the themes of its pages.
 
 The binary serves the pages (choice of
 the flow, consent, errors, logout with its confirmation), the emulated admin API

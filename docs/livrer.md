@@ -1,6 +1,6 @@
 # Livrer le dispatcher
 
-Ce document s'adresse à qui déploie le dispatcher : il dit quoi déployer, ce qu'il faut avant, et comment l'installer, le vérifier, le mettre à jour et revenir en arrière. Il suppose lu `comprendre.md` ; la configuration est détaillée dans `configurer.md`, l'exploitation dans `exploiter.md` (à venir). Il ne dit rien de propre à un déploiement donné : chacun documente le sien à côté de ses manifestes.
+Ce document s'adresse à qui déploie le dispatcher : il dit quoi déployer, ce qu'il faut avant, et comment l'installer, le vérifier, le mettre à jour et revenir en arrière. Il suppose lu `comprendre.md` ; la configuration est détaillée dans `configurer.md`, l'exploitation dans `exploiter.md`. Il ne dit rien de propre à un déploiement donné : chacun documente le sien à côté de ses manifestes.
 
 ## Ce qu'on déploie
 

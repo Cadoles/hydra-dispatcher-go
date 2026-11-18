@@ -100,7 +100,7 @@ Une allowlist qui couvre tout Internet (`0.0.0.0/0`) est signalée au démarrage
 
 ### `secrets`
 
-Toutes des clés de 32 octets (64 caractères hexadécimaux, ou base64), chacune donnable par un fichier (`_file`). Les clés qui déchiffrent ou vérifient ont des **précédentes**, pour les tourner sans coupure : l'active signe ou chiffre, les précédentes ne font que lire (`rotation.md`, à venir).
+Toutes des clés de 32 octets (64 caractères hexadécimaux, ou base64), chacune donnable par un fichier (`_file`). Les clés qui déchiffrent ou vérifient ont des **précédentes**, pour les tourner sans coupure : l'active signe ou chiffre, les précédentes ne font que lire (`rotation.md`).
 
 | Clé | Sert à |
 | --- | --- |
@@ -176,7 +176,7 @@ Toutes des clés de 32 octets (64 caractères hexadécimaux, ou base64), chacune
 
 | Clé | Défaut | Sens |
 | --- | --- | --- |
-| `log_level` | `info` | `debug`, `info`, `warn`, `error` ; le debug se règle aussi pour un temps, à chaud (`exploiter.md`, à venir) |
+| `log_level` | `info` | `debug`, `info`, `warn`, `error` ; le debug se règle aussi pour un temps, à chaud (`exploiter.md`) |
 | `log_format` | `json` | `json` ou `text` |
 | `access_log_sample` | `1` | la part des requêtes au journal d'accès |
 | `log_ip` | `truncated` | les adresses aux journaux : `truncated`, `full` ou `none` |

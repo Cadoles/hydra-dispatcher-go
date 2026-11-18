@@ -1,0 +1,111 @@
+# Alerting rules of the hydra-dispatcher, for Prometheus (or a PrometheusRule
+# of the Prometheus operator, under its spec). docs/exploiter.md says what each
+# means and what to do. The thresholds are proposals, to set against the load
+# measured on the bench: adjust them per deployment.
+#
+# Check: promtool check rules deploy/prometheus/alerts.yaml
+groups:
+  - name: hydra-dispatcher
+    rules:
+      - alert: HydraDispatcherHydraErrors
+        expr: |
+          sum(rate(hydra_dispatcher_hydra_requests_total{status_class=~"5xx|error"}[5m]))
+            / sum(rate(hydra_dispatcher_hydra_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 5 % of the calls to Hydra's admin API fail
+          description: The users get page E1004. See Hydra, its admin API and its database.
+
+      - alert: HydraDispatcherHydraSaturated
+        expr: sum(rate(hydra_dispatcher_hydra_rejected_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Calls to Hydra refused by back-pressure or past their delay
+          description: hydra.max_in_flight or hydra.timeout reached; Hydra answers too slowly for the load.
+
+      - alert: HydraDispatcherSlow
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le) (rate(hydra_dispatcher_http_request_duration_seconds_bucket{route!~"/metrics|/health|/ready"}[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The 99th percentile of the pages and the emulated API is over 500 ms
+          description: Look at the latency of Hydra (hydra_request_duration_seconds), of the state store and of the webhooks.
+
+      - alert: HydraDispatcherDependencyDown
+        expr: min by (instance, check) (hydra_dispatcher_ready_check_up) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A dependency of the dispatcher does not answer: {{ $labels.check }}"
+          description: /ready stays 200 (a shared dependency would take every instance out), but the sign-ins fail. See the dependency named.
+
+      - alert: HydraDispatcherStateErrors
+        expr: sum(rate(hydra_dispatcher_state_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The state store (Redis or Dragonfly) fails
+          description: The sign-ins in progress get page E1000. See Redis, and state.redis_dsn.
+
+      - alert: HydraDispatcherStateConflicts
+        expr: sum(rate(hydra_dispatcher_state_conflicts_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than one conditional write a second replayed
+          description: Many requests write the same flows at once; a lasting excess ends in page E1007.
+
+      - alert: HydraDispatcherDecryptErrors
+        expr: sum(increase(hydra_dispatcher_challenge_validations_total{result="decrypt_error"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Challenges of Hydra the dispatcher cannot decrypt
+          description: hydra.system_secrets or hydra.version differ from Hydra's secrets.system and release; see docs/rotation.md.
+
+      - alert: HydraDispatcherConfigStale
+        expr: time() - hydra_dispatcher_config_last_refresh_timestamp_seconds > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: An instance has not read its configuration for 5 minutes
+          description: The database does not answer it; the changes of the admin do not reach it.
+
+      - alert: HydraDispatcherFlowAbandons
+        expr: |
+          sum by (flow) (rate(hydra_dispatcher_login_requests_total{outcome="session_missing"}[15m]))
+            / sum by (flow) (rate(hydra_dispatcher_login_requests_total[15m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 10 % of the logins of flow {{ $labels.flow }} lose their session"
+          description: A login app may send its users back badly, or the challenges expire (challenge_ttl, Hydra's ttl.login_consent_request).
+
+      - alert: HydraDispatcherWebhookErrors
+        expr: sum by (kind) (rate(hydra_dispatcher_webhook_duration_seconds_count{outcome!="ok"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.kind }} webhook fails"
+          description: The users get page E1006. See the receiver of the webhook.
+
+      - alert: HydraDispatcherAuditDropped
+        expr: sum(increase(hydra_dispatcher_audit_dropped_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Lines of the audit log lost
+          description: Its output blocks or fails (observability.audit.output, a syslog that reads no more).
