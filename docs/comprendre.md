@@ -95,7 +95,7 @@ Seules les apps déclarées y ont accès, chacune pour ses propres étapes : le 
 
 - **La configuration** (apps, flows, réglages, clients de l'API, comptes de l'admin, catalogue des scopes) vit dans une base **Postgres**. Le fichier `dispatcher.yaml` décrit l'infrastructure et une *graine* : la configuration initiale, que `bootstrap` écrit en base. Ensuite, l'admin la modifie en base : l'instance qui écrit l'applique aussitôt, les autres la relisent dans la minute.
 - **Les connexions en cours** vivent dans un store d'état : **Redis** (ou Dragonfly), ou la mémoire pour une instance seule. Une connexion y tient une clé, le temps du parcours.
-- **Le navigateur** porte quelques cookies : scellés, la *mémoire du skip*, le dernier flow choisi et l'appareil de la vérification préalable quand elle est active ; en clair, la protection CSRF du parcours et la langue.
+- **Le navigateur** porte quelques cookies : scellés, la *mémoire du skip* et l'appareil de la vérification préalable quand elle est active ; en clair, la protection CSRF du parcours, la langue et le dernier flow choisi.
 
 Les instances sont donc interchangeables : on en met autant que la charge le demande, derrière un répartiteur, sans affinité de session.
 
@@ -124,7 +124,7 @@ Une extension, désactivée par défaut. Avant une étape qui le demande (jamais
 - Le dispatcher pose dans le navigateur un cookie d'appareil, et donne à chaque app une valeur qui en est dérivée (`x_dispatcher_device`) : une app ne peut pas reconnaître l'appareil d'une autre.
 - Après un second facteur réussi, l'app retient cette valeur pour l'usager, le temps qu'elle choisit.
 - À la connexion suivante, le dispatcher lui demande, par un appel signé, si elle connaît ce couple ; elle répond par une réponse signée. Il ne demande pas si le client exige une authentification fraîche (`prompt=login`, `max_age`, un `acr_values` que le flow n'admet pas), et toute erreur, tout délai dépassé (300 ms), fait jouer l'étape normalement.
-- Le contexte de l'accept de login le dit : `x_dispatcher_skipped_steps` liste les apps des étapes sautées. Les webhooks le reçoivent ; le client ne le voit pas, sauf si le webhook de consent en fait un claim.
+- Le contexte de l'accept de login le dit : `x_dispatcher_skipped_steps` liste les apps des étapes sautées. Le webhook de login le reçoit. Ni le webhook de consent ni le client ne le voient, sauf si le webhook de login le recopie sous une autre clé du contexte, dont le webhook de consent peut faire un claim.
 
 L'app de référence (`examples/skipcheck-app`) et hydra-passwordless l'implémentent ; le protocole est décrit dans le README de l'app de référence.
 

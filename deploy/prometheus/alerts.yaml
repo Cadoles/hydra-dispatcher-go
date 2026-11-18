@@ -82,16 +82,31 @@ groups:
           summary: An instance has not read its configuration for 5 minutes
           description: The database does not answer it; the changes of the admin do not reach it.
 
+      # A session absent or expired has no flow any more: its logins count under
+      # flow="none", which holds nothing but failures (no choice page with
+      # app_auto_select), so that group stays out of the ratio by flow; the next
+      # rule watches the lost sessions as a whole.
       - alert: HydraDispatcherFlowAbandons
         expr: |
-          sum by (flow) (rate(hydra_dispatcher_login_requests_total{outcome="session_missing"}[15m]))
-            / sum by (flow) (rate(hydra_dispatcher_login_requests_total[15m])) > 0.1
+          sum by (flow) (rate(hydra_dispatcher_login_requests_total{outcome="session_missing",flow!="none"}[15m]))
+            / sum by (flow) (rate(hydra_dispatcher_login_requests_total{flow!="none"}[15m])) > 0.1
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: "More than 10 % of the logins of flow {{ $labels.flow }} lose their session"
-          description: A login app may send its users back badly, or the challenges expire (challenge_ttl, Hydra's ttl.login_consent_request).
+          summary: "More than 10 % of the logins of flow {{ $labels.flow }} come back on a finished flow"
+          description: A login app of the flow sends its users back badly, or they go back in their browser.
+
+      - alert: HydraDispatcherSessionsLost
+        expr: |
+          sum(rate(hydra_dispatcher_login_requests_total{outcome="session_missing"}[15m]))
+            / sum(rate(hydra_dispatcher_login_requests_total[15m])) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 10 % of the logins lose their session
+          description: The users get page E1002. The challenges expire (challenge_ttl, Hydra's ttl.login_consent_request), or a login app sends its users back badly.
 
       - alert: HydraDispatcherWebhookErrors
         expr: sum by (kind) (rate(hydra_dispatcher_webhook_duration_seconds_count{outcome!="ok"}[5m])) > 0

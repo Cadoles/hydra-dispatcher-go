@@ -104,7 +104,7 @@ Toutes des clés de 32 octets (64 caractères hexadécimaux, ou base64), chacune
 
 | Clé | Sert à |
 | --- | --- |
-| `cookie_key`, `cookie_keys_previous` | sceller les cookies (le parcours, la mémoire du skip, l'appareil) |
+| `cookie_key`, `cookie_keys_previous` | sceller les cookies : la mémoire du skip, l'appareil, la session de l'admin |
 | `challenge_key`, `challenge_keys_previous` | signer les challenges que le dispatcher émet aux apps et le marqueur du skip |
 | `encryption_key`, `encryption_keys_previous` | chiffrer en base les valeurs secrètes de la configuration (le secret du SSO de l'admin, les clés de la vérification préalable) ; `secrets status` et `secrets rekey` les gèrent |
 | `webhook_signing_key` | signer les appels aux webhooks ; requise avec un webhook |

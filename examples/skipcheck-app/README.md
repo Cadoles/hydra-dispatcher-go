@@ -87,8 +87,10 @@ without `prompt=login`, without `max_age`, and under `acr_values` the flow's
 `skip_check_allowed_acr` admits; it waits 300 ms at most, and any failure runs
 the step. The accept of a login whose step was skipped names it in its context,
 `x_dispatcher_skipped_steps`, to tell a factor remembered from a factor typed:
-the webhooks receive it; the client sees it only if the consent webhook makes a
-claim of it, Hydra keeping a login's context out of the tokens.
+the login webhook receives it. Neither the consent webhook, which gets the
+login's context without its x_dispatcher_* members, nor the client sees it,
+unless the login webhook copies it under another key of the context, of which
+the consent webhook may make a claim.
 
 ## Before production
 

@@ -48,7 +48,7 @@ Elle chiffre en base les valeurs secrètes de la configuration : le `client_secr
 1. **Distribuer** : la nouvelle clé dans `secrets.encryption_keys_previous`, partout.
 2. **Promouvoir** : la nouvelle devient `secrets.encryption_key`, l'ancienne passe dans les précédentes. Les écritures suivantes utilisent la nouvelle.
 3. **Rechiffrer** : `hydra-dispatcher secrets rekey` rechiffre par la nouvelle clé, en une transaction, tout ce qu'une précédente avait chiffré. La commande peut se rejouer sans risque.
-4. **Vérifier, puis retirer** : `hydra-dispatcher secrets status` liste chaque valeur chiffrée et sa clé. Il finit en code 1 si l'une d'elles n'est tenue par aucune clé de la configuration. Quand plus aucune valeur n'est sous l'ancienne clé, la retirer.
+4. **Vérifier, puis retirer** : `hydra-dispatcher secrets status` liste chaque valeur chiffrée et sa clé. Il finit en code 1 si l'une d'elles n'est tenue par aucune clé de la configuration. La métrique `hydra_dispatcher_encrypted_values{kid}` compte les valeurs par clé. Quand plus aucune valeur n'est sous l'ancienne clé, la retirer.
 
 **Ne jamais retirer une clé sous laquelle une valeur est encore chiffrée** : la configuration devient illisible, et une instance qui démarre s'arrête sur l'erreur.
 
@@ -112,6 +112,6 @@ Rien ne casse si le dispatcher n'a pas encore la bonne liste : un challenge qu'i
 Aller vite plutôt que sans accroc :
 
 - **`cookie_key`, `challenge_key`** : promouvoir la nouvelle clé et retirer l'ancienne dans le même déploiement. Les usagers en pleine connexion recommencent, ceux qui avaient un skip se reconnectent une fois.
-- **`encryption_key`** : fusionner les étapes 1 et 2 (quelques erreurs de lecture sur les instances pas encore redéployées), lancer `secrets rekey` aussitôt, vérifier par `secrets status`, retirer l'ancienne clé. Changer aussi les secrets qu'elle protégeait : le `client_secret` du SSO de l'admin chez le fournisseur, les `skip_check_key` avec leurs apps.
+- **`encryption_key`** : fusionner les étapes 1 et 2. Le temps du déploiement, une instance pas encore redéployée ne lit plus ce qui est chiffré sous la nouvelle clé : elle garde sa configuration d'avant, répond 500 aux écritures de l'admin, et ne redémarrerait pas. Lancer `secrets rekey` une fois toutes les instances redéployées, vérifier par `secrets status`, puis retirer l'ancienne clé. Changer aussi les secrets qu'elle protégeait : le `client_secret` du SSO de l'admin chez le fournisseur, les `skip_check_key` avec leurs apps.
 - **`admin.api.private_key`** : nouvelle paire, sans garder l'ancienne clé publique. Les jetons en cours sont refusés, et les clients en redemandent.
 - **`webhook_signing_key`, `skip_check_key`** : changer les deux côtés tout de suite. Pendant l'écart, les webhooks échouent (E1006) ou les étapes se jouent.
