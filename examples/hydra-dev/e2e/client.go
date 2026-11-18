@@ -35,6 +35,8 @@ type client struct {
 	// scope is that of the next authorization requests, "openid profile
 	// email" when empty.
 	scope string
+	// acrValues, when set, is sent as acr_values (P36).
+	acrValues string
 }
 
 // findClient returns the id of the one client named name. hydra-dev imports
@@ -78,6 +80,9 @@ func (c *client) authURL(prompt string) string {
 	}
 	if prompt != "" {
 		q.Set("prompt", prompt)
+	}
+	if c.acrValues != "" {
+		q.Set("acr_values", c.acrValues)
 	}
 	u := c.public.JoinPath("/oauth2/auth")
 	u.RawQuery = q.Encode()

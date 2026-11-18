@@ -109,6 +109,7 @@ var scenarios = []scenario{
 	{name: "prompt-consent-accept", run: promptConsent("accept")},
 	{name: "prompt-consent-reject", run: promptConsent("reject")},
 	{name: "back-to-choice", run: (*driver).backToChoice},
+	{name: "acr-values-unmet", run: (*driver).acrValuesUnmet},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
 	{name: "consent-by-catalogue", run: (*driver).consentByCatalogue, goOnly: true},
 	{name: "pre-check", run: preCheckOn("hydra-sql-remember", "hydra-remember", true), goOnly: true},
@@ -828,6 +829,22 @@ func preCheckOn(flow, kind string, revocable bool) func(*driver) error {
 		d.note("step skipped for the device remembered, run under prompt=login, on another device, and once revoked from it")
 		return nil
 	}
+}
+
+// acrValuesUnmet signs in with acr_values no flow of hydra-dev declares (P36,
+// Q151, CHX-6): a request, not a requirement; every flow is offered and the
+// login goes through, as the Symfony, which ignored them, let it.
+func (d *driver) acrValuesUnmet() error {
+	d.client.acrValues = "urn:e2e:unknown"
+	defer func() { d.client.acrValues = "" }()
+	o, err := d.authorize(login{flow: "hydra-sql", user: isabelle, consent: "accept"})
+	switch {
+	case err != nil:
+		return err
+	case !o.saw("choice"):
+		return fmt.Errorf("no choice page: %v", o.seen)
+	}
+	return d.granted(o, identities["hydra-sql"])
 }
 
 // secondLoginWithoutMemory signs in twice with hydra-sql in the same
