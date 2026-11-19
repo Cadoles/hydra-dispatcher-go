@@ -190,7 +190,7 @@ func TestMemoryAtEntry(t *testing.T) {
 		ignoredCase("MEM-8 Q164, a scope more, skip_scopes subset", skipScopes(store.SkipScopesSubset), memory(func(c *Remembered) { c.Scp = []string{"openid", "email"} }), nil, SkipScopes),
 		honoured("MEM-8 Q164, fewer scopes, skip_scopes any", skipScopes(store.SkipScopesAny), memory(nil), func(r *ory.OAuth2LoginRequest) { r.RequestedScope = []string{"openid"} }),
 		honoured("MEM-8 Q164, a scope more, skip_scopes any", skipScopes(store.SkipScopesAny), memory(func(c *Remembered) { c.Scp = []string{"openid"} }), nil),
-		ignoredCase("MEM-10 after MEM-8 Q164: skip_scopes any leaves the audience compared", skipScopes(store.SkipScopesAny), memory(nil), func(r *ory.OAuth2LoginRequest) {
+		ignoredCase("MEM-10 Q164: skip_scopes any leaves the audience compared", skipScopes(store.SkipScopesAny), memory(nil), func(r *ory.OAuth2LoginRequest) {
 			r.RequestedScope = []string{"openid"}
 			r.RequestedAccessTokenAudience = []string{"other"}
 		}, SkipAudience),
@@ -647,6 +647,23 @@ func TestConsentWithoutFlow(t *testing.T) {
 			check: func(t *testing.T, p played) {
 				b := p.calls[len(p.calls)-1].AcceptConsent
 				if !slices.Equal(b.GrantScope, []string{"openid"}) || rawJSON(b.Session.IdToken) != `{"email":"alice@example.org","name":"Alice"}` {
+					t.Errorf("grant %v, session %s", b.GrantScope, rawJSON(b.Session.IdToken))
+				}
+			}},
+		// R62: the consent without a flow compares as the entry does.
+		{name: "SKC-6 MEM-8 Q164, a scope more, skip_scopes subset", env: skipScopes(store.SkipScopesSubset), ev: Consent{Challenge: hydraC, Memory: memory(nil)},
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.RequestedScope = []string{"openid", "phone"} }), RejectConsent: {redirectTo: hydraDone}},
+			kind: Redirect, url: hydraDone, calls: []Op{GetConsent, RejectConsent},
+			check: func(t *testing.T, p played) {
+				rejected(RejectConsent, "login_required")(t, p)
+				ignoredFor("consent", SkipScopes)(t, p)
+			}},
+		{name: "SKC-1 Q164, a scope more, skip_scopes any: the cookie's claims, no more", env: skipScopes(store.SkipScopesAny), ev: get,
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.RequestedScope = []string{"openid", "phone"} }), AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				b := p.calls[len(p.calls)-1].AcceptConsent
+				if !slices.Equal(b.GrantScope, []string{"openid", "phone"}) || rawJSON(b.Session.IdToken) != `{"email":"alice@example.org","name":"Alice"}` {
 					t.Errorf("grant %v, session %s", b.GrantScope, rawJSON(b.Session.IdToken))
 				}
 			}},
