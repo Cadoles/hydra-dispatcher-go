@@ -90,12 +90,14 @@ func (r *run) preCheck(g *Flow) (bool, *Outcome, []Report) {
 		return refused("request")
 	}
 	// The acr_values the client asks as acr: not the preferred flow's
-	// prefix, which names a flow; none when the flow was chosen without
-	// declaring one of them, every flow offered then (Q151, CHX-6). Judged on
-	// the acr the flow was chosen with, kept in g, not on the configuration
-	// of the moment, which may have changed since (R58).
+	// prefix, which names a flow. They hold when the flow will send one of
+	// them at its end, its declared acr or, without one, min(2, its steps),
+	// which a step skipped counts: only skip_check_allowed_acr then lets the
+	// step be skipped. Otherwise the flow was offered without meeting them
+	// (Q151, CHX-6), and the skip changes no acr asked. Judged on the flow as
+	// chosen, kept in g, not on the configuration of the moment (R58).
 	acr := withoutPreferred(req.GetOidcContext().AcrValues)
-	if !slices.Contains(acr, g.ACR) {
+	if !slices.Contains(acr, g.ACRAtEnd()) {
 		acr = nil
 	}
 	if reason := fresh(req.GetRequestUrl(), acr, g.SkipCheckACR); reason != "" {

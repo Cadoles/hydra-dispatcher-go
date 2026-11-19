@@ -302,6 +302,42 @@ func TestSkipCheckGuardKeepsTheChoice(t *testing.T) {
 	}
 }
 
+// R58, out of its list: a flow without a declared acr sends min(2, its
+// steps), a step skipped counted. sql-oidc declares none and has two steps:
+// a client asking 2 gets 2 from it, so only skip_check_allowed_acr lets its
+// step be skipped; asking a value it will not send, the skip changes no acr
+// asked, and goes on.
+func TestSkipCheckGuardImplicitACR(t *testing.T) {
+	for name, tt := range map[string]struct {
+		acr     string
+		allowed []string
+		called  bool
+	}{
+		"asks 2, not allowed": {acr: "2"},
+		"asks 2, allowed":     {acr: "2", allowed: []string{"2"}, called: true},
+		"asks 1, never sent":  {acr: "1", called: true},
+	} {
+		w, c := skipWorld(t, map[string]SkipCheckAnswer{"oidc": {Result: SkipDeclined}})
+		snap := w.o.Config.Snapshot()
+		flows := slices.Clone(snap.Flows)
+		for i := range flows {
+			if flows[i].ID == "sql-oidc" {
+				flows[i].SkipCheckAllowedACR = tt.allowed
+			}
+		}
+		w.o.Config = snapshots{store.NewSnapshot(snap.Apps, flows, snap.Settings)}
+		w.hydra.login.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{tt.acr}}
+		r := throughSQL(t, w, "sql-oidc", testDevice)
+		reps := reportsOf(r, eventSkipCheck)
+		switch {
+		case !strings.HasPrefix(r.Response.URL, "http://oidc.hydra.test/login?") || (len(c.calls) > 0) != tt.called:
+			t.Errorf("%s: %+v, calls %d", name, r.Response, len(c.calls))
+		case !tt.called && (len(reps) != 1 || reps[0].Reason != "acr"):
+			t.Errorf("%s: reports %+v", name, r.Reports)
+		}
+	}
+}
+
 // Q151: acr_values no flow declares, every flow offered; the line of the log,
 // at info, names the values asked and the client that asks them.
 func TestACRValuesUnmetLog(t *testing.T) {

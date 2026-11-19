@@ -129,6 +129,16 @@ func (f *Flow) accepted() []Step {
 	return out
 }
 
+// ACRAtEnd is the acr the flow will send at its end: the one it declares,
+// otherwise min(2, its steps), each of them accepted or skipped by then
+// (ACRNow).
+func (f *Flow) ACRAtEnd() string {
+	if f.ACR != "" {
+		return f.ACR
+	}
+	return strconv.Itoa(min(2, len(f.Steps)))
+}
+
 // ACRNow is the acr of the flow at this point: the one the chosen flow
 // declares, otherwise min(2, steps whose login is accepted), as Symfony.
 func (f *Flow) ACRNow() string {

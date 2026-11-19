@@ -123,7 +123,7 @@ Une extension, désactivée par défaut. Avant une étape qui le demande (jamais
 
 - Le dispatcher pose dans le navigateur un cookie d'appareil, et donne à chaque app une valeur qui en est dérivée (`x_dispatcher_device`) : une app ne peut pas reconnaître l'appareil d'une autre.
 - Après un second facteur réussi, l'app retient cette valeur pour l'usager, le temps qu'elle choisit.
-- À la connexion suivante, le dispatcher lui demande, par un appel signé, si elle connaît ce couple ; elle répond par une réponse signée. Il ne demande pas si le client exige une authentification fraîche (`prompt=login`, `max_age`, un `acr_values` que le flow n'admet pas), et toute erreur, tout délai dépassé (300 ms), fait jouer l'étape normalement.
+- À la connexion suivante, le dispatcher lui demande, par un appel signé, si elle connaît ce couple ; elle répond par une réponse signée. Il ne demande pas si le client exige une authentification fraîche (`prompt=login`, `max_age`), ni si le client demande l'acr que le flow enverra (le sien, ou à défaut le nombre d'étapes plafonné à 2) sans que `skip_check_allowed_acr` l'admette. Toute erreur, tout délai dépassé (300 ms), fait jouer l'étape normalement.
 - Le contexte de l'accept de login le dit : `x_dispatcher_skipped_steps` liste les apps des étapes sautées. Le webhook de login le reçoit. Ni le webhook de consent ni le client ne le voient, sauf si le webhook de login le recopie sous une autre clé du contexte, dont le webhook de consent peut faire un claim.
 
 L'app de référence (`examples/skipcheck-app`) et hydra-passwordless l'implémentent ; le protocole est décrit dans le README de l'app de référence.

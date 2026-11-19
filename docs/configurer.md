@@ -231,7 +231,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `title`, `description`, `icon_url` | par langue (`{ fr: …, en: … }`) ; l'icône relative se cherche dans le thème |
 | `acr` | l'acr envoyé à Hydra à la fin ; un client qui envoie des `acr_values` ne se voit offrir que les flows dont l'acr y figure, s'il y en a (aucun : tous restent offerts, ou le login est rejeté sous `acr_values_mode: require`). Pour imposer un flow, le client met `urn:hydra-dispatcher:preferred-app:<id du flow>` dans ses `acr_values` |
 | `steps` | les étapes, chacune `{ id: <app>, order: <position> }`, et éventuellement `subject_check` (`none` par défaut, `equal`, ou `claim:<nom>`) et `skip_check: true` (jamais sur la première étape) |
-| `skip_check_allowed_acr` | les `acr_values` sous lesquelles une étape peut être sautée |
+| `skip_check_allowed_acr` | les `acr_values` sous lesquelles une étape peut être sautée, quand le client demande l'acr que le flow enverra : le sien, ou à défaut le nombre d'étapes plafonné à 2 (une étape sautée compte). Des `acr_values` que le flow n'enverra pas, offertes à tous les flows faute d'en trouver un qui les déclare, n'empêchent pas le saut |
 
 ### Les réglages
 
