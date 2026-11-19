@@ -42,13 +42,24 @@ type Settings struct {
 	// one of them (Q151): ACRValuesPrefer offers every flow, ACRValuesRequire
 	// rejects the login.
 	ACRValuesMode string
-	AdminOIDC     AdminOIDC
+	// SkipScopes is how the scopes a client requests compare with those of
+	// the remember cookie for Hydra's skip to be honoured (MEM-8, Q164):
+	// SkipScopesEqual, SkipScopesSubset or SkipScopesAny.
+	SkipScopes string
+	AdminOIDC  AdminOIDC
 }
 
 // The values of acr_values_mode.
 const (
 	ACRValuesPrefer  = "prefer"
 	ACRValuesRequire = "require"
+)
+
+// The values of skip_scopes.
+const (
+	SkipScopesEqual  = "equal"
+	SkipScopesSubset = "subset"
+	SkipScopesAny    = "any"
 )
 
 // AdminOIDC is the block admin_oidc: the login to the admin UI by an identity
@@ -86,6 +97,7 @@ func DefaultSettings() Settings {
 		DefaultLocale:      "fr",
 		FallbackLocale:     "en",
 		ACRValuesMode:      ACRValuesPrefer,
+		SkipScopes:         SkipScopesEqual,
 		AdminOIDC:          AdminOIDC{Scopes: []string{"openid", "email", "profile"}, UsernameClaim: "preferred_username", RequiredACR: []string{}},
 	}
 }
@@ -121,6 +133,7 @@ var registry = []setting{
 	{key: "supported_locales", help: "locales of the pages", field: func(s *Settings) any { return &s.SupportedLocales }},
 	{key: "default_locale", help: "locale of the pages when the browser asks for none of them", field: func(s *Settings) any { return &s.DefaultLocale }},
 	{key: "fallback_locale", help: "locale of a text missing from the page's locale", field: func(s *Settings) any { return &s.FallbackLocale }},
+	{key: "skip_scopes", help: "the scopes a client requests, compared with those of the remembered login for Hydra's skip: equal, the same; subset, among them; any, whatever they are", field: func(s *Settings) any { return &s.SkipScopes }},
 	{key: "acr_values_mode", help: "prefer: the acr_values of a client narrow the flows offered to those declaring one of them, every flow when none does; require: none declaring one rejects the login", field: func(s *Settings) any { return &s.ACRValuesMode }},
 	{key: "admin_oidc.enabled", help: "log in to the admin by the identity provider", field: func(s *Settings) any { return &s.AdminOIDC.Enabled }, block: blockOIDC},
 	{key: "admin_oidc.issuer", help: "issuer of the identity provider, as its ID tokens name it", field: func(s *Settings) any { return &s.AdminOIDC.Issuer }, block: blockOIDC},
@@ -443,6 +456,9 @@ func (s Settings) Check(fail domain.Fail) {
 	}
 	if !i18n.WellFormed(s.FallbackLocale) {
 		fail("fallback_locale", "%q is not a locale in lowercase (fr, pt-br)", s.FallbackLocale)
+	}
+	if s.SkipScopes != SkipScopesEqual && s.SkipScopes != SkipScopesSubset && s.SkipScopes != SkipScopesAny {
+		fail("skip_scopes", "%q is none of %s, %s, %s", s.SkipScopes, SkipScopesEqual, SkipScopesSubset, SkipScopesAny)
 	}
 	if s.ACRValuesMode != ACRValuesPrefer && s.ACRValuesMode != ACRValuesRequire {
 		fail("acr_values_mode", "%q is neither %s nor %s", s.ACRValuesMode, ACRValuesPrefer, ACRValuesRequire)

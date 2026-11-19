@@ -153,3 +153,12 @@ func requireACR(e *Env) {
 	s.ACRValuesMode = store.ACRValuesRequire
 	e.Config = store.NewSnapshot(e.Config.Apps, e.Config.Flows, s)
 }
+
+// skipScopes sets skip_scopes (MEM-8, Q164).
+func skipScopes(mode string) func(e *Env) {
+	return func(e *Env) {
+		s := e.Config.Settings
+		s.SkipScopes = mode
+		e.Config = store.NewSnapshot(e.Config.Apps, e.Config.Flows, s)
+	}
+}

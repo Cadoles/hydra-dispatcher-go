@@ -70,6 +70,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 		DefaultLocale:                "en",
 		FallbackLocale:               "fr",
 		ACRValuesMode:                ACRValuesRequire,
+		SkipScopes:                   SkipScopesSubset,
 		AdminOIDC: AdminOIDC{Enabled: true, Issuer: "https://idp.test", ClientID: "dispatcher-admin", Scopes: []string{"openid"},
 			UsernameClaim: "email", RequiredACR: []string{"mfa", "loa2"}, AutoCreate: true,
 			AuthorizationEndpoint: "https://idp.test/a", TokenEndpoint: "https://idp.test/t", JWKSURI: "https://idp.test/k"},

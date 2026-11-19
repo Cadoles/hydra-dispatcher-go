@@ -101,7 +101,7 @@ Les instances sont donc interchangeables : on en met autant que la charge le dem
 
 ## Le skip
 
-Une fois connecté, l'usager garde une session chez Hydra. À la connexion suivante, pour un autre client ou le même, Hydra le signale (`skip`) : il n'y a rien à redemander. Le dispatcher accepte alors directement, sans page de choix ni app (l'écran de consentement peut s'afficher, selon la configuration et le client), en reprenant ce que la connexion précédente avait accepté : il le garde, chiffré, dans le cookie `dispatcher_remember`. Si ce cookie manque, ou ne correspond plus (une autre session, un flow changé, d'autres scopes), il refait le parcours, et vérifie à la fin que c'est bien le même subject que Hydra connaît.
+Une fois connecté, l'usager garde une session chez Hydra. À la connexion suivante, pour un autre client ou le même, Hydra le signale (`skip`) : il n'y a rien à redemander. Le dispatcher accepte alors directement, sans page de choix ni app (l'écran de consentement peut s'afficher, selon la configuration et le client), en reprenant ce que la connexion précédente avait accepté : il le garde, chiffré, dans le cookie `dispatcher_remember`. Si ce cookie manque, ou ne correspond plus (une autre session, un flow changé, d'autres scopes ou une autre audience), il refait le parcours, et vérifie à la fin que c'est bien le même subject que Hydra connaît. Par défaut, il faut les mêmes scopes : un client qui en demande moins que celui qui a écrit le cookie refait le parcours. Le réglage `skip_scopes` assouplit cette règle, pour un partenaire qui ne demande que `openid` après le portail par exemple ; voir [configurer](configurer.md).
 
 ## La déconnexion
 

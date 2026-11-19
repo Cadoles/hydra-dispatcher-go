@@ -810,7 +810,7 @@ func TestSettings(t *testing.T) {
 	w := r.do(r.reader, http.MethodGet, "/admin/v1/settings", "", "")
 	want := `{"appAutoSelect":false,"consentAutoAccept":false,"aggregateAmrFromLoginRequest":false,"challengeTtl":3600,"remember":true,` +
 		`"loginRememberFor":86400,"consentRememberFor":2629800,"loginAcceptWebhookUrl":null,"consentAcceptWebhookUrl":null,` +
-		`"supportedLocales":["fr","en"],"defaultLocale":"fr","fallbackLocale":"en","acrValuesMode":"prefer"}`
+		`"supportedLocales":["fr","en"],"defaultLocale":"fr","fallbackLocale":"en","skipScopes":"equal","acrValuesMode":"prefer"}`
 	if got := strings.TrimSpace(w.Body.String()); w.Code != http.StatusOK || got != want {
 		t.Fatalf("GET: %d\n%s\nwant\n%s", w.Code, got, want)
 	}

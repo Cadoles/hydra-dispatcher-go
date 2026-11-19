@@ -73,6 +73,7 @@ type SeedSettings struct {
 	DefaultLocale                *string   `yaml:"default_locale"`
 	FallbackLocale               *string   `yaml:"fallback_locale"`
 	ACRValuesMode                *string   `yaml:"acr_values_mode"`
+	SkipScopes                   *string   `yaml:"skip_scopes"`
 	// The block admin_oidc, by the keys of the setting table (P22): the
 	// login to the admin by an identity provider. client_secret is encrypted
 	// in the database by secrets.encryption_key; give it by ${...}.

@@ -183,6 +183,17 @@ func TestMemoryAtEntry(t *testing.T) {
 		honoured("MEM-8, the same scopes, in another order and repeated", nil, memory(nil), func(r *ory.OAuth2LoginRequest) {
 			r.RequestedScope = []string{"email", "openid", "profile", "openid"}
 		}),
+		// Q164: a partner asks openid alone after the portal's openid profile
+		// email (a partner behind an authenticating proxy that tries
+		// prompt=none).
+		honoured("MEM-8 Q164, fewer scopes, skip_scopes subset", skipScopes(store.SkipScopesSubset), memory(nil), func(r *ory.OAuth2LoginRequest) { r.RequestedScope = []string{"openid"} }),
+		ignoredCase("MEM-8 Q164, a scope more, skip_scopes subset", skipScopes(store.SkipScopesSubset), memory(func(c *Remembered) { c.Scp = []string{"openid", "email"} }), nil, SkipScopes),
+		honoured("MEM-8 Q164, fewer scopes, skip_scopes any", skipScopes(store.SkipScopesAny), memory(nil), func(r *ory.OAuth2LoginRequest) { r.RequestedScope = []string{"openid"} }),
+		honoured("MEM-8 Q164, a scope more, skip_scopes any", skipScopes(store.SkipScopesAny), memory(func(c *Remembered) { c.Scp = []string{"openid"} }), nil),
+		ignoredCase("MEM-10 after MEM-8 Q164: skip_scopes any leaves the audience compared", skipScopes(store.SkipScopesAny), memory(nil), func(r *ory.OAuth2LoginRequest) {
+			r.RequestedScope = []string{"openid"}
+			r.RequestedAccessTokenAudience = []string{"other"}
+		}, SkipAudience),
 		// MEM-9 (Q36): the admin raised hydra-sql's acr to 2, fh unchanged.
 		ignoredCase("MEM-9, the cookie's acr not among acr_values", func(e *Env) { withACRs(e); configured(e, "hydra-sql").ACR = "2" }, memory(nil), acrValues("2"), SkipACR),
 		honoured("MEM-9, the cookie's acr among acr_values", withACRs, memory(nil), acrValues("1", "2")),
@@ -627,6 +638,26 @@ func TestConsentWithoutFlow(t *testing.T) {
 			check: func(t *testing.T, p played) {
 				rejected(RejectConsent, "login_required")(t, p)
 				ignoredFor("consent", SkipScopes)(t, p)
+			}},
+		// Q164: the partner's openid alone, the portal's cookie. Permissive,
+		// the cookie's claims; strict, those of openid alone (none here).
+		{name: "SKC-1 Q164, fewer scopes, skip_scopes any: the cookie's claims", env: skipScopes(store.SkipScopesAny), ev: get,
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.RequestedScope = []string{"openid"} }), AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				b := p.calls[len(p.calls)-1].AcceptConsent
+				if !slices.Equal(b.GrantScope, []string{"openid"}) || rawJSON(b.Session.IdToken) != `{"email":"alice@example.org","name":"Alice"}` {
+					t.Errorf("grant %v, session %s", b.GrantScope, rawJSON(b.Session.IdToken))
+				}
+			}},
+		{name: "SKC-1 Q164 strict, fewer scopes, skip_scopes subset: the claims of the scopes asked", env: func(e *Env) { skipScopes(store.SkipScopesSubset)(e); e.StrictClaims = true }, ev: get,
+			says: hydraSays{GetConsent: read(func(r *ory.OAuth2ConsentRequest) { r.RequestedScope = []string{"openid"} }), AcceptConsent: {redirectTo: callbackURL}},
+			kind: Redirect, url: callbackURL, calls: []Op{GetConsent, AcceptConsent},
+			check: func(t *testing.T, p played) {
+				b := p.calls[len(p.calls)-1].AcceptConsent
+				if rawJSON(b.Session.IdToken) != `{}` || rawJSON(b.Session.AccessToken) != `{}` {
+					t.Errorf("session %s %s", rawJSON(b.Session.IdToken), rawJSON(b.Session.AccessToken))
+				}
 			}},
 		// Revue R21: the access token claims were written for other audiences.
 		{name: "SKC-6 MEM-10, another audience", ev: Consent{Challenge: hydraC, Memory: memory(nil)},

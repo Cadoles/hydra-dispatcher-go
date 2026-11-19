@@ -7,6 +7,8 @@ import (
 	"time"
 
 	ory "github.com/ory/hydra-client-go/v26"
+
+	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
 )
 
 // The memory of the skip (Mémoire du skip of Table de transitions.md, lot
@@ -54,12 +56,8 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes, audien
 	switch {
 	case c.FH != Composition(apps):
 		return SkipComposition, o.reports // MEM-7
-	case !sameSet(scopes, c.Scp):
-		// MEM-8 (revue R20): the same scopes, not only covered. The cookie's
-		// claims were filtered by the login apps for the scopes of the
-		// consent that wrote it (hydra-sql's FILTER_CLAIMS_BY_SCOPE); fewer
-		// scopes would get claims of scopes neither requested nor granted,
-		// another client's included, until the catalogue filters them.
+	case !scopesServe(r.Env.Config.Settings.SkipScopes, scopes, c.Scp):
+		// MEM-8 (revue R20, Q164): the scopes, compared as skip_scopes says.
 		return SkipScopes, o.reports
 	case len(acr) > 0 && len(o.unmet) == 0 && !slices.Contains(acr, c.ACR):
 		// MEM-9 (Q36): fh does not cover the acr the flow declares, which
@@ -77,12 +75,40 @@ func (r *run) memoryFails(m Memory, sid, sub string, probe *Flow, scopes, audien
 	return "", o.reports
 }
 
+// scopesServe tells whether the scopes a request asks let the cookie serve
+// it (MEM-8, Q164), as skip_scopes says:
+//   - equal, the default, the same set (revue R20): a login app may have
+//     filtered the cookie's claims for the scopes of the consent that wrote
+//     it (hydra-sql's FILTER_CLAIMS_BY_SCOPE); fewer scopes would get claims
+//     of scopes neither requested nor granted, another client's included,
+//     unless consent.claims_filter strict filters them by the catalogue;
+//   - subset, the scopes requested among the cookie's: the claims served are
+//     those of the cookie, filtered by the catalogue under strict;
+//   - any, whatever they are, as Symfony, for a deployment whose apps give
+//     every claim whatever the scopes (hydra-sql with
+//     FILTER_CLAIMS_BY_SCOPE=false, for example); a scope the cookie's login
+//     was not asked may find no claim.
+//
+// The cookie is not written again at the skip (WRT-5): another client's
+// scopes never replace those of the login that wrote it.
+func scopesServe(mode string, requested, remembered []string) bool {
+	switch mode {
+	case store.SkipScopesAny:
+		return true
+	case store.SkipScopesSubset:
+		return within(requested, remembered)
+	}
+	return sameSet(requested, remembered)
+}
+
+// within tells whether each of a is in b.
+func within(a, b []string) bool {
+	return !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
+}
+
 // sameSet tells whether what is requested is what the cookie holds, order and
 // repeats aside (MEM-8, MEM-10).
 func sameSet(requested, remembered []string) bool {
-	within := func(a, b []string) bool {
-		return !slices.ContainsFunc(a, func(s string) bool { return !slices.Contains(b, s) })
-	}
 	return within(requested, remembered) && within(remembered, requested)
 }
 

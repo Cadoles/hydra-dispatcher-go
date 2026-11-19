@@ -247,6 +247,7 @@ Sous `dispatcher:`. `bootstrap` l'écrit en base :
 | `consent_remember_for` | un mois | la mémoire d'un consentement chez Hydra |
 | `login_accept_webhook_url`, `consent_accept_webhook_url` | | les webhooks ; une URL, ou un programme local |
 | `supported_locales`, `default_locale`, `fallback_locale` | `[fr, en]`, `fr`, `en` | les langues des pages |
+| `skip_scopes` | `equal` | les scopes qu'un client demande, comparés à ceux de la connexion gardée pour réutiliser la session (`skip`) : `equal`, les mêmes ; `subset`, une partie d'entre eux ; `any`, quels qu'ils soient, comme le dispatcher Symfony. `subset` ou `any` donnent au client les claims de la connexion gardée, ceux de ses scopes seulement avec `consent.claims_filter: strict` : à réserver à des apps qui rendent leurs claims sans regarder les scopes (hydra-sql avec `FILTER_CLAIMS_BY_SCOPE=false`), ou au filtre strict |
 | `acr_values_mode` | `prefer` | ce que font des `acr_values` qu'aucun flow ne déclare : `prefer`, tous les flows restent offerts ; `require`, le login est rejeté. Le préfixe du flow préféré n'en fait pas partie |
 | `admin_oidc.*` | | la connexion aux écrans par un fournisseur OpenID Connect : `enabled`, `issuer`, `client_id`, `client_secret`, `scopes`, `username_claim`, `required_acr`, `auto_create`, et, pour un fournisseur sans découverte, `authorization_endpoint`, `token_endpoint`, `jwks_uri`. Ce sont des clés à point, à la racine de `dispatcher:` (`admin_oidc.enabled: true`), pas un bloc `admin_oidc:` imbriqué, refusé comme clé inconnue |
 

@@ -1201,7 +1201,7 @@ components:
     Settings:
       type: object
       required: [appAutoSelect, consentAutoAccept, aggregateAmrFromLoginRequest, challengeTtl, remember, loginRememberFor, consentRememberFor,
-        loginAcceptWebhookUrl, consentAcceptWebhookUrl, supportedLocales, defaultLocale, fallbackLocale, acrValuesMode]
+        loginAcceptWebhookUrl, consentAcceptWebhookUrl, supportedLocales, defaultLocale, fallbackLocale, skipScopes, acrValuesMode]
       properties:
         appAutoSelect: { type: boolean }
         consentAutoAccept: { type: boolean }
@@ -1215,6 +1215,7 @@ components:
         supportedLocales: { type: array, items: { type: string } }
         defaultLocale: { type: string }
         fallbackLocale: { type: string }
+        skipScopes: { type: string, enum: [equal, subset, any], description: "The scopes a client requests, compared with those of the remembered login for Hydra's skip: equal, the same; subset, among them; any, whatever they are." }
         acrValuesMode: { type: string, enum: [prefer, require], description: 'What acr_values no flow declares do: prefer offers every flow, require rejects the login.' }
     SettingsWrite:
       type: object
@@ -1233,6 +1234,7 @@ components:
         supportedLocales: { type: [array, "null"], items: { type: string } }
         defaultLocale: { type: [string, "null"] }
         fallbackLocale: { type: [string, "null"] }
+        skipScopes: { type: [string, "null"], enum: [equal, subset, any, null] }
         acrValuesMode: { type: [string, "null"], enum: [prefer, require, null] }
         sessionTtl: { type: [integer, "null"], deprecated: true }
         id: { deprecated: true }
