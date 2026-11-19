@@ -264,16 +264,6 @@ func (p page) find(name string) (form, bool) {
 	return form{}, false
 }
 
-// formTo returns the form of p that posts to a path ending in path.
-func (p page) formTo(path string) (form, bool) {
-	for _, f := range parseForms(p.URL, p.Body) {
-		if f.Action != nil && strings.HasSuffix(f.Action.Path, path) {
-			return f, true
-		}
-	}
-	return form{}, false
-}
-
 // pressed names the button a submission presses: its value matters when
 // several buttons share the name.
 type pressed struct{ Name, Value string }
