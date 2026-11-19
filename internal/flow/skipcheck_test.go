@@ -271,6 +271,37 @@ func TestSkipCheckAggregateAMR(t *testing.T) {
 	}
 }
 
+// R58: the guard judges on the acr the flow was chosen with, not on the
+// configuration of the moment. sql-2fa declares loa3 and allows the skip under
+// loa2; the client asks loa3; sql-2fa stops declaring it (or is disabled)
+// between the choice and the pre-check: the step runs, refused for acr, and
+// no call is made.
+func TestSkipCheckGuardKeepsTheChoice(t *testing.T) {
+	for name, change := range map[string]func(*store.Flow){
+		"acr removed":   func(f *store.Flow) { f.ACR = "" },
+		"flow disabled": func(f *store.Flow) { f.Enabled = false },
+	} {
+		w, c := skipWorld(t, map[string]SkipCheckAnswer{"2fa": {Skip: true, Result: SkipSkipped}})
+		w.hydra.login.OidcContext = &ory.OAuth2ConsentRequestOpenIDConnectContext{AcrValues: []string{"loa3"}}
+		w.handle(Entry{LoginChallenge: hydraL, Device: testDevice})
+		step := w.handle(Choose{FlowID: "sql-2fa", LoginChallenge: hydraL, Token: w.cookie, Cookie: w.cookie, SameOrigin: true, Device: testDevice})
+		w.app(t, "sql", step, "alice", `{"email":"alice@example.org"}`)
+		snap := w.o.Config.Snapshot()
+		flows := slices.Clone(snap.Flows)
+		for i := range flows {
+			if flows[i].ID == "sql-2fa" {
+				change(&flows[i])
+			}
+		}
+		w.o.Config = snapshots{store.NewSnapshot(snap.Apps, flows, snap.Settings)}
+		r := w.handle(Loop{Ref: lref, Cookie: w.cookie})
+		reps := reportsOf(r, eventSkipCheck)
+		if len(c.calls) != 0 || !strings.HasPrefix(r.Response.URL, "http://2fa.hydra.test/login?") || len(reps) != 1 || reps[0].Reason != "acr" {
+			t.Errorf("%s: %+v, calls %d, reports %+v", name, r.Response, len(c.calls), r.Reports)
+		}
+	}
+}
+
 // Q151: acr_values no flow declares, every flow offered; the line of the log,
 // at info, names the values asked and the client that asks them.
 func TestACRValuesUnmetLog(t *testing.T) {
