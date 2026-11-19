@@ -78,7 +78,7 @@ Un récepteur qui ne vérifie pas la signature n'a rien à faire : seul le dispa
 Une clé par app, partagée avec elle : le dispatcher signe sa question, l'app signe sa réponse. Elle est chiffrée en base, et se change :
 
 - côté dispatcher, par l'écran de l'app, par l'API (`PUT /admin/v1/apps/{id}`), ou par la graine (`skip_check_key`, puis `bootstrap -force`) ;
-- côté app : `SKIP_CHECK_KEY` pour hydra-passwordless.
+- côté app : selon l'app (`SKIPCHECK_APP_KEY` pour l'app de référence).
 
 Il n'y a pas de clés précédentes. Changer les deux côtés au plus près l'un de l'autre. Entre les deux changements, les signatures ne correspondent plus : la vérification échoue, l'étape se joue normalement, et le facteur est demandé. Rien n'est accordé à tort. `step_skips_total{result}` montre ces échecs.
 
