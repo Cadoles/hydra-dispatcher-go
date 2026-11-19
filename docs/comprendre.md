@@ -107,7 +107,7 @@ Une fois connecté, l'usager garde une session chez Hydra. À la connexion suiva
 
 Quand un client déconnecte l'usager, Hydra envoie le navigateur vers l'URL de logout, le dispatcher.
 
-1. Si la demande ne vient pas d'un client qui prouve qui il est (`id_token_hint`), le dispatcher demande d'abord confirmation : un autre site ne peut pas déconnecter l'usager à son insu.
+1. Si la demande ne vient pas d'un client qui prouve qui il est (`id_token_hint`), le dispatcher demande d'abord confirmation : un autre site ne peut pas déconnecter l'usager à son insu. De même si l'`id_token` est celui d'un autre usager que celui du navigateur. Celui du même usager, même d'une session plus ancienne (après le `prompt=login` d'un partenaire, qui en ouvre une nouvelle), déconnecte sans question.
 2. Il accepte la déconnexion auprès de Hydra, puis fait passer le navigateur par chaque app que la session a utilisée et qui déclare un `logout_url` : chacune reçoit un `logout_challenge`, le lit et l'accepte sur l'API émulée, ferme sa propre session et suit le `redirect_to`, qui la renvoie au dispatcher ; il passe à la suivante. Sans trace des apps de la session (la mémoire du skip absente), il passe par toutes celles qui ont un `logout_url`, ou par aucune, selon `logout.propagate_without_record` ; une app qui déclare `receive_claims` reçoit alors un subject et un `sid` vides.
 3. Après la dernière, il renvoie le navigateur vers Hydra, qui termine la déconnexion et prévient les clients.
 

@@ -321,13 +321,19 @@ func (r *run) logout(ev Logout) Outcome {
 		return r.logoutStart(ev, req) // LGO-11: what the form says of the session is not believed
 	}
 	c := ev.Memory.Content
-	other := c != nil && !c.Lo && c.SID != req.GetSid()
+	// Another person's session: the cookie names another session and another
+	// subject. The same subject in another session is this browser's user: a
+	// partner's prompt=login opened a new session, and a client keeps the
+	// id_token of the former one (HLO-14); the client may sign its own user
+	// out without a question (Q163).
+	other := c != nil && !c.Lo && c.SID != req.GetSid() && c.Sub != req.GetSubject()
 	if !req.GetRpInitiated() || other || ev.Subrequest {
-		// LGO-6, LGO-7 (Q47): nothing cleared. A cookie of another session asks
-		// too, a client's id_token sufficing to Hydra to make a browser lose its
-		// cookie (HLO-8); a note stays after a logout finished, and says nothing.
-		// So does a subrequest of another site, which that cookie does not reach:
-		// no one answers the question there, and nothing leaves (LGO-19, Q65).
+		// LGO-6, LGO-7 (Q47): nothing cleared. A cookie of another person's
+		// session asks too, a client's id_token sufficing to Hydra to make a
+		// browser lose its cookie (HLO-8); a note stays after a logout finished,
+		// and says nothing. So does a subrequest of another site, which that
+		// cookie does not reach: no one answers the question there, and nothing
+		// leaves (LGO-19, Q65).
 		csrf := csrfValue(ev.Cookie, r.Env.Draw)
 		out := logoutPage(&LogoutScreen{State: LogoutConfirm, Challenge: ev.Challenge, CSRF: csrf, Client: req.Client, OtherSession: req.GetRpInitiated() && other})
 		out.Response.SetCSRF = csrf

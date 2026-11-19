@@ -1552,12 +1552,19 @@ func (d *driver) logoutOfClientDoubleClick() error {
 	return d.loggedOut("hydra-sql")
 }
 
-// logoutFormerIDToken logs in again with prompt=login, a new session, then asks
-// for the logout with the id_token of the former: the cookie names another
-// session, and the page asks (LGO-7, Q47). Refused, the current session lives.
+// logoutFormerIDToken: henri signs in, then isabelle, in the same browser, with
+// prompt=login, a new session (HLO-14); the logout asked with henri's id_token
+// names another session of another subject (HLO-8): the page asks (LGO-7, Q47).
+// Refused, isabelle's session lives. With her own former id_token, the same
+// subject, the chain starts without a question (Q163,
+// logoutChainStoppedOtherSession).
 func (d *driver) logoutFormerIDToken() error {
-	if err := d.remembered(); err != nil {
+	o, err := d.authorize(login{flow: "hydra-sql", user: henri, consent: "accept"})
+	if err != nil {
 		return err
+	}
+	if err := d.granted(o, identity{Sub: henri}); err != nil {
+		return fmt.Errorf("henri: %w", err)
 	}
 	former := d.client.idToken
 	if err := d.signIn(login{flow: "hydra-sql", user: isabelle, consent: "accept", prompt: "login"}); err != nil {
@@ -1902,10 +1909,11 @@ func (d *driver) logoutChainStoppedPromptNone() error {
 // signOutLink is the way out of page E1003 (FIN-3, Q60).
 var signOutLink = regexp.MustCompile(`href="([^"]*/oauth2/sessions/logout)"`)
 
-// logoutChainStoppedOtherSession stops the chain of a former session, the question
-// of LGO-7 answered yes: the note names that session, and Hydra's cookie another, so
-// SKP-12 has nothing to delete. Someone else gets E1003, each time; its link goes
-// through the question and the chain, then that person signs in (Q60).
+// logoutChainStoppedOtherSession stops the chain of a former session of the same
+// subject, after a prompt=login (HLO-14): no question (Q163), the chain starts at
+// once. The note names that session, and Hydra's cookie another, so SKP-12 has
+// nothing to delete. Someone else gets E1003, each time; its link goes through the
+// question and the chain, then that person signs in (Q60).
 func (d *driver) logoutChainStoppedOtherSession() error {
 	if err := d.remembered(); err != nil {
 		return err
@@ -1915,16 +1923,12 @@ func (d *driver) logoutChainStoppedOtherSession() error {
 		return fmt.Errorf("prompt=login: %w", err)
 	}
 	d.b.stopAt = append(d.b.stopAt, sqlLogout)
-	p, err := d.b.get(d.client.logoutURL(former, "e2e-other-session"))
+	stopped, err := d.b.get(d.client.logoutURL(former, "e2e-other-session"))
 	if err != nil {
 		return err
 	}
-	if d.kind(p) != "logout" || !strings.Contains(p.Body, "autre session") {
-		return fmt.Errorf("LGO-7: %w", errUnexpected(p))
-	}
-	stopped, err := d.answerLogout(p, "accept")
-	if err != nil {
-		return err
+	if d.kind(stopped) == "logout" {
+		return fmt.Errorf("Q163, the same subject asked: %w", errUnexpected(stopped))
 	}
 	d.b.stopAt = d.b.stopAt[:len(d.b.stopAt)-1]
 	if !strings.HasPrefix(stopped.URL.String(), sqlLogout) {

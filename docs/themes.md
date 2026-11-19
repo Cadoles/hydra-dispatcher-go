@@ -114,7 +114,7 @@ Tout est échappé : un texte n'est jamais du HTML, et une URL en `javascript:` 
 | `.Audience` | consent | les destinataires demandés, une liste de textes |
 | `.Error` | erreur ; choix | `.Code` (`E1000` à `E1008`), `.MessageKey`, `.TraceID`, `.Link` (le site du client, vide sans lui), `.SignOut` (le lien de déconnexion d'Hydra, sur E1003 et sur l'E1006 d'un skip, vide sinon). Sur la page de choix, `.MessageKey` seul, quand le mode posté n'est pas proposé ; `nil` sinon |
 | `.Form` | choix, consent, confirmation de logout | `.Action`, `.LoginChallenge`, `.ConsentChallenge`, `.LogoutChallenge`, `.CSRF`, et `.Print` sur l'écran de consent sans flow |
-| `.Logout` | logout | `.State` (`confirm`, `declined`, `in_progress`, `already_out`), `.OtherSession` (la demande vise une autre session que celle du navigateur), `.Next` (le lien qui reprend une déconnexion commencée) |
+| `.Logout` | logout | `.State` (`confirm`, `declined`, `in_progress`, `already_out`), `.OtherSession` (la demande vise la session d'un autre usager que celui du navigateur), `.Next` (le lien qui reprend une déconnexion commencée) |
 
 ### Méthodes
 

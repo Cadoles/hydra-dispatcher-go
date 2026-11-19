@@ -246,6 +246,9 @@ func TestLogoutConfirmation(t *testing.T) {
 	other := Memory{Content: &Remembered{V: 1, SID: "another-session", Sub: "bob", AP: []string{"sql"}}}
 	same := Memory{Content: &Remembered{V: 1, SID: logoutSID, Sub: "alice", AP: []string{"sql"}}}
 	noteOther := Memory{Content: &Remembered{V: 1, SID: "another-session", Sub: "bob", Lo: true}}
+	// The same subject in another session: after a prompt=login, a client keeps
+	// the id_token of the former session (HLO-14).
+	sameSubject := Memory{Content: &Remembered{V: 1, SID: "another-session", Sub: "alice", AP: []string{"sql"}}}
 	unread := Memory{Reason: SkipUnreadable}
 	for _, tc := range []struct {
 		name    string
@@ -259,6 +262,8 @@ func TestLogoutConfirmation(t *testing.T) {
 		{"LGO-6, a cookie of another session: no text, it asks all the same", false, other, true, false},
 		{"LGO-7, a client, a cookie of another session", true, other, true, true},
 		{"LGO-7 ignores a note, which stays after a logout finished", true, noteOther, false, false},
+		{"LGO-6, the same subject in another session: it asks all the same", false, sameSubject, true, false},
+		{"LGO-8, a client, the same subject in another session (Q163)", true, sameSubject, false, false},
 		{"LGO-8, a client, no cookie", true, Memory{}, false, false},
 		{"LGO-8, a client, a cookie of the session", true, same, false, false},
 		{"LGO-8, a client, a cookie unreadable", true, unread, false, false},
