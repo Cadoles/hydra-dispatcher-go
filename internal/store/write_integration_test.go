@@ -19,7 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 func testApp(id string) App {

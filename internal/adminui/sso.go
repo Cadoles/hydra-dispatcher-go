@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The screen SSO: the block admin_oidc, which stays out of the screen of the

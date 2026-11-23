@@ -14,8 +14,8 @@ import (
 	"errors"
 	"io"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
 )
 
 // The bounds of the doc, in bytes: the JSON is deflated beyond deflateAbove,

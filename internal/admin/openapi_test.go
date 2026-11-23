@@ -19,9 +19,9 @@ import (
 	"github.com/pb33f/libopenapi"
 	validator "github.com/pb33f/libopenapi-validator"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/api"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/emulated"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/api"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/emulated"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // openAPI is the validator of the document, made once.

@@ -25,8 +25,8 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
 )
 
 //go:embed migrations/*.sql

@@ -5,12 +5,12 @@ package store
 import (
 	"context"
 	"errors"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
 	"slices"
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
 )
 
 // keyA and keyB are keys of the pre-check, in hex and base64.

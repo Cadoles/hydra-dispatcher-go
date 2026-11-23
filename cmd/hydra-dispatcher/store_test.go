@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The tests of the commands run without Postgres: openStore gives them a

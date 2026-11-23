@@ -12,8 +12,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // pseudonymSize is what a pseudonym keeps of its HMAC: 128 bits, in hexadecimal.

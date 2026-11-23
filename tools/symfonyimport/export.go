@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seedfile"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seedfile"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // maxPages bounds the pages read of a collection: Symfony serves 30 a page.

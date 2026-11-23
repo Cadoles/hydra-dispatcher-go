@@ -19,11 +19,11 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 func scrape(t *testing.T, m *Metrics, accept ...string) string {

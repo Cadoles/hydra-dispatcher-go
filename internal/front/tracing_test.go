@@ -15,9 +15,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/tracing"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/tracing"
 )
 
 // The tree of spans of a flow of two steps, through the pages: a trace by request of the

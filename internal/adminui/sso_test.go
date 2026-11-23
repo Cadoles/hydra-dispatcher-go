@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // ssoValues is the form of the screen SSO as the page gives it, unchanged.

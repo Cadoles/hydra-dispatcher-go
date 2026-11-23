@@ -14,10 +14,10 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/sentrylog"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/metrics"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/sentrylog"
 )
 
 func scrapeOf(t *testing.T, m *metrics.Metrics) string {

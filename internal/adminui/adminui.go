@@ -21,12 +21,12 @@ import (
 	"strings"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/ratelimit"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/web"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/ratelimit"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/web"
 )
 
 // csp is the policy of the pages of the admin: the sheet and the scripts of

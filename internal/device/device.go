@@ -9,8 +9,8 @@ import (
 	"encoding/binary"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/seal"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
 )
 
 // Cookie is the name of the cookie, without the __Host- prefix of HTTPS.

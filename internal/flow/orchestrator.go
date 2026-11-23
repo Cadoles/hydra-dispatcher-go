@@ -19,11 +19,11 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // Hydra is the admin API the orchestrator calls, as internal/hydra's client
@@ -554,7 +554,7 @@ func (a Answers) failures() []error {
 // call makes a call a transition asked for, its answer kept for the request,
 // and returns what a read reports (DEC-5, DEC-6).
 func (o *Orchestrator) call(ctx context.Context, c Call, a *Answers) []Report {
-	ctx, span := otel.Tracer("forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow").Start(ctx, callNames[c.Op], trace.WithSpanKind(trace.SpanKindClient))
+	ctx, span := otel.Tracer("forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow").Start(ctx, callNames[c.Op], trace.WithSpanKind(trace.SpanKindClient))
 	defer span.End()
 	done := func(to string, err error) *Done {
 		if err != nil {

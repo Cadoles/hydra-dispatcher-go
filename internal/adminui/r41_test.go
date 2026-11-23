@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The reports of the revue R41, fixed in P25c.

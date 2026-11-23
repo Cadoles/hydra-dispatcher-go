@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
 )
 
 // version is injected at build time: -ldflags "-X main.version=v1.2.3".

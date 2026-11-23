@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // scopeValues is the form of a scope as the page sends it: its locales,

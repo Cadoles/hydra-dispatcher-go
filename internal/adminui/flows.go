@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // emptySteps are the rows of a flow's form left empty, to add steps.

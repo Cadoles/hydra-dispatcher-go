@@ -17,8 +17,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/web"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/i18n"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/web"
 )
 
 // API is the version of the contract of the pages (Thèmes) this binary

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra/flowcodec"
 )
 
 // devSecret is the secrets.system of the Hydras the flowcodec fixtures come

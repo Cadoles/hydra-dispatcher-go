@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // served plays a request from remote through Guard, with the headers given in name, value

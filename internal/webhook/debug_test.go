@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
 )
 
 // webhook.request at the level debug for each call (Q132): the kind, the host,

@@ -12,7 +12,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
 )
 
 // hydra.request at the level debug for each call (Q132), succeeded or not: its

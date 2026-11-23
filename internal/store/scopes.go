@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"slices"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 // Scope is a row of the catalogue of the scopes (P24): a scope of the

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
 )
 
 // fakeHydra is the admin API of Hydra for the clients, in memory: it keeps

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
 )
 
 // EncryptedSetting is a value the database holds encrypted, and the kid of the

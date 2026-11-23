@@ -19,8 +19,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // cliDatabase creates a database of its own for t, migrated, dropped at its

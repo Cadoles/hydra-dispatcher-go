@@ -37,9 +37,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/remember"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/tools/capture"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/remember"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/tools/capture"
 )
 
 // Accounts of hydra-dev's seeds: hydra-sql's (files/postgres/init-db.d,

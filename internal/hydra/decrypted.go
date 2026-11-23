@@ -5,7 +5,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra/flowcodec"
 )
 
 // LoginRequestOf is the login request Hydra's admin API serves for the login

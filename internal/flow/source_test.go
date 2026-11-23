@@ -10,7 +10,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra/flowcodec"
 )
 
 // hydraReader is the admin API of a fake Hydra, which counts its reads.

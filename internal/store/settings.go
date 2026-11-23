@@ -18,9 +18,9 @@ import (
 	"time"
 	"unicode"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/i18n"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/secretbox"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/i18n"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
 )
 
 // Settings are what the setting table holds, one row per key: a key absent

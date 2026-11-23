@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The screen of the level of the application log (P25), /admin/log-level:

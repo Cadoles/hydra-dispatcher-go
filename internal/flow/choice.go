@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // preferredPrefix marks, in acr_values, the flow the client prefers.

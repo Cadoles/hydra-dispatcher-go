@@ -14,10 +14,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/audit"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // cliAuthor is the updated_by of the writes of the CLI (Q114).

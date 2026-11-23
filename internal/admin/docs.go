@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/api"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/web"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/api"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/web"
 )
 
 // docsCSP is the policy of the page of the documentation, its own: Scalar

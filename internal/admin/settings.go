@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"slices"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // settingsIgnored are the fields of Symfony's document the Go does not keep:

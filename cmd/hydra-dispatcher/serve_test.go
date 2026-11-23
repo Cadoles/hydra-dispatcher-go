@@ -29,17 +29,17 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/admin"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/audit"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/front"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/loglevel"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/metrics"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/state"
-	"forge.cadoles.com/rmasson/hydra-dispatcher-go/internal/store"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/admin"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/audit"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/front"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/metrics"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // requiredEnv is the least configuration serve accepts.
