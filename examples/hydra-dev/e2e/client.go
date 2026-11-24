@@ -340,8 +340,24 @@ func (m mailbox) last(ctx context.Context) (int, error) {
 }
 
 // otp is the code of hydra-passwordless's email: "Code de vérification :
-// WX5SVQ" in French.
-var otp = regexp.MustCompile(`(?i)code[^:\n]*:\s*([A-Z0-9]{4,})`)
+// WX5SVQ" in French. bareOTP is the code alone on its line: the text part of
+// the email of hydra-passwordless develop (75e8cc1) has lost its label, which
+// the HTML part keeps.
+var (
+	otp     = regexp.MustCompile(`(?i)code[^:\n]*:\s*([A-Z0-9]{4,})`)
+	bareOTP = regexp.MustCompile(`(?m)^\s*([A-Z0-9]{4,})\s*$`)
+)
+
+// codeOf returns the code of the text part of an email, labelled or alone on
+// its line.
+func codeOf(text string) (string, bool) {
+	for _, re := range []*regexp.Regexp{otp, bareOTP} {
+		if m := re.FindStringSubmatch(text); m != nil {
+			return m[1], true
+		}
+	}
+	return "", false
+}
 
 // code waits for an email to to, newer than after, and returns its code:
 // hydra-passwordless sends it from a queue.
@@ -361,8 +377,8 @@ func (m mailbox) code(ctx context.Context, to string, after int) (string, error)
 			}
 		}
 		if newest.ID != 0 {
-			if m := otp.FindStringSubmatch(newest.Text); m != nil {
-				return m[1], nil
+			if code, ok := codeOf(newest.Text); ok {
+				return code, nil
 			}
 			return "", fmt.Errorf("no code in email %d to %s", newest.ID, to)
 		}

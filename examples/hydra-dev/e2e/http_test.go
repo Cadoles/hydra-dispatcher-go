@@ -105,3 +105,20 @@ func TestFindClient(t *testing.T) {
 		})
 	}
 }
+
+func TestCodeOf(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"labelled", "Bonjour,\n\nCode de vérification : WX5SVQ\n", "WX5SVQ"},
+		{"labelled in English", "Verification code: AB12CD", "AB12CD"},
+		{"alone on its line", "\n\nYBAX7Q", "YBAX7Q"},
+		{"the label wins over a bare word", "HELLO\nCode : WX5SVQ", "WX5SVQ"},
+		{"no code", "Bonjour, cliquez sur le lien.", ""},
+	} {
+		got, ok := codeOf(tc.text)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("%s: codeOf = %q, %v; want %q", tc.name, got, ok, tc.want)
+		}
+	}
+}
