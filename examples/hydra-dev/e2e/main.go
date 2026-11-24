@@ -48,6 +48,7 @@ const (
 	isabelle = "test2@test.com"
 	henri    = "test3@test.com"
 	alice    = "alice"
+	bob      = "bob"
 )
 
 // identities are what the final id_token says after each flow, isabelle
@@ -111,10 +112,12 @@ var scenarios = []scenario{
 	{name: "back-to-choice", run: (*driver).backToChoice},
 	{name: "acr-values-unmet", run: (*driver).acrValuesUnmet},
 	{name: "back-to-sql-2fa", run: (*driver).backToSQL2FA},
+	{name: "back-to-the-provider", run: (*driver).backToProvider, goOnly: true},
 	{name: "consent-by-catalogue", run: (*driver).consentByCatalogue, goOnly: true},
 	{name: "pre-check", run: preCheckOn("hydra-sql-remember", "hydra-remember"), goOnly: true},
 	{name: "admin-journey", run: (*driver).adminJourney, goOnly: true},
 	{name: "expired-on-consent", run: (*driver).expiredOnConsent, optIn: true},
+	{name: "logout-past-the-provider-session", run: (*driver).logoutPastProviderSession, optIn: true, goOnly: true},
 	{name: "limiter-stops-forgery", run: (*driver).limiterStopsForgery, optIn: true},
 	{name: "webhook-rewrites", run: (*driver).webhookRewrites, optIn: true},
 	{name: "webhook-fails", run: (*driver).webhookFails, optIn: true},
@@ -144,7 +147,9 @@ func run() error {
 	password := flag.String("password", "123456", "password of hydra-sql's accounts")
 	cookieKey := flag.String("cookie-key", "504c39b17f9e971e485b0472d2585c012b181d917d96567d353d88662750bda0", "secrets.cookie_key of the dispatcher, in hexadecimal, to open the note of logout; hydra-dev's development key by default")
 	symfony := flag.Bool("symfony", false, "drive the Symfony dispatcher's pages (make capture), checking the subject only")
-	wait := flag.Duration("wait", 0, "expired-on-consent: time spent on the consent screen, beyond the flow's challenge_ttl")
+	wait := flag.Duration("wait", 0, "expired-on-consent: time spent on the consent screen, beyond the flow's challenge_ttl; logout-past-the-provider-session: time waited before the logout, beyond hydra-oidc's SESSION_TTL")
+	oidcCallback := flag.String("oidc-callback", "/callback", "hydra-oidc's CALLBACK_PATH, where its provider returns after the login (HYDRA_DEV_OIDC_CALLBACK_PATH of the stack)")
+	oidcLogoutCallback := flag.String("oidc-logout-callback", "/logout/callback", "hydra-oidc's LOGOUT_CALLBACK_PATH, where its provider returns after the logout (HYDRA_DEV_OIDC_LOGOUT_CALLBACK_PATH of the stack)")
 	captureDir := flag.String("capture", "testdata/capture", "directory the recorder writes to")
 	into := flag.String("into", "", "directory receiving one <NN>-<scenario> directory of captured exchanges per scenario")
 	first := flag.Int("first", 1, "number of the first scenario directory")
@@ -199,6 +204,8 @@ func run() error {
 		pages:      goPages,
 		password:   *password,
 		wait:       *wait,
+		oidcReturn: oidcBase + *oidcCallback,
+		oidcLogout: oidcBase + *oidcLogoutCallback,
 		adminUser:  *adminUser,
 		adminFile:  *adminPassword,
 	}
@@ -357,6 +364,9 @@ type driver struct {
 	symfony  bool
 	password string
 	wait     time.Duration
+	// oidcReturn and oidcLogout are the URLs hydra-oidc's provider returns
+	// to, after the login and after the logout.
+	oidcReturn, oidcLogout string
 	// memories opens the dispatcher_remember cookie.
 	memories *remember.Codec
 	// version is Hydra's; backChannelURL where a client hears of a logout, ""
@@ -464,6 +474,10 @@ func (d *driver) drive(p page, l login) (outcome, error) {
 			p, err = d.rememberStep(p, l)
 		case "idp":
 			p, err = d.idp(p, alice)
+			// The provider returns to hydra-oidc's CALLBACK_PATH.
+			if err == nil && !passedBy(p, d.oidcReturn) {
+				err = fmt.Errorf("the provider did not return to %s: %s", d.oidcReturn, trail(p))
+			}
 		default:
 			return o, fmt.Errorf("after %v: %w", o.seen[:len(o.seen)-1], errUnexpected(p))
 		}
@@ -672,6 +686,14 @@ func firstLogin(flow string) func(*driver) error {
 		d.noteConsent(o)
 		return d.granted(o, identities[flow])
 	}
+}
+
+// passedBy tells whether the walk that ended on p requested the URL at, its
+// query apart.
+func passedBy(p page, at string) bool {
+	return slices.ContainsFunc(p.Trail, func(u *url.URL) bool {
+		return u.Scheme+"://"+u.Host+u.Path == at
+	})
 }
 
 // rememberCookie is the dispatcher's memory of the skip (P8), in plain
@@ -1246,7 +1268,8 @@ func (d *driver) secondLoginConcurrent() error {
 const (
 	sqlLogout  = "http://sql.hydra.test/logout"
 	tfaLogout  = "http://2fa.hydra.test/logout"
-	oidcLogout = "http://oidc.hydra.test/logout"
+	oidcBase   = "http://oidc.hydra.test"
+	oidcLogout = oidcBase + "/logout"
 )
 
 // through checks that a walk went through the logout_url of each app, in order,
@@ -1647,7 +1670,7 @@ func (d *driver) logoutWithoutMemory() error {
 	idp := slices.ContainsFunc(end.Trail, func(u *url.URL) bool {
 		return u.Host != d.dispatcher.Host && u.Host != "oidc.hydra.test" && u.Host != "sql.hydra.test" && u.Host != "2fa.hydra.test" && u.Host != d.client.public.Host
 	})
-	callback := slices.ContainsFunc(end.Trail, func(u *url.URL) bool { return strings.HasPrefix(u.String(), oidcLogout+"/callback") })
+	callback := passedBy(end, d.oidcLogout)
 	if !idp || !callback {
 		return fmt.Errorf("hydra-oidc did not go through its provider's end_session: %s", trail(end))
 	}
@@ -2279,6 +2302,106 @@ func (d *driver) backToSQL2FA() error {
 		return fmt.Errorf("pages %v, want both steps and the consent screen", o.seen)
 	}
 	return d.granted(o, identities[l.flow])
+}
+
+// backToProvider signs in through hydra-oidc as alice, then goes back in the
+// browser's history to the provider, which asks again and answers for bob
+// with the state of the finished login. hydra-oidc exchanges nothing and
+// accepts nothing: it reads the used challenge and follows where the
+// dispatcher says the flow went, its page of a finished flow (E1002). The
+// session is still alice's.
+func (d *driver) backToProvider() error {
+	choice, err := d.start("")
+	if err != nil {
+		return err
+	}
+	if d.kind(choice) != "choice" {
+		return fmt.Errorf("no choice page: %w", errUnexpected(choice))
+	}
+	accounts, err := d.choose(choice, "hydra-oidc")
+	if err != nil {
+		return err
+	}
+	if d.kind(accounts) != "idp" {
+		return fmt.Errorf("hydra-oidc chosen: %w", errUnexpected(accounts))
+	}
+	// The authorization request hydra-oidc sent the provider: the entry of
+	// the history the back button returns to.
+	i := slices.IndexFunc(accounts.Trail, func(u *url.URL) bool { return u.Query().Has("code_challenge") })
+	if i < 0 {
+		return fmt.Errorf("no authorization request to the provider: %s", trail(accounts))
+	}
+	authorization := accounts.Trail[i].String()
+
+	o, err := d.drive(accounts, login{flow: "hydra-oidc", consent: "accept"})
+	if err != nil {
+		return err
+	}
+	if err := d.granted(o, identities["hydra-oidc"]); err != nil {
+		return err
+	}
+
+	again, err := d.b.get(authorization)
+	if err != nil {
+		return err
+	}
+	if d.kind(again) != "idp" {
+		return fmt.Errorf("back to the provider: %w", errUnexpected(again))
+	}
+	end, err := d.idp(again, bob)
+	if err != nil {
+		return err
+	}
+	if !passedBy(end, d.oidcReturn) {
+		return fmt.Errorf("the provider did not return to hydra-oidc: %s", trail(end))
+	}
+	if d.kind(end) != "error" || errorCode.FindString(end.Body) != "E1002" {
+		return fmt.Errorf("after the callback replayed for bob, want the dispatcher's page of a finished flow (E1002): %w, by %s", errUnexpected(end), trail(end))
+	}
+	// Nothing was accepted for bob: the session at Hydra is alice's.
+	o, err = d.authorize(login{flow: "hydra-oidc", consent: "accept"})
+	if err != nil {
+		return err
+	}
+	if o.saw("idp") {
+		return fmt.Errorf("the session is gone after the replay: pages %v", o.seen)
+	}
+	return d.granted(o, identities["hydra-oidc"])
+}
+
+// logoutPastProviderSession signs in through hydra-oidc, waits past the
+// lifetime of the provider's session it keeps (SESSION_TTL, lowered by
+// HYDRA_DEV_OIDC_SESSION_TTL beforehand), then logs out: hydra-oidc no longer
+// holds the id_token, and accepts the logout without its provider's
+// end_session. logout-without-memory is the same logout within the lifetime,
+// through the provider.
+func (d *driver) logoutPastProviderSession() error {
+	if d.wait <= 0 {
+		return errors.New("needs -wait, longer than hydra-oidc's SESSION_TTL (HYDRA_DEV_OIDC_SESSION_TTL)")
+	}
+	if err := d.signedIn("hydra-oidc"); err != nil {
+		return err
+	}
+	d.log.Info("waiting past the provider's session of hydra-oidc", "for", d.wait)
+	time.Sleep(d.wait)
+	p, err := d.askLogout()
+	if err != nil {
+		return err
+	}
+	end, err := d.answerLogout(p, "accept")
+	if err != nil {
+		return err
+	}
+	if err := through(end, oidcLogout); err != nil {
+		return err
+	}
+	if passedBy(end, d.oidcLogout) {
+		return fmt.Errorf("hydra-oidc went through its provider past SESSION_TTL: %s", trail(end))
+	}
+	if err := endsOnVerifier(end); err != nil {
+		return err
+	}
+	return d.loggedOut("hydra-sql")
 }
 
 // expiredOnConsent stays on the consent screen past the flow's lifetime
