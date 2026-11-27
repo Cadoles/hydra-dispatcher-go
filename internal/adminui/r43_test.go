@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	cfg "forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	cfg "github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra"
 )
 
 // The tests of the revue R43.

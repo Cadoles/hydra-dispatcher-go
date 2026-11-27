@@ -17,10 +17,10 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra/flowcodec"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra/flowcodec"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 const (

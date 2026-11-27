@@ -9,7 +9,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // uiLocalesServed is the oidc_context.ui_locales of the request the emulated

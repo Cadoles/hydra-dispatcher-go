@@ -22,9 +22,9 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
 )
 
 var (

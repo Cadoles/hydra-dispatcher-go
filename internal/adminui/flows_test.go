@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // flowValues is the form of the flow two, new: fr and en, two steps without

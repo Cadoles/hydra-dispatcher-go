@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/seal"
 )
 
 var (

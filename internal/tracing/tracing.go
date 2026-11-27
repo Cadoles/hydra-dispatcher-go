@@ -28,13 +28,13 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/state"
 )
 
 const (
-	tracerName = "forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/tracing"
+	tracerName = "github.com/Cadoles/hydra-dispatcher-go/internal/tracing"
 	// shutdownTimeout is what the stop of serve gives the exporters.
 	shutdownTimeout = 2 * time.Second
 )

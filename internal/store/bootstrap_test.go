@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
 )
 
 // loadSeed loads the dispatcher: block of content, as serve and bootstrap

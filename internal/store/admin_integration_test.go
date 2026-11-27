@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 func TestAdminAccounts(t *testing.T) {

@@ -1,4 +1,4 @@
-module forge.cadoles.com/Cadoles/hydra-dispatcher-go
+module github.com/Cadoles/hydra-dispatcher-go
 
 go 1.26.0
 

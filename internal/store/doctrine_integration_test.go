@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
 )
 
 // TestDoctrineURL opens the database by the DATABASE_URL of the Symfony dispatcher,

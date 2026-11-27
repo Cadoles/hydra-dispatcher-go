@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // js returns the JSON of v, to compare objects whose values are raw.

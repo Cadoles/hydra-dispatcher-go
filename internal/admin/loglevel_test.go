@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The level of the application log (P25): the configured one, the window of

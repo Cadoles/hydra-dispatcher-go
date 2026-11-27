@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 	"net/url"
 	"slices"
 	"strings"

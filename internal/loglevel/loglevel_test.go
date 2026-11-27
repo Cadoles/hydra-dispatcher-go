@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // syncBuffer is a buffer the timer of a window writes to beside the test.

@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seedfile"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/seedfile"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // exitError ends the program with code, after the fatal line of err: config

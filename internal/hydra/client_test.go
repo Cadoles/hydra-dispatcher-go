@@ -27,8 +27,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 func newTestClient(t *testing.T, url string, maxInFlight int, timeout time.Duration) *Client {

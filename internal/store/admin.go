@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 // AdminUser is an account of the admin UI.

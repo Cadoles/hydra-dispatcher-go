@@ -20,12 +20,12 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace/noop"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/audit"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/metrics"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/sentrylog"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/tracing"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/audit"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/metrics"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/sentrylog"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/tracing"
 )
 
 // The bench of revue R29, rebuilt (P12d): the whole handler of newHandler, before a

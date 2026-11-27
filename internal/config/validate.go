@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 // HydraMargin is the margin internal/flow takes from the end of L at Hydra

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The scopes of the table, dumped as the seed takes them; none, no section.

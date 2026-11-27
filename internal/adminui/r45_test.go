@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	cfg "forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	cfg "github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The tests of the revue R45.

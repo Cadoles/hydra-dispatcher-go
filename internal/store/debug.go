@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 // DebugWindow is the window of debug of the application log (P25, Q131).

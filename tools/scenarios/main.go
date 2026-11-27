@@ -39,7 +39,7 @@ import (
 	"strings"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/tools/capture"
+	"github.com/Cadoles/hydra-dispatcher-go/tools/capture"
 )
 
 // Positions of the flows on the choice page, sorted by id.

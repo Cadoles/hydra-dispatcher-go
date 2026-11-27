@@ -27,14 +27,14 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/device"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/remember"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/web"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/device"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/remember"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/web"
 )
 
 const (

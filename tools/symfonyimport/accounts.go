@@ -14,9 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // importAuthor is the updated_by of the clients the import writes.

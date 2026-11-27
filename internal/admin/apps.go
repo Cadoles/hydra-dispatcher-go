@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // appJSON is the representation of an app: every field present, null for

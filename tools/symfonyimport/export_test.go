@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
 )
 
 // fakeSymfony answers as the admin API of Symfony did in the replay

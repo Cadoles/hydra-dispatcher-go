@@ -3,8 +3,8 @@ package admin
 import (
 	"net/http"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // clientJSON is the representation of an API client: never its secret nor its

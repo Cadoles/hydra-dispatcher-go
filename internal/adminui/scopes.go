@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/i18n"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/i18n"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The screen of the catalogue of the scopes (P24): the standard scopes of the

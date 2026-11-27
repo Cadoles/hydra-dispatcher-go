@@ -23,9 +23,9 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The integration tests need a Postgres where they may create databases: the

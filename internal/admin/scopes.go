@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The scopes of the admin API (Q96): one per resource, for its reads and its

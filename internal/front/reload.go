@@ -11,7 +11,7 @@ import (
 	"os"
 	"sync"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // reloader reads the theme again when one of its files changed, for ui.reload

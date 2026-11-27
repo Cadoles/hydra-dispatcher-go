@@ -16,8 +16,8 @@ import (
 	"os"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/examples/skipcheck-app/app"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/examples/skipcheck-app/app"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 func main() {

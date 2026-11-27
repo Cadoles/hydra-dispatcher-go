@@ -18,10 +18,10 @@ import (
 
 	"golang.org/x/term"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // configStore is what the commands need of the configuration store.

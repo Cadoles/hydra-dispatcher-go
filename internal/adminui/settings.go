@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // settingRow is a setting as its form shows it: its field by the type of its

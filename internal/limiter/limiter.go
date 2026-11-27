@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // maxEntries bounds the memory: past it, the addresses that no longer count are dropped,

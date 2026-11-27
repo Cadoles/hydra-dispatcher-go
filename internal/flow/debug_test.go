@@ -10,7 +10,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
 )
 
 // namesOf are the names of the line of debug event of p, nil when it has none.

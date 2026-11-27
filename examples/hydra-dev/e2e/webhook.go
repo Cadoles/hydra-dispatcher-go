@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/webhook"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/webhook"
 )
 
 // errNoWebhook is the answer of a scenario of the webhooks without a receiver.

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 // maxResourceBody bounds the body of a write: a flow and its texts, many times.

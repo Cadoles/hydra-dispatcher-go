@@ -8,7 +8,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
 )
 
 // Entry is GET / (ENT): Hydra's login challenge, or the ref of

@@ -18,10 +18,10 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	refapp "forge.cadoles.com/Cadoles/hydra-dispatcher-go/examples/skipcheck-app/app"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/device"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	refapp "github.com/Cadoles/hydra-dispatcher-go/examples/skipcheck-app/app"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/device"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The exit test of phase 4 (P28): the whole handler of the dispatcher, the

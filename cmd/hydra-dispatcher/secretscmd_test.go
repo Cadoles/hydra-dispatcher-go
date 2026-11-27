@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/seal"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 var (

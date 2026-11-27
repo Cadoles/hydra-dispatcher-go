@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
 )
 
 // symfonyHash is the hash Symfony's NativePasswordHasher (bcrypt, cost 4)

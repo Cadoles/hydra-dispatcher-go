@@ -19,8 +19,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // idp is an identity provider for the tests: its discovery, its keys, and a

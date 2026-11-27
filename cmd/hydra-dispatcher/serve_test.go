@@ -29,17 +29,17 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/admin"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/audit"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/config"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/front"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/metrics"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/state"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/admin"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/audit"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/config"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/front"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/loglevel"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/metrics"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/state"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // requiredEnv is the least configuration serve accepts.

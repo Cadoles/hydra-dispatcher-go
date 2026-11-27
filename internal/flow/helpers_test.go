@@ -10,8 +10,8 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // loginFixture is Hydra 2.1's login request of capture 14 (sql-2fa).

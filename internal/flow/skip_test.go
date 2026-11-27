@@ -10,7 +10,7 @@ import (
 
 	ory "github.com/ory/hydra-client-go/v26"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // The memory of the skip (Mémoire du skip of the table, P8): MEM, SKP, SKC

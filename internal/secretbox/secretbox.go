@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/seal"
 )
 
 // version is the first field of a sealed value.

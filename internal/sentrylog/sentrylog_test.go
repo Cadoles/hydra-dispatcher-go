@@ -17,8 +17,8 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/flow"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/httpx"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/flow"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/httpx"
 )
 
 // fakeTransport keeps what would leave.

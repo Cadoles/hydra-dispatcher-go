@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/hydra"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/store"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/hydra"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/store"
 )
 
 // Observer watches what the requests decided, without deciding anything: the metrics,

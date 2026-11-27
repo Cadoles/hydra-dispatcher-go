@@ -12,8 +12,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
 )
 
 // APIClient is a client of the admin API.

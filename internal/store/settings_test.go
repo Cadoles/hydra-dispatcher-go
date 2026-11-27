@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/domain"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/seal"
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/domain"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/seal"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/secretbox"
 )
 
 // Every field of Settings has exactly one key, and every key its own field.

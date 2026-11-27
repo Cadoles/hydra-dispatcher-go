@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"forge.cadoles.com/Cadoles/hydra-dispatcher-go/internal/front"
+	"github.com/Cadoles/hydra-dispatcher-go/internal/front"
 )
 
 // theme is theme check <dir>: the check of serve on a theme directory, without
