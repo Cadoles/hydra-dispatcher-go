@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Weekly minor and patch updates, merged once the CI passes; majors, ory/hydra-client-go and BuildKit in pull requests of their own, reviewed. The scheduled run is the platform's, on Tekton.",
+  "description": "Weekly minor and patch updates, merged once the CI passes; majors, ory/hydra-client-go and BuildKit in pull requests of their own, reviewed.",
   "extends": [
     "config:recommended",
     "helpers:pinGitHubActionDigests",
@@ -35,7 +35,7 @@
       "automerge": false
     },
     {
-      "description": "BuildKit is pinned for the runner of the forge, whose default fails to mask /proc/acpi: reviewed.",
+      "description": "BuildKit of the workflows, pinned by digest: reviewed.",
       "matchDepNames": ["moby/buildkit"],
       "groupName": null,
       "automerge": false
@@ -69,7 +69,7 @@
     {
       "customType": "regex",
       "description": "The BuildKit of docker/setup-buildx-action, pinned by digest in the workflows.",
-      "managerFilePatterns": ["/(^|/)\\.gitea/workflows/[^/]+\\.ya?ml$/"],
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
       "matchStrings": ["image=(?<depName>moby/buildkit):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})"],
       "datasourceTemplate": "docker"
     },
@@ -94,7 +94,7 @@
     {
       "customType": "regex",
       "description": "cosign and Trivy of the workflows, a version a comment names.",
-      "managerFilePatterns": ["/(^|/)\\.gitea/workflows/[^/]+\\.ya?ml$/"],
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
       "matchStrings": ["[A-Z]+_VERSION: (?<currentValue>v[0-9.]+) # renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>[^\\s]+)"]
     }
   ]

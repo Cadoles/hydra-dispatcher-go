@@ -5,6 +5,9 @@ on:
     branches: [master, main, develop]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -14,6 +17,8 @@ jobs:
         image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
         env:
           POSTGRES_PASSWORD: dispatcher
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -21,6 +26,8 @@ jobs:
       # (README).
       redis:
         image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+        ports:
+          - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s --health-timeout 5s --health-retries 10
@@ -70,19 +77,18 @@ jobs:
       - name: Test
         run: go test -race ./...
 
-      # The job runs in a container, beside the services: their names are
-      # their hosts. Without DATABASE_URL or REDIS_URLS, the tests fail
-      # rather than skip.
+      # The job runs on the runner itself, the services in containers beside
+      # it: they are reached on localhost, by the ports they publish. Without
+      # DATABASE_URL or REDIS_URLS, the tests fail rather than skip.
       - name: Integration tests
         env:
-          DATABASE_URL: postgres://postgres:dispatcher@postgres:5432/postgres?sslmode=disable
-          REDIS_URLS: redis://redis:6379/0
+          DATABASE_URL: postgres://postgres:dispatcher@localhost:5432/postgres?sslmode=disable
+          REDIS_URLS: redis://localhost:6379/0
         run: go test -race -tags integration ./internal/store/... ./internal/state/... ./internal/admin/... ./cmd/... ./tools/symfonyimport/...
 
       # Built, never pushed: a Dockerfile or .dockerignore error shows here,
-      # not at release. Same BuildKit pin as hydra-sql-go: the runner's
-      # default fails to mask /proc/acpi. Actions and images pinned by digest,
-      # bumped by Renovate (renovate.json).
+      # not at release. The same BuildKit as the release workflow. Actions and
+      # images pinned by digest, bumped by Renovate (renovate.json).
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver-opts: image=moby/buildkit:v0.23.2@sha256:ddd1ca44b21eda906e81ab14a3d467fa6c39cd73b9a39df1196210edcb8db59e

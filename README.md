@@ -327,11 +327,11 @@ this checkout, on Hydra 2.1 (`make up-go-hydra22` on 2.2).
 
 ## Releases
 
-A tag `v*` runs `.gitea/workflows/release.yaml`: the image is pushed by its digest to
+A tag `v*` runs `.github/workflows/release.yaml`: the image is pushed by its digest to
 `reg.cadoles.com/cadoles/hydra-dispatcher-go`, its CycloneDX SBOM (syft) attested, both
 signed with cosign by the key pair of the dispatcher and verified; only then does the
 digest get its tags, the version, `major.minor` and `latest`, so that a failed signature
-leaves no tag on an unsigned image. The release of the forge gets the changelog and the
+leaves no tag on an unsigned image. The release of GitHub gets the changelog and the
 SBOM. The signature and the attestation are in the format of cosign 2, under the tags
 `sha256-<digest>.sig` and `.att`: the Harbor of reg.cadoles.com refuses the referrers
 API of OCI 1.1 that the bundle of cosign 3 needs. Nothing goes to the public services
@@ -346,7 +346,7 @@ cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true --type cy
 The workflow reads the secrets of the repository: `REGISTRY_USERNAME` and
 `REGISTRY_PASSWORD` (a robot account of the project cadoles), `COSIGN_PRIVATE_KEY` and
 `COSIGN_PASSWORD` (the pair of `cosign generate-key-pair`, whose public key is
-`cosign.pub`), `RELEASE_TOKEN`. Without `cosign.pub`, it stops before building.
+`cosign.pub`). Without `cosign.pub`, it stops before building.
 
 Dependencies follow `renovate.json`: minor and patch updates grouped each week and
 merged once the CI passes, a pull request of its own for a major, `ory/hydra-client-go`

@@ -5,7 +5,7 @@ name: Release
 #
 # The image goes to reg.cadoles.com/cadoles/hydra-dispatcher-go, with its
 # CycloneDX SBOM attested and both signed by the key pair of the dispatcher
-# (Q90); the release of the forge gets the changelog and the SBOM. Secrets of
+# (Q90); the release of GitHub gets the changelog and the SBOM. Secrets of
 # the repository, which the owner creates:
 #   REGISTRY_USERNAME, REGISTRY_PASSWORD  a robot account of the project cadoles
 #                                         of reg.cadoles.com
@@ -14,8 +14,7 @@ name: Release
 #                                         and its password; the public key is
 #                                         cosign.pub, at the root of the
 #                                         repository
-#   RELEASE_TOKEN                         a token of the forge that may create
-#                                         a release, as for hydra-sql-go
+# The release itself is created with the token of the workflow.
 #
 # Actions and images are pinned by digest, bumped by Renovate (renovate.json).
 on:
@@ -27,9 +26,14 @@ env:
   IMAGE: reg.cadoles.com/cadoles/hydra-dispatcher-go
   SBOM: hydra-dispatcher-go.cdx.json
 
+permissions:
+  contents: read
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the release and its SBOM
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -44,16 +48,15 @@ jobs:
       # runner lacks stops the release here, not after the build.
       - name: Tools
         run: |
-          for tool in curl jq git sha256sum; do
+          for tool in curl gh git sha256sum; do
             command -v "$tool" >/dev/null || { echo "$tool is missing on the runner"; exit 1; }
           done
 
       # cosign itself, pinned by its checksums as the Dockerfile pins tini, and
-      # before the build: the action sigstore/cosign-installer calls envsubst,
-      # which the runner of the forge lacks (exit 127), and failed after the
-      # image was pushed. The sums are those of cosign_checksums.txt of the
-      # release; a new version brings them by hand (renovate.json), a wrong one
-      # stops here.
+      # before the build: a cosign that fails to install stops the release
+      # here, not after the image was pushed. The sums are those of
+      # cosign_checksums.txt of the release; a new version brings them by hand
+      # (renovate.json), a wrong one stops here.
       - name: Install cosign
         env:
           COSIGN_VERSION: v3.1.4 # renovate: datasource=github-releases depName=sigstore/cosign
@@ -73,9 +76,8 @@ jobs:
           echo "$dir" >> "$GITHUB_PATH"
           "$dir/cosign" version
 
-      # Pinned: the BuildKit the runner picks by default fails to mask
-      # /proc/acpi ("runc run failed ... invalid argument"), so every RUN dies
-      # at container init. The same pin as the other projects built on that runner.
+      # BuildKit pinned by digest, as the actions: the image is built by a
+      # known one, bumped by Renovate (renovate.json).
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver-opts: image=moby/buildkit:v0.23.2@sha256:ddd1ca44b21eda906e81ab14a3d467fa6c39cd73b9a39df1196210edcb8db59e
@@ -185,20 +187,12 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create Gitea release, with the SBOM
+      - name: Create the GitHub release, with the SBOM
         env:
-          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           BODY: ${{ steps.changelog.outputs.body }}
         run: |
-          id="$(curl -sSf -X POST \
-            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases" \
-            -H "Authorization: token ${RELEASE_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n \
-              --arg tag "$GITHUB_REF_NAME" \
-              --arg body "$BODY" \
-              '{tag_name: $tag, name: $tag, body: $body, draft: false, prerelease: false}')" | jq -r .id)"
-          curl -sSf -X POST \
-            "${GITHUB_SERVER_URL}/api/v1/repos/${GITHUB_REPOSITORY}/releases/${id}/assets?name=hydra-dispatcher-go-${GITHUB_REF_NAME}.cdx.json" \
-            -H "Authorization: token ${RELEASE_TOKEN}" \
-            -F "attachment=@${SBOM}" >/dev/null
+          asset="hydra-dispatcher-go-${GITHUB_REF_NAME}.cdx.json"
+          cp "$SBOM" "$asset"
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "$GITHUB_REF_NAME" --notes "$BODY" "$asset"
