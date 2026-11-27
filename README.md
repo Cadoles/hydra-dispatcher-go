@@ -411,3 +411,16 @@ logout, hydra-dev's development key by default.
   requests, of any version (`internal/hydra/testdata/errors`); with `-secret` and
   `-post-logout` too, the logout's, for which it redeems an `id_token`. The command
   is at the top of `tools/flowfixtures/main.go`.
+
+## License
+
+Copyright (C) 2026 Cadoles
+
+hydra-dispatcher-go is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later version
+(`AGPL-3.0-or-later`). It is distributed in the hope that it will be useful, but
+without any warranty: see [LICENSE](LICENSE).
+
+Scalar's API reference (`web/scalar`) and Pico CSS (`web/pico`) are third-party works
+under the MIT license, each with its notice beside it.
